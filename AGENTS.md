@@ -46,11 +46,16 @@ Each builder lane has an independent adversarial audit. Auditors inspect the rea
 ### Mandatory repair feedback loop
 Only `VERDICT: ACCEPT` permits integration. `FIX_BEFORE_INTEGRATION` and `REJECT` send the exact findings back to the same specialized builder in the next autonomous cycle. That builder must repair the findings before starting new feature work, add regression tests, and submit a fresh candidate to a new independent audit. A technical/OX audit crash is infrastructure failure and is handled by retry/recovery rather than being misrouted to a code builder.
 
+### wix-simulation-auditor
+Runs after all four lane candidates and independent audits but before Director integration. It assembles the four candidates over the same accepted base in an isolated worktree and acts as an adversarial simulated Wix Bookings runtime using only the binding Technical Contract as the platform oracle. It runs deterministic tests plus cross-lane scenarios for multi-location/service hours, staff-hour intersection, split windows, exceptions, DST, caps, duplicate protection, create/cancel/reschedule behavior, concurrency/idempotency, schedule rollback, pagination, billing/location counting, downgrade handling and dashboard confirmation safety. It writes only `reports/simulation/CYCLE_<run>.md` and `.json`. Simulation does not replace real Wix/dev-site testing.
+
+Simulation `FAIL` is system-level repair evidence: every blocker must name the responsible lane(s), and the Director must route those exact findings back to those builders. `INCONCLUSIVE` forbids release candidacy until the locally-testable interface/harness problem is resolved. `PASS` never overrides a negative lane audit.
+
 ### wix-build-director
-The only integration authority and continuous team planner. It reads candidates and audits, ports only `ACCEPT` work into `lab/wix-rules`, preserves failed-audit findings as repair work, resolves accepted cross-lane conflicts, runs integration checks, writes the next evidence-backed tasks to `docs/NEXT_CYCLE.json`, and decides continue/stop/release_candidate.
+The only integration authority and continuous team planner. It reads candidates, lane audits and simulated-Wix evidence, ports only `ACCEPT` lane work into `lab/wix-rules`, preserves failed-audit/simulation findings as repair work, resolves accepted cross-lane conflicts, runs integration checks, writes the next evidence-backed tasks to `docs/NEXT_CYCLE.json`, and decides continue/stop/release_candidate.
 
 ### release-readiness-auditor
-Runs only when the Director proposes a release candidate. It checks build/test health, technical-contract compliance, Wix production-readiness assumptions, permissions, destructive-write safety, billing coherence and remaining manual prerequisites. It may reject release candidacy and feed exact blockers back into the next autonomous cycle.
+Runs only when the Director proposes a release candidate. It checks build/test health, technical-contract compliance, Wix production-readiness assumptions, permissions, destructive-write safety, billing coherence and remaining manual prerequisites. It may reject release candidacy and feed exact blockers back into the next autonomous cycle. A release candidate also requires the current simulated-Wix verdict to be `PASS`; real Wix/dev-site gates remain mandatory where simulation cannot prove behavior.
 
 ## Immutable boundaries
 

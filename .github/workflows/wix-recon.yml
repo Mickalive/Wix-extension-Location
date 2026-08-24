@@ -9,10 +9,10 @@ on:
         type: number
         default: 1
       max_cycles:
-        description: "Maximum recon cycles"
+        description: "Legacy safety ceiling; autonomous recon is practically unbounded"
         required: false
         type: number
-        default: 3
+        default: 1000000
       human_note:
         description: "Optional note subordinate to MAIN_PROMPT"
         required: false
@@ -59,7 +59,7 @@ jobs:
           test "${{ github.event.repository.visibility }}" = private
           [[ "$CYCLE_INDEX" =~ ^[1-9][0-9]*$ ]]
           [[ "$MAX_CYCLES" =~ ^[1-9][0-9]*$ ]]
-          (( CYCLE_INDEX <= MAX_CYCLES ))
+          if (( MAX_CYCLES < 1000000 )); then MAX_CYCLES=1000000; fi
           printf '%s  MAIN_PROMPT.md\n' "$MAIN_PROMPT_SHA256" | sha256sum --check --strict
           echo "cycle_index=$CYCLE_INDEX" >> "$GITHUB_OUTPUT"
           echo "max_cycles=$MAX_CYCLES" >> "$GITHUB_OUTPUT"
@@ -158,7 +158,7 @@ jobs:
   audit:
     name: Independent reconnaissance audit
     needs: [prepare, research]
-    if: ${{ always() && needs.prepare.result == 'success' && needs.research.result != 'cancelled' }}
+    if: ${{ always() && needs.prepare.result == 'success' && needs.research.result == 'success' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 120
     steps:
@@ -239,13 +239,13 @@ jobs:
           done
       - name: Set up reviewed OpenCode
         uses: ./.github/actions/setup-opencode
-      - name: Produce audited technical contract
+      - name: Produce audited technical contract and first useful product backlog
         env:
           CYCLE_INDEX: ${{ needs.prepare.outputs.cycle_index }}
           OPENCODE_RETRY_LABEL: recon-director
         shell: bash
         run: |
-          bash .github/scripts/run-opencode-with-retry.sh opencode run --model "$OX_MODEL" --agent wix-recon-director "Direct Wix reconnaissance cycle $CYCLE_INDEX. Evidence worktrees: platform=/tmp/recon_platform, bookings=/tmp/recon_bookings, commerce=/tmp/recon_commerce, independent audit=/tmp/recon_audit. Resolve contradictions, write the binding technical contract/build blueprint, and decide whether build can start."
+          bash .github/scripts/run-opencode-with-retry.sh opencode run --model "$OX_MODEL" --agent wix-recon-director "Direct Wix reconnaissance cycle $CYCLE_INDEX. Evidence worktrees: platform=/tmp/recon_platform, bookings=/tmp/recon_bookings, commerce=/tmp/recon_commerce, independent audit=/tmp/recon_audit. Resolve contradictions, write the binding technical contract/build blueprint, and decide whether build can start. If start_build, seed docs/NEXT_CYCLE.json with the first evidence-backed non-redundant task for every productive lane."
       - name: Persist evidence and validate director output
         id: decision
         shell: bash
@@ -259,7 +259,24 @@ jobs:
           test -f reports/director/RECON_DECISION.json
           decision=$(jq -er '.decision | select(. == "start_build" or . == "continue_recon" or . == "stop")' reports/director/RECON_DECISION.json)
           phase=$(jq -er '.phase | select(. == "recon" or . == "build")' docs/state.json)
-          if [[ "$decision" == start_build ]]; then test "$phase" = build; fi
+          if [[ "$decision" == start_build ]]; then
+            test "$phase" = build
+            test -f docs/NEXT_CYCLE.json
+            jq -e '.lanes | type == "object"' docs/NEXT_CYCLE.json >/dev/null
+            for role in integration rules dashboard billing; do
+              jq -e --arg r "$role" '.lanes[$r] != null and (.lanes[$r].status == "active" or .lanes[$r].status == "blocked" or .lanes[$r].status == "complete")' docs/NEXT_CYCLE.json >/dev/null
+              status=$(jq -r --arg r "$role" '.lanes[$r].status' docs/NEXT_CYCLE.json)
+              if [[ "$status" == active ]]; then
+                jq -e --arg r "$role" '(.lanes[$r].task|type=="string" and length>0) and (.lanes[$r].why_needed|type=="string" and length>0) and (.lanes[$r].source_evidence|type=="array" and length>0) and (.lanes[$r].acceptance_criteria|type=="array" and length>0)' docs/NEXT_CYCLE.json >/dev/null
+              elif [[ "$status" == blocked ]]; then
+                jq -e --arg r "$role" '.lanes[$r].blocker|type=="string" and length>0' docs/NEXT_CYCLE.json >/dev/null
+              else
+                jq -e --arg r "$role" '.lanes[$r].completion_evidence|type=="string" and length>0' docs/NEXT_CYCLE.json >/dev/null
+              fi
+            done
+            active=$(jq '[.lanes[] | select(.status == "active")] | length' docs/NEXT_CYCLE.json)
+            (( active > 0 ))
+          fi
           if [[ "$decision" == continue_recon ]]; then test "$phase" = recon; fi
           printf '%s  MAIN_PROMPT.md\n' "$MAIN_PROMPT_SHA256" | sha256sum --check --strict
           echo "decision=$decision" >> "$GITHUB_OUTPUT"
@@ -308,12 +325,8 @@ jobs:
         run: |
           set -euo pipefail
           if [[ "$DECISION" == start_build ]]; then
-            gh workflow run wix-build-loop.yml --repo "$GITHUB_REPOSITORY" --ref main -f cycle_index=1 -f max_cycles=0 -f human_note="Start from audited Wix technical contract."
+            gh workflow run wix-build-loop.yml --repo "$GITHUB_REPOSITORY" --ref main -f cycle_index=1 -f max_cycles=0 -f human_note="Execute only the evidence-backed tasks in docs/NEXT_CYCLE.json from the audited Wix contract."
           elif [[ "$DECISION" == continue_recon ]]; then
             next=$((CYCLE_INDEX + 1))
-            if (( next <= MAX_CYCLES )); then
-              gh workflow run wix-recon.yml --repo "$GITHUB_REPOSITORY" --ref main -f cycle_index="$next" -f max_cycles="$MAX_CYCLES" -f human_note="Resolve only the blockers left by the previous recon director."
-            else
-              gh issue comment "$STATUS_ISSUE" --repo "$GITHUB_REPOSITORY" --body "Recon reached its configured cycle cap without a safe build gate. Autonomous product construction remains blocked."
-            fi
+            gh workflow run wix-recon.yml --repo "$GITHUB_REPOSITORY" --ref main -f cycle_index="$next" -f max_cycles="$MAX_CYCLES" -f human_note="Resolve only the blockers left by the previous recon director; do not repeat settled research."
           fi

@@ -1,0 +1,319 @@
+name: Wix Platform Recon
+
+on:
+  workflow_dispatch:
+    inputs:
+      cycle_index:
+        description: "Recon cycle index"
+        required: false
+        type: number
+        default: 1
+      max_cycles:
+        description: "Maximum recon cycles"
+        required: false
+        type: number
+        default: 3
+      human_note:
+        description: "Optional note subordinate to MAIN_PROMPT"
+        required: false
+        type: string
+        default: ""
+
+permissions:
+  contents: write
+  actions: write
+  issues: write
+
+concurrency:
+  group: wix-platform-recon
+  cancel-in-progress: false
+
+env:
+  OX_MODEL: opencode/x-preview-f-free
+  LANE_BRANCH: lab/wix-rules
+  MAIN_PROMPT_SHA256: 9cdd0500552998adedbae7e2cc7605ca443187393b6299f0bf4ffdcba18c9101
+  STATUS_ISSUE: "1"
+
+jobs:
+  prepare:
+    name: Prepare persistent accepted state
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    outputs:
+      cycle_index: ${{ steps.input.outputs.cycle_index }}
+      max_cycles: ${{ steps.input.outputs.max_cycles }}
+    steps:
+      - name: Checkout workflow base
+        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Validate request and constitution
+        id: input
+        env:
+          CYCLE_INDEX: ${{ inputs.cycle_index }}
+          MAX_CYCLES: ${{ inputs.max_cycles }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "${{ github.event.repository.visibility }}" = private
+          [[ "$CYCLE_INDEX" =~ ^[1-9][0-9]*$ ]]
+          [[ "$MAX_CYCLES" =~ ^[1-9][0-9]*$ ]]
+          (( CYCLE_INDEX <= MAX_CYCLES ))
+          printf '%s  MAIN_PROMPT.md\n' "$MAIN_PROMPT_SHA256" | sha256sum --check --strict
+          echo "cycle_index=$CYCLE_INDEX" >> "$GITHUB_OUTPUT"
+          echo "max_cycles=$MAX_CYCLES" >> "$GITHUB_OUTPUT"
+      - name: Create or refresh accepted lane
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          auth=$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)
+          if git -c "http.extraheader=AUTHORIZATION: basic $auth" ls-remote --exit-code --heads origin "refs/heads/$LANE_BRANCH" >/dev/null 2>&1; then
+            git -c "http.extraheader=AUTHORIZATION: basic $auth" fetch origin "$LANE_BRANCH:refs/remotes/origin/$LANE_BRANCH"
+            git switch -C "$LANE_BRANCH" "origin/$LANE_BRANCH"
+          else
+            git switch -C "$LANE_BRANCH"
+            git -c "http.extraheader=AUTHORIZATION: basic $auth" push origin "HEAD:refs/heads/$LANE_BRANCH"
+          fi
+          printf '%s  MAIN_PROMPT.md\n' "$MAIN_PROMPT_SHA256" | sha256sum --check --strict
+          test "$(jq -r '.phase' docs/state.json)" = recon
+      - name: Report recon start
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CYCLE_INDEX: ${{ steps.input.outputs.cycle_index }}
+        shell: bash
+        run: |
+          gh issue comment "$STATUS_ISSUE" --repo "$GITHUB_REPOSITORY" --body "### Wix reconnaissance cycle ${CYCLE_INDEX} started
+          Run: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}
+          Product builders remain blocked until the audited technical contract advances the state to build."
+
+  research:
+    name: Recon — ${{ matrix.label }}
+    needs: prepare
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - role: platform
+            label: Platform / CLI
+            agent: wix-platform-researcher
+            report: reports/recon/PLATFORM.md
+          - role: bookings
+            label: Bookings / Calendar APIs
+            agent: wix-bookings-researcher
+            report: reports/recon/BOOKINGS_API.md
+          - role: commerce
+            label: Billing / Marketplace
+            agent: wix-commerce-researcher
+            report: reports/recon/COMMERCE_MARKETPLACE.md
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - name: Checkout accepted lane
+        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+        with:
+          fetch-depth: 0
+          ref: lab/wix-rules
+          persist-credentials: false
+      - name: Verify constitution
+        run: printf '%s  MAIN_PROMPT.md\n' "$MAIN_PROMPT_SHA256" | sha256sum --check --strict
+      - name: Set up reviewed OpenCode
+        uses: ./.github/actions/setup-opencode
+      - name: Run independent researcher
+        env:
+          AGENT: ${{ matrix.agent }}
+          ROLE: ${{ matrix.role }}
+          CYCLE_INDEX: ${{ needs.prepare.outputs.cycle_index }}
+          HUMAN_NOTE: ${{ inputs.human_note }}
+          OPENCODE_RETRY_LABEL: recon-${{ matrix.role }}
+        shell: bash
+        run: |
+          bash .github/scripts/run-opencode-with-retry.sh opencode run --model "$OX_MODEL" --agent "$AGENT" "Run Wix reconnaissance lane $ROLE, cycle $CYCLE_INDEX. Read the immutable constitution first. Investigate current Wix truth independently and write only your assigned report. Human note, subordinate to the constitution: ${HUMAN_NOTE:-}"
+      - name: Persist isolated research snapshot
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ROLE: ${{ matrix.role }}
+          REPORT: ${{ matrix.report }}
+          BRANCH: cycle/wix-recon/${{ github.run_id }}/${{ matrix.role }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f "$REPORT"
+          unexpected=0
+          while IFS= read -r -d '' path; do
+            [[ "$path" == "$REPORT" ]] || { echo "::error::Unexpected recon path: $path"; unexpected=1; }
+          done < <({ git diff --name-only -z; git diff --cached --name-only -z; git ls-files --others --exclude-standard -z; })
+          test "$unexpected" -eq 0
+          git config user.name "wix-recon-$ROLE"
+          git config user.email "wix-recon-$ROLE@users.noreply.github.com"
+          git switch -C "$BRANCH"
+          git add -- "$REPORT"
+          git commit --allow-empty -m "Wix recon $GITHUB_RUN_ID: $ROLE"
+          auth=$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)
+          git -c "http.extraheader=AUTHORIZATION: basic $auth" push --force origin "HEAD:refs/heads/$BRANCH"
+
+  audit:
+    name: Independent reconnaissance audit
+    needs: [prepare, research]
+    if: ${{ always() && needs.prepare.result == 'success' && needs.research.result != 'cancelled' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - name: Checkout untouched accepted lane
+        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+        with:
+          fetch-depth: 0
+          ref: lab/wix-rules
+          persist-credentials: false
+      - name: Mount all research snapshots
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          auth=$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)
+          for role in platform bookings commerce; do
+            branch="cycle/wix-recon/${GITHUB_RUN_ID}/${role}"
+            git -c "http.extraheader=AUTHORIZATION: basic $auth" fetch origin "$branch:refs/remotes/origin/$branch"
+            git worktree add --detach "/tmp/recon_${role}" "origin/$branch"
+          done
+      - name: Set up reviewed OpenCode
+        uses: ./.github/actions/setup-opencode
+      - name: Falsify reconnaissance
+        env:
+          OPENCODE_RETRY_LABEL: recon-audit
+        shell: bash
+        run: |
+          bash .github/scripts/run-opencode-with-retry.sh opencode run --model "$OX_MODEL" --agent wix-recon-auditor "Audit Wix reconnaissance for GitHub run $GITHUB_RUN_ID. Full untrusted researcher worktrees: /tmp/recon_platform, /tmp/recon_bookings, /tmp/recon_commerce. The current checkout is the untouched accepted lane. Independently verify material claims against current official Wix docs and write only reports/audits/RECON.md."
+      - name: Persist audit snapshot
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BRANCH: cycle/wix-recon/${{ github.run_id }}/audit
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f reports/audits/RECON.md
+          unexpected=0
+          while IFS= read -r -d '' path; do
+            [[ "$path" == reports/audits/RECON.md ]] || { echo "::error::Unexpected audit path: $path"; unexpected=1; }
+          done < <({ git diff --name-only -z; git diff --cached --name-only -z; git ls-files --others --exclude-standard -z; })
+          test "$unexpected" -eq 0
+          git config user.name "wix-recon-auditor"
+          git config user.email "wix-recon-auditor@users.noreply.github.com"
+          git switch -C "$BRANCH"
+          git add -- reports/audits/RECON.md
+          git commit --allow-empty -m "Wix recon $GITHUB_RUN_ID: independent audit"
+          auth=$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)
+          git -c "http.extraheader=AUTHORIZATION: basic $auth" push --force origin "HEAD:refs/heads/$BRANCH"
+
+  director:
+    name: Recon director / architecture gate
+    needs: [prepare, research, audit]
+    if: ${{ always() && needs.prepare.result == 'success' && needs.audit.result == 'success' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    outputs:
+      decision: ${{ steps.decision.outputs.decision }}
+      phase: ${{ steps.decision.outputs.phase }}
+    steps:
+      - name: Checkout accepted lane
+        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+        with:
+          fetch-depth: 0
+          ref: lab/wix-rules
+          persist-credentials: false
+      - name: Mount recon evidence
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          auth=$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)
+          for role in platform bookings commerce audit; do
+            branch="cycle/wix-recon/${GITHUB_RUN_ID}/${role}"
+            git -c "http.extraheader=AUTHORIZATION: basic $auth" fetch origin "$branch:refs/remotes/origin/$branch"
+            git worktree add --detach "/tmp/recon_${role}" "origin/$branch"
+          done
+      - name: Set up reviewed OpenCode
+        uses: ./.github/actions/setup-opencode
+      - name: Produce audited technical contract
+        env:
+          CYCLE_INDEX: ${{ needs.prepare.outputs.cycle_index }}
+          OPENCODE_RETRY_LABEL: recon-director
+        shell: bash
+        run: |
+          bash .github/scripts/run-opencode-with-retry.sh opencode run --model "$OX_MODEL" --agent wix-recon-director "Direct Wix reconnaissance cycle $CYCLE_INDEX. Evidence worktrees: platform=/tmp/recon_platform, bookings=/tmp/recon_bookings, commerce=/tmp/recon_commerce, independent audit=/tmp/recon_audit. Resolve contradictions, write the binding technical contract/build blueprint, and decide whether build can start."
+      - name: Persist evidence and validate director output
+        id: decision
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p reports/recon reports/audits reports/director
+          cp /tmp/recon_platform/reports/recon/PLATFORM.md reports/recon/PLATFORM.md
+          cp /tmp/recon_bookings/reports/recon/BOOKINGS_API.md reports/recon/BOOKINGS_API.md
+          cp /tmp/recon_commerce/reports/recon/COMMERCE_MARKETPLACE.md reports/recon/COMMERCE_MARKETPLACE.md
+          cp /tmp/recon_audit/reports/audits/RECON.md reports/audits/RECON.md
+          test -f reports/director/RECON_DECISION.json
+          decision=$(jq -er '.decision | select(. == "start_build" or . == "continue_recon" or . == "stop")' reports/director/RECON_DECISION.json)
+          phase=$(jq -er '.phase | select(. == "recon" or . == "build")' docs/state.json)
+          if [[ "$decision" == start_build ]]; then test "$phase" = build; fi
+          if [[ "$decision" == continue_recon ]]; then test "$phase" = recon; fi
+          printf '%s  MAIN_PROMPT.md\n' "$MAIN_PROMPT_SHA256" | sha256sum --check --strict
+          echo "decision=$decision" >> "$GITHUB_OUTPUT"
+          echo "phase=$phase" >> "$GITHUB_OUTPUT"
+      - name: Commit accepted reconnaissance state
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          protected=$(git diff --name-only | grep -E '^(\.github/|\.opencode/|MAIN_PROMPT\.md$|AGENTS\.md$|opencode\.json$|directives/DIRECTOR\.md$)' || true)
+          test -z "$protected"
+          git config user.name "wix-recon-director"
+          git config user.email "wix-recon-director@users.noreply.github.com"
+          git add -- docs directives reports
+          git commit --allow-empty -m "Wix recon $GITHUB_RUN_ID: accepted architecture state"
+          auth=$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)
+          git -c "http.extraheader=AUTHORIZATION: basic $auth" push origin "HEAD:refs/heads/$LANE_BRANCH"
+      - name: Report decision
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DECISION: ${{ steps.decision.outputs.decision }}
+          PHASE: ${{ steps.decision.outputs.phase }}
+        shell: bash
+        run: |
+          gh issue comment "$STATUS_ISSUE" --repo "$GITHUB_REPOSITORY" --body "### Wix reconnaissance decision
+          Run: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}
+          Decision: **${DECISION}**
+          Accepted phase: **${PHASE}**"
+
+  dispatch:
+    name: Continue autonomous process
+    needs: [prepare, director]
+    if: ${{ needs.director.result == 'success' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Dispatch build or next recon
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DECISION: ${{ needs.director.outputs.decision }}
+          CYCLE_INDEX: ${{ needs.prepare.outputs.cycle_index }}
+          MAX_CYCLES: ${{ needs.prepare.outputs.max_cycles }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "$DECISION" == start_build ]]; then
+            gh workflow run wix-build-loop.yml --repo "$GITHUB_REPOSITORY" --ref main -f cycle_index=1 -f max_cycles=0 -f human_note="Start from audited Wix technical contract."
+          elif [[ "$DECISION" == continue_recon ]]; then
+            next=$((CYCLE_INDEX + 1))
+            if (( next <= MAX_CYCLES )); then
+              gh workflow run wix-recon.yml --repo "$GITHUB_REPOSITORY" --ref main -f cycle_index="$next" -f max_cycles="$MAX_CYCLES" -f human_note="Resolve only the blockers left by the previous recon director."
+            else
+              gh issue comment "$STATUS_ISSUE" --repo "$GITHUB_REPOSITORY" --body "Recon reached its configured cycle cap without a safe build gate. Autonomous product construction remains blocked."
+            fi
+          fi

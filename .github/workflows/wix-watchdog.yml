@@ -1,9 +1,6 @@
 name: Wix Autonomous Recovery Watchdog
 
 on:
-  push:
-    branches: [main]
-    paths: [".github/workflows/wix-watchdog.yml"]
   workflow_run:
     workflows:
       - "Wix Platform Recon"
@@ -24,68 +21,6 @@ env:
   LANE_BRANCH: lab/wix-rules
 
 jobs:
-  cleanup:
-    name: Prune obsolete Actions history
-    if: ${{ github.event_name == 'push' }}
-    runs-on: ubuntu-24.04
-    timeout-minutes: 15
-    steps:
-      - name: Keep only active runs and the latest useful completed run per canonical workflow
-        env:
-          GH_TOKEN: ${{ github.token }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          repo="$GITHUB_REPOSITORY"
-          runs=$(gh api --paginate "repos/$repo/actions/runs?per_page=100" --jq '.workflow_runs[]' | jq -s '.')
-
-          canonical=(
-            '.github/workflows/ci.yml'
-            '.github/workflows/wix-build-loop.yml'
-            '.github/workflows/wix-recon.yml'
-            '.github/workflows/wix-sim.yml'
-            '.github/workflows/wix-watchdog.yml'
-          )
-
-          keep_file=$(mktemp)
-          trap 'rm -f "$keep_file"' EXIT
-
-          # Never touch queued/in-progress runs, including this cleanup run.
-          jq -r '.[] | select(.status != "completed") | .id' <<<"$runs" >> "$keep_file"
-
-          for path in "${canonical[@]}"; do
-            active=$(jq --arg p "$path" '[.[] | select(.path == $p and .status != "completed")] | length' <<<"$runs")
-            if (( active > 0 )); then
-              # An active canonical run is the relevant evidence; old completed attempts are noise.
-              continue
-            fi
-            id=$(jq -r --arg p "$path" '[.[] | select(.path == $p and .status == "completed" and .conclusion == "success")] | sort_by(.created_at) | last | .id // empty' <<<"$runs")
-            if [[ -z "$id" ]]; then
-              id=$(jq -r --arg p "$path" '[.[] | select(.path == $p and .status == "completed")] | sort_by(.created_at) | last | .id // empty' <<<"$runs")
-            fi
-            [[ -z "$id" ]] || echo "$id" >> "$keep_file"
-          done
-
-          sort -u "$keep_file" -o "$keep_file"
-          deleted=0
-          kept=0
-          while IFS=$'\t' read -r id status path name conclusion; do
-            if grep -qx "$id" "$keep_file"; then
-              kept=$((kept+1))
-              continue
-            fi
-            if [[ "$status" != completed ]]; then
-              kept=$((kept+1))
-              continue
-            fi
-            echo "Deleting obsolete run $id | $name | $conclusion | $path"
-            gh api --method DELETE "repos/$repo/actions/runs/$id"
-            deleted=$((deleted+1))
-          done < <(jq -r '.[] | [.id,.status,.path,.name,(.conclusion // "")] | @tsv' <<<"$runs")
-
-          echo "Deleted obsolete runs: $deleted"
-          echo "Preserved runs: $kept"
-
   recover:
     name: Recover transient autonomous failure
     if: ${{ github.repository == 'Mickalive/Wix-extension-Location' && !github.event.repository.fork && ((github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'failure') || github.event_name == 'workflow_dispatch') }}

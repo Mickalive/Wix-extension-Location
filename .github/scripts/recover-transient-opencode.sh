@@ -134,5 +134,5 @@ dependent_list=$(IFS=', '; echo "${dependent_jobs[*]:-}")
 body=$(printf '### Automatic recovery after transient OX outage\n\n- Workflow: `%s`\n- Run: [%s](%s)\n- GitHub attempt: `%s -> %s`\n- Transient root jobs: %s\n- Downstream dependent jobs: %s\n\nThe same autonomous cycle is being resumed. Successful jobs and already-persisted candidate snapshots are preserved. Downstream jobs are replayed only because their required transiently-failed snapshot was missing; no unrelated non-transient code failure was restarted.' \
   "$workflow" "$run_id" "$run_url" "$old_attempt" "$new_attempt" "$transient_list" "${dependent_list:-none}")
 
-gh issue comment "$tracking_issue" --repo "$repository" --body "$body" || \
+printf '%s\n' "$body" || \
   echo "::warning::Recovery started, but status issue comment failed."

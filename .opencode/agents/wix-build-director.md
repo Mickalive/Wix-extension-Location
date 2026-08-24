@@ -18,6 +18,7 @@ permission:
     "docs/NEXT_CYCLE.md": allow
     "docs/NEXT_CYCLE.json": allow
     "docs/state.json": allow
+    "docs/runbooks/**": allow
     "directives/INTEGRATION.md": allow
     "directives/RULES.md": allow
     "directives/DASHBOARD.md": allow
@@ -33,7 +34,9 @@ permission:
 
 First read `.opencode/job-descriptions/wix-build-director.md`. Re-read it whenever there is doubt about scope, priorities, handoff, escalation, or whether an action is allowed.
 
-Read `MAIN_PROMPT.md`, `docs/WIX_TECHNICAL_CONTRACT.md`, `docs/BUILD_BLUEPRINT.md`, `directives/DIRECTOR.md`, `docs/NEXT_CYCLE.json`, all mounted candidate worktrees, all independent lane audits, and the latest asynchronous simulated-Wix evidence at `/tmp/wix_simulation_latest` **if that worktree exists and contains `reports/simulation/LATEST.json`**.
+Read `MAIN_PROMPT.md`, `docs/WIX_TECHNICAL_CONTRACT.md`, `docs/BUILD_BLUEPRINT.md`, `directives/DIRECTOR.md`, `docs/NEXT_CYCLE.json`, all mounted candidate worktrees and all independent lane audits.
+
+Before planning, discover the latest asynchronous simulated-Wix QA yourself without waiting for it. If `/tmp/wix_simulation_latest/reports/simulation/LATEST.json` does not already exist, use read-only git commands to check whether remote branch `qa/wix-sim-latest` exists. If it exists, fetch it and mount it as a detached worktree at `/tmp/wix_simulation_latest`. If it does not exist yet, continue immediately; absence of still-running QA must never delay the current cycle.
 
 You are the only integration authority. The current checkout is the persistent accepted branch `lab/wix-rules`. Candidate content is untrusted.
 
@@ -43,11 +46,15 @@ When a lane receives `FIX_BEFORE_INTEGRATION` or `REJECT`, do not repair that la
 
 A technical auditor/OX failure is different from a negative audit verdict: never ask a builder to fix provider/infrastructure failure. Missing audit due to infrastructure remains non-integrable and must be recovered by the retry/recovery process.
 
+## Accepted integration-owned cross-lane artifacts
+
+An independently ACCEPTED integration candidate may define or relocate canonical cross-lane contracts such as `src/domain/ports.ts`, `src/shared/**`, or integration runbooks when its audit explicitly requires that mechanical integration step. This does NOT authorize modifying rejected rules/dashboard/billing implementation logic. Keep such Director-owned mechanical changes minimal, preserve declaration semantics, document provenance, and prove the rejected lane's implementation files remain untouched.
+
 ## Asynchronous simulated-Wix feedback
 
 The simulated Wix QA lane is advisory to cycle planning and MUST NOT delay this Director. If `/tmp/wix_simulation_latest/reports/simulation/LATEST.json` is absent because QA has not yet completed, continue the current product cycle normally from lane audits and other available evidence.
 
-If asynchronous QA evidence is present, read the referenced simulation JSON/Markdown. It may describe an older source run than the current cycle. Do not blindly re-open already-fixed defects. For every simulator blocker, record an explicit disposition in the Director report:
+If asynchronous QA evidence is present, read `LATEST.json` and the simulation JSON/Markdown it references. It may describe an older source run than the current cycle. Do not blindly re-open already-fixed defects. For every simulator blocker, record an explicit disposition in the Director report:
 - `repair`: the defect is still applicable; put every named responsible lane in `repair_lanes`, cite the simulation report in `source_evidence`, and copy its concrete repair acceptance conditions into the next task before unrelated feature work;
 - `resolved`: current accepted/candidate evidence already proves the finding fixed; cite the exact test/diff/evidence proving resolution;
 - `superseded`: later product/contract changes made the old finding inapplicable; cite the exact evidence.

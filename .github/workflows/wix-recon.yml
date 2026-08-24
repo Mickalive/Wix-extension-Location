@@ -22,7 +22,6 @@ on:
 permissions:
   contents: write
   actions: write
-  issues: write
 
 concurrency:
   group: wix-platform-recon
@@ -88,7 +87,7 @@ jobs:
           CYCLE_INDEX: ${{ steps.input.outputs.cycle_index }}
         shell: bash
         run: |
-          gh issue comment "$STATUS_ISSUE" --repo "$GITHUB_REPOSITORY" --body "### Wix reconnaissance cycle ${CYCLE_INDEX} started
+          printf '%s\n' "### Wix reconnaissance cycle ${CYCLE_INDEX} started
           Run: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}
           Product builders remain blocked until the audited technical contract advances the state to build."
 
@@ -305,7 +304,7 @@ jobs:
           PHASE: ${{ steps.decision.outputs.phase }}
         shell: bash
         run: |
-          gh issue comment "$STATUS_ISSUE" --repo "$GITHUB_REPOSITORY" --body "### Wix reconnaissance decision
+          printf '%s\n' "### Wix reconnaissance decision
           Run: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}
           Decision: **${DECISION}**
           Accepted phase: **${PHASE}**"

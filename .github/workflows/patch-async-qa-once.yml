@@ -79,3 +79,5 @@ jobs:
           git add .github/workflows/wix-build-loop.yml
           git commit -m "qa: consume latest async Wix simulation in Director"
           git push origin lab/wix-rules
+
+# trigger

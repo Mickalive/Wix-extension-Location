@@ -2,6 +2,29 @@
 
 All agents inherit `MAIN_PROMPT.md`. Candidate output is untrusted until independently audited and accepted by the Director.
 
+## Immutable job descriptions
+
+Every role has a permanent job description under `.opencode/job-descriptions/`. These files are **readable by agents but immutable to agents**.
+
+Before starting work, every agent MUST read the fiche mapped to its own agent name. Whenever there is doubt about scope, priorities, ownership, handoff, escalation, or whether an action is allowed, the agent MUST re-read its fiche before acting. The fiche is a standing operating manual, not optional background.
+
+Role mapping:
+- `wix-platform-researcher` → `.opencode/job-descriptions/wix-platform-researcher.md`
+- `wix-bookings-researcher` → `.opencode/job-descriptions/wix-bookings-researcher.md`
+- `wix-commerce-researcher` → `.opencode/job-descriptions/wix-commerce-researcher.md`
+- `wix-recon-auditor` → `.opencode/job-descriptions/wix-recon-auditor.md`
+- `wix-recon-director` → `.opencode/job-descriptions/wix-recon-director.md`
+- `wix-integration-builder` → `.opencode/job-descriptions/wix-integration-builder.md`
+- `rules-engine-builder` → `.opencode/job-descriptions/rules-engine-builder.md`
+- `dashboard-builder` → `.opencode/job-descriptions/dashboard-builder.md`
+- `billing-builder` → `.opencode/job-descriptions/billing-builder.md`
+- `lane-auditor` → `.opencode/job-descriptions/lane-auditor.md`
+- `wix-simulation-auditor` → `.opencode/job-descriptions/wix-simulation-auditor.md`
+- `wix-build-director` → `.opencode/job-descriptions/wix-build-director.md`
+- `release-readiness-auditor` → `.opencode/job-descriptions/release-readiness-auditor.md`
+
+`MAIN_PROMPT.md` remains the product constitution. The binding Wix Technical Contract remains the platform truth. The job description governs how a role performs its job inside those higher-order constraints.
+
 ## Stage 1 — Wix Platform Recon
 
 ### wix-platform-researcher

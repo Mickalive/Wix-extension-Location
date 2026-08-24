@@ -1,0 +1,95 @@
+name: Wix Autonomous Launch Bridge
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - ".wix/launch/*.json"
+
+permissions:
+  contents: read
+  actions: write
+  issues: write
+
+concurrency:
+  group: wix-autonomous-launch-bridge
+  cancel-in-progress: false
+
+env:
+  STATUS_ISSUE: "1"
+  LANE_BRANCH: lab/wix-rules
+
+jobs:
+  dispatch:
+    name: Dispatch current autonomous phase
+    if: ${{ github.event.repository.visibility == 'private' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout launch request
+        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+        with:
+          fetch-depth: 2
+          persist-credentials: false
+
+      - name: Resolve request
+        id: request
+        shell: bash
+        run: |
+          set -euo pipefail
+          file=$(git diff-tree --no-commit-id --name-only -r "$GITHUB_SHA" | grep -E '^\.wix/launch/[^/]+\.json$' | tail -1)
+          test -n "$file"
+          test -f "$file"
+          jq -e 'type == "object"' "$file" >/dev/null
+          recon_cycles=$(jq -er '.recon_cycles // 3 | if type == "number" and floor == . and . >= 1 and . <= 10 then . else error("invalid recon_cycles") end' "$file")
+          build_cycles=$(jq -er '.build_cycles // 0 | if type == "number" and floor == . and . >= 0 and . <= 10000 then . else error("invalid build_cycles") end' "$file")
+          note=$(jq -er '.human_note // "" | if type == "string" and length <= 4000 then . else error("invalid human_note") end' "$file")
+          echo "recon_cycles=$recon_cycles" >> "$GITHUB_OUTPUT"
+          echo "build_cycles=$build_cycles" >> "$GITHUB_OUTPUT"
+          {
+            echo "note<<WIX_NOTE"
+            echo "$note"
+            echo "WIX_NOTE"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Detect persistent phase
+        id: phase
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          auth=$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)
+          if git -c "http.extraheader=AUTHORIZATION: basic $auth" ls-remote --exit-code --heads origin "refs/heads/$LANE_BRANCH" >/dev/null 2>&1; then
+            git -c "http.extraheader=AUTHORIZATION: basic $auth" fetch origin "$LANE_BRANCH:refs/remotes/origin/$LANE_BRANCH"
+            phase=$(git show "origin/$LANE_BRANCH:docs/state.json" | jq -er '.phase')
+          else
+            phase=recon
+          fi
+          [[ "$phase" == recon || "$phase" == build ]]
+          echo "phase=$phase" >> "$GITHUB_OUTPUT"
+
+      - name: Dispatch autonomous phase
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PHASE: ${{ steps.phase.outputs.phase }}
+          RECON_CYCLES: ${{ steps.request.outputs.recon_cycles }}
+          BUILD_CYCLES: ${{ steps.request.outputs.build_cycles }}
+          NOTE: ${{ steps.request.outputs.note }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "$PHASE" == recon ]]; then
+            gh workflow run wix-recon.yml --repo "$GITHUB_REPOSITORY" --ref main \
+              -f cycle_index=1 -f max_cycles="$RECON_CYCLES" -f human_note="$NOTE"
+            target="Wix Platform Recon"
+          else
+            gh workflow run wix-build-loop.yml --repo "$GITHUB_REPOSITORY" --ref main \
+              -f cycle_index=1 -f max_cycles="$BUILD_CYCLES" -f human_note="$NOTE"
+            target="Wix Autonomous Product Factory"
+          fi
+          gh issue comment "$STATUS_ISSUE" --repo "$GITHUB_REPOSITORY" --body "### Autonomous Wix process dispatched
+          Phase detected: **${PHASE}**
+          Workflow: **${target}**
+          No product agent can bypass the audit/director gates."

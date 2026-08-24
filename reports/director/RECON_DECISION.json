@@ -1,0 +1,46 @@
+{
+  "actor": "wix-recon-director",
+  "cycle": 1,
+  "date": "2026-08-24",
+  "decision": "start_build",
+  "phase_transition": { "from": "recon", "to": "build" },
+  "basis": {
+    "audit_verdict": "PASS_WITH_BLOCKERS",
+    "audit_report": "reports/audits/RECON.md",
+    "recon_reports": [
+      "reports/recon/PLATFORM.md",
+      "reports/recon/BOOKINGS_API.md",
+      "reports/recon/COMMERCE_MARKETPLACE.md"
+    ],
+    "director_spot_checks_live_2026_08_24": [
+      "https://dev.wix.com/docs/api-reference/business-solutions/bookings/services/services-v2/about-service-locations.md (per-location hours limitation + WORKING_HOURS mechanism confirmed verbatim)",
+      "https://dev.wix.com/docs/api-reference/business-solutions/bookings/bookings/bookings-validation-service-plugin/introduction.md (fail-closed create/cancel vs fail-open reschedule table, PII redaction wording, concurrent providers, omitted-bulk-items-default-valid, dashboard-created extension fallback confirmed; stale legacy-CLI links confirmed as doc lag)",
+      "https://dev.wix.com/docs/api-reference/business-solutions/bookings/bookings/bookings-reader-v2/count-extended-bookings.md (NEW: counting requires one of READ-CALENDAR-WITH-PARTICIPANTS | MANAGE-BOOKINGS | READ-BOOKINGS-SENSITIVE; no public-read option; contract selects READ-CALENDAR-WITH-PARTICIPANTS)"
+    ]
+  },
+  "why_build_is_authorized": [
+    "Architecture sufficiently proven: unified Wix CLI app (Astro-based), dashboard extensions, Bookings Validation service plugin, Calendar V3 schedule shaping, data collections persistence, Wix-managed hosting — every load-bearing claim independently verified against current official docs on 2026-08-24.",
+    "No deprecated path in the chosen stack; legacy CLI and Bookings-scoped Calendar APIs explicitly banned in the contract.",
+    "All 10 MVP capabilities classified STABLE_PRODUCTION per current official documentation; no PREVIEW_GATED capability is required for the MVP; UNSUPPORTED items (native per-location hours objects, unconditional reschedule enforcement) are excluded from scope and from copy.",
+    "Monetization model is the documented Wix pattern: 4 fixed recurring plans + developer-computed billable-location meter + developer-enforced restriction + upgrade URL.",
+    "Audit blockers B1-B7 are contract-writing tasks, not research gaps; all seven are resolved in docs/WIX_TECHNICAL_CONTRACT.md (see blocker_resolution below).",
+    "Remaining unknowns are empirical dev-site gates that block production CLAIMS, not build start (audit §8); credential-free builder work is explicitly sanctioned by the audit."
+  ],
+  "blocker_resolution": {
+    "B1_contactId_unproven": "Contract C1 + §5.3: identity-free-first duplicate protection; T-VP3 amended into payload probe incl. metadata.identity.",
+    "B2_contradiction_invariants": "Contract C2 (expirationDate/expiresOn advisory-only) and C3 (queryLocations.exists ban).",
+    "B3_counting_signoff": "Contract C5 + §7: paginated locations+services, archived=false liveness, non-hidden counted-service policy v1, single-location floor 0->1, fail-open entitlement errors with dashboard warning.",
+    "B4_schema_drift": "Contract C4: persistence tolerates older collection schemas; lazy reconciliation; blueprint persistence module owns it.",
+    "B5_gate_ordering": "T-VP0 embedded as first integration-lane empirical step with documented dashboard-created-extension fallback; cycle-1 integration task prepares everything short of credentials.",
+    "B6_copy_constraints": "Contract §12 product-copy bans.",
+    "B7_quarantine": "Contract §13 UQ1-UQ9 marked UNVERIFIED; must not be asserted anywhere in accepted work."
+  },
+  "residual_risks_accepted": [
+    "Validation plugin shipped ~2026-04; classified STABLE_PRODUCTION per current docs but production claims gated on T-VP0-T-VP5 passing on a dev site.",
+    "Reschedule enforcement is permanently best-effort (documented fail-open).",
+    "TOCTOU residual risk on count caps disclosed in-product.",
+    "Empirical gates require human-owned credentials; until then builders ship credential-free value only."
+  ],
+  "next_cycle": "docs/NEXT_CYCLE.json (4 active lanes: integration, rules, dashboard, billing)",
+  "no_product_source_code_written_by_director": true
+}

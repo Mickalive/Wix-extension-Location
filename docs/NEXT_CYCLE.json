@@ -1,43 +1,100 @@
 {
   "cycle": 1,
-  "objective": "Complete Wix reconnaissance before product construction.",
+  "phase": "build",
+  "generated_by": "wix-recon-director",
+  "date": "2026-08-24",
+  "authority": {
+    "decision": "start_build",
+    "decision_record": "reports/director/RECON_DECISION.json",
+    "contract": "docs/WIX_TECHNICAL_CONTRACT.md",
+    "blueprint": "docs/BUILD_BLUEPRINT.md"
+  },
+  "repair_priority_rule": "If a lane's latest persisted audit is FIX_BEFORE_INTEGRATION or REJECT, repairing those findings takes priority over the scheduled task.",
   "lanes": {
     "integration": {
-      "status": "blocked",
-      "task": "",
-      "why_needed": "Product construction is gated on the audited Wix technical contract.",
-      "source_evidence": ["docs/state.json", "docs/NEXT_CYCLE.md"],
-      "acceptance_criteria": [],
-      "blocker": "Reconnaissance phase is not yet complete.",
-      "completion_evidence": null
+      "status": "active",
+      "task_id": "INT-C1-1",
+      "task": "Credential-free platform foundation per Blueprint sections 1/3/4: (a) project tooling (TypeScript + Vitest config, 'npm run test:unit' script runnable without Wix credentials, CI purity gate that fails when any '@wix/' import appears under src/domain/** or src/billing/pure/**); (b) finalize src/domain/ports.ts adapter interfaces plus src/shared DTOs exactly as shaped in Blueprint section 3; (c) implement in-memory fake adapters for every port; (d) implement the snapshot -> diff -> apply -> verify -> rollback schedule-mutation orchestrator in src/platform/schedule-mutation against the ScheduleGateway port with deterministic UUIDv5 idempotency keys, revision-conflict retry, crash-mid-apply recovery from the persisted snapshot, and an audit-log entry per mutation; (e) write docs/runbooks/T_VP0_SCAFFOLD.md recording the exact commands, evidence to capture (generate-menu contents, wix.config.json fields, dependency pins), and the documented dashboard-created-extension fallback, ready to execute the moment human-owned credentials exist.",
+      "why_needed": "All three other lanes compile against these ports; the Technical Contract makes destructive-write safety (section 9) mandatory before any schedule mutation code can exist; audit blocker B5 requires T-VP0 to be the first empirical step and its runbook must be prepared in advance.",
+      "source_evidence": [
+        "docs/WIX_TECHNICAL_CONTRACT.md section 9 (mandatory destructive-write gates) and section 15 (T-VP0)",
+        "docs/BUILD_BLUEPRINT.md sections 1, 3, 4 (module map, ports, binding flows)",
+        "reports/audits/RECON.md blockers B5/M1/N4 (unified-CLI generation check + fallback)"
+      ],
+      "acceptance_criteria": [
+        "'npm ci && npm run test:unit' passes with zero Wix credentials and no network access to wixapis.com",
+        "purity gate demonstrably fails the build when a fixture injects an '@wix/' import into src/domain/** or src/billing/pure/** (negative test committed)",
+        "orchestrator tests prove: snapshot persisted before first write; replaying apply with an identical idempotency key results in exactly one applied change; stale-revision conflict retries with fresh revision then succeeds; simulated crash mid-apply followed by recovery run restores the exact pre-apply state; every mutation appends one audit entry",
+        "every port has a fake implementation exercised by at least one consumer test",
+        "docs/runbooks/T_VP0_SCAFFOLD.md exists and names the fallback extension-creation path verbatim from the plugin page"
+      ],
+      "out_of_scope": "real scaffold execution (human credentials), any @wix SDK call sites beyond port signatures, business rules, pricing policy"
     },
     "rules": {
-      "status": "blocked",
-      "task": "",
-      "why_needed": "Product construction is gated on the audited Wix technical contract.",
-      "source_evidence": ["docs/state.json", "docs/NEXT_CYCLE.md"],
-      "acceptance_criteria": [],
-      "blocker": "Reconnaissance phase is not yet complete.",
-      "completion_evidence": null
+      "status": "active",
+      "task_id": "RULES-C1-1",
+      "task": "Pure availability-rules core v1 in src/domain/** per Blueprint sections 1/3/6: RuleSet model covering per-location and per-service weekly windows including split daily windows, date-specific exceptions/closures/temporary overrides with explicit precedence, maximum-count limits per day/per service/per location with a declared status-inclusion policy (default PENDING+CONFIRMED), and identity-free-first duplicate protection with an optional identity-key hook; site-IANA-zone day-boundary math through the injected Clock port (never fixed offsets); explainable RuleOutcome (ruleId + machine code + customer-safe message) for every allow/block decision; exhaustive Vitest coverage including negative and edge cases.",
+      "why_needed": "This core IS the enforceable product; contract invariant C1 mandates identity-free-first duplicate design, capability classifications 1-8 assume this logic, and no Wix wiring has value until evaluation is provably correct and deterministic.",
+      "source_evidence": [
+        "docs/WIX_TECHNICAL_CONTRACT.md sections 4 (data-model/timezone facts), 5.3 (payload fields available to rules), 10 (capability table), 11 (C1, C6)",
+        "docs/BUILD_BLUEPRINT.md sections 2, 3, 6 (ownership, evaluateRules signature, test strategy)",
+        "reports/recon/BOOKINGS_API.md sections 7-8 (timezone/DST behavior, capability classification)"
+      ],
+      "acceptance_criteria": [
+        "zero '@wix/' imports under src/domain/** (CI purity gate green)",
+        "split-window test proves zero availability in the 12:00-14:00 gap for windows 09:00-12:00 + 14:00-18:00 on the same weekday",
+        "exception-precedence tests prove a date-specific closure overrides the weekly window and a bounded temporary override expires automatically",
+        "cap tests fix boundary semantics explicitly (booking at exactly the limit is blocked; cancellation frees capacity) for day, service, and location dimensions, each declaring included statuses",
+        "duplicate-protection tests block a second same service/day/slot booking with NO identity fields present, and use the identity key only when supplied",
+        "DST fixture tests reproduce contract section 4 facts: spring-forward nonexistent local time advances to next valid time; fall-back second occurrence is not bookable; per-day counts use the site zone, not UTC",
+        "every outcome carries ruleId + machine code + customer-safe message; a determinism property test asserts identical outcomes across 100 repeated evaluations"
+      ],
+      "out_of_scope": "any I/O, network, Wix SDK usage, persistence, UI"
     },
     "dashboard": {
-      "status": "blocked",
-      "task": "",
-      "why_needed": "Product construction is gated on the audited Wix technical contract.",
-      "source_evidence": ["docs/state.json", "docs/NEXT_CYCLE.md"],
-      "acceptance_criteria": [],
-      "blocker": "Reconnaissance phase is not yet complete.",
-      "completion_evidence": null
+      "status": "active",
+      "task_id": "DASH-C1-1",
+      "task": "Dashboard configuration shell per Blueprint sections 1/2/6 using React + @wix/design-system patterns: RulesEditor page supporting per-location and per-service weekly windows with split-hour rows, exception list editor, and cap inputs for all three dimensions; client-side validation that IMPORTS the pure domain validators (no duplicated rule logic); a diff-preview modal that renders exactly what a proposed schedule apply would change before any apply is possible; an ExplainPanel component rendering domain RuleOutcome explanations; all server access behind one typed services-bridge module (fetchWithAuth-shaped interface) so no direct SDK calls scatter through components; headless component tests.",
+      "why_needed": "The dashboard is the product's only user surface (contract architecture is dashboard-first); validation must mirror the domain exactly or invalid rulesets enter persistence; diff-and-confirm is mandated by contract section 9.2 before any destructive mutation.",
+      "source_evidence": [
+        "docs/WIX_TECHNICAL_CONTRACT.md sections 1 (binding dashboard architecture), 9.2 (diff-and-confirm), 12 (copy bans bind UI wording)",
+        "docs/BUILD_BLUEPRINT.md sections 1, 2, 6 (dashboard ownership, dependency direction, tests)",
+        "reports/recon/PLATFORM.md section 4.1 and reports/audits/RECON.md N5 (official quick-start dashboard pattern)"
+      ],
+      "acceptance_criteria": [
+        "editor covers all v1 rule types: per-location windows, per-service windows, >=2 split windows on one weekday, dated exceptions, caps for day/service/location",
+        "accessibility assertions in tests: labeled controls, keyboard operability, roles for the diff modal",
+        "invalid input (end<=start, zero-length or overlapping-invalid windows, negative/non-integer caps, exception without date) is blocked with messages asserted EQUAL to the domain validator messages",
+        "apply action stays disabled until the diff modal has been rendered and explicitly confirmed; test proves the gating",
+        "grep test proves no '@wix/' imports outside the single services-bridge module",
+        "component tests run green under 'npm run test:unit' without Wix credentials"
+      ],
+      "out_of_scope": "live Wix data fetching, release/hot-reload verification (needs dev site), any rule logic not imported from src/domain"
     },
     "billing": {
-      "status": "blocked",
-      "task": "",
-      "why_needed": "Product construction is gated on the audited Wix technical contract.",
-      "source_evidence": ["docs/state.json", "docs/NEXT_CYCLE.md"],
-      "acceptance_criteria": [],
-      "blocker": "Reconnaissance phase is not yet complete.",
-      "completion_evidence": null
+      "status": "active",
+      "task_id": "BILL-C1-1",
+      "task": "Billable-location counter and entitlement engine per Blueprint sections 1/6: pure counting core (src/billing/counter + src/billing/pure) implementing the ratified algorithm over fetched pages as plain input - paginated locations with archived=false liveness, paginated services (non-hidden counted-service policy v1), distinct BUSINESS business.id intersection, single-location floor treating computed 0 as 1; thin paging-adapter interfaces for the integration lane to back later; tier mapping of the four plan identifiers to maxLocations (1 / 3 / 10 / unlimited); entitlement state machine (free, trial-in-progress, paid, dunning expired-date-but-isFree-false, renewal-cancelled-until-expiry, cloned originInstanceId) honoring contract C2 advisory-only expiration; fail-open posture on billing/count failures emitting a persistent warning signal; over-limit coverage ordering (default location first, then alphabetical by id) that never deletes user data; upgrade URL builder per contract section 7.",
+      "why_needed": "Wix makes developer-side plan restriction mandatory and review-tested; the ratified counting algorithm resolves audit blockers B3/M4/M5; every enforcement path and the dashboard meter consume EntitlementGate, so it must exist before wiring cycles.",
+      "source_evidence": [
+        "docs/WIX_TECHNICAL_CONTRACT.md section 7 (ratified definition, policies, posture) and section 11 (C2, C3, C5)",
+        "docs/BUILD_BLUEPRINT.md sections 1, 6 (billing modules, tests)",
+        "reports/recon/COMMERCE_MARKETPLACE.md sections 9.2-9.3 (algorithm + edge-case table) and reports/audits/RECON.md section 4.2 (pagination + queryLocations.exists corrections)"
+      ],
+      "acceptance_criteria": [
+        "counting tests prove correct pagination beyond 50 locations and beyond 100 services, dedup of overlapping service references, exclusion of archived locations even when status reads ACTIVE, exclusion of hidden services, and the CUSTOM-only floor to 1",
+        "entitlement decision-table tests cover: isFree=true; trial freeTrialInfo.status=IN_PROGRESS treated paid; expirationDate passed but isFree=false treated PAID; auto-renewal cancelled before period end still paid; isFree=true after expiry mapped to free tier; originInstanceId clone handled as independent instance",
+        "over-limit ordering test asserts stable selection (default first, then alphabetical by id) across repeated runs and asserts no deletion path exists",
+        "simulated billing/count API failure produces fail-open decisions AND a raised warning signal (asserted), never a silent block or silent allow-without-warning",
+        "zero '@wix/' imports under src/billing/pure/** and the counter core (CI purity gate green)",
+        "upgrade URL builder output matches https://www.wix.com/apps/upgrade/<APP_ID>?appInstanceId=<INSTANCE_ID> exactly"
+      ],
+      "out_of_scope": "real Wix API calls (adapters belong to integration lane), pricing-page UI, trial configuration"
     }
   },
-  "critical_external_blocker": null
+  "cross_lane_compatibility": {
+    "shared_contracts": "src/domain/ports.ts and src/shared/types|errors are finalized by INT-C1-1 item (b) in the shapes pre-declared in Blueprint section 3; rules/dashboard/billing code against those shapes merges without conflict because directory ownership is disjoint (Blueprint section 2).",
+    "collective_effect": "Cycle 1 delivers the complete credential-free MVP foundation: ports+fakes+safety orchestrator (integration), enforceable rule core (rules), configurable+explainable UI (dashboard), and the monetization meter/gate (billing) - exactly the four pillars the empirical gates will exercise once human-owned credentials exist.",
+    "forbidden_everywhere": "product source claiming production capability before gates T-VP*/T-WH*/T-BK*/T-RB* pass; PREVIEW_GATED dependencies; UNSUPPORTED mechanisms; fabricated Wix identifiers; secrets in repo."
+  }
 }

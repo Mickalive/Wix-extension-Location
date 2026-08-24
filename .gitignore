@@ -1,0 +1,16 @@
+# Dependencies / build output
+node_modules/
+dist/
+coverage/
+
+# Environment and secrets - never commit credentials or account identifiers
+.env
+.env.*
+!.env.example
+
+# Wix CLI local state (dev-site selection etc. - see contract UQ1)
+.wix/
+
+# OS / editor noise
+.DS_Store
+*.log

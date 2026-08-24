@@ -9,6 +9,7 @@ on:
 permissions:
   actions: write
   contents: read
+  issues: write
 
 jobs:
   cleanup:
@@ -46,12 +47,6 @@ jobs:
 
           echo "Deleted obsolete completed runs: $deleted"
           echo "Preserved active/current/latest useful runs: $kept"
-          {
-            echo "### Actions cleanup"
-            echo
-            echo "Deleted obsolete completed runs: **$deleted**"
-            echo "Preserved active/current/latest useful runs: **$kept**"
-            echo "Explicitly preserved recon **32686475370** and product run **32692407760**."
-          } >> "$GITHUB_STEP_SUMMARY"
+          gh issue comment 1 --repo "$repo" --body "### Actions cleanup 2026-08-24\nDeleted **$deleted** obsolete completed run(s). Preserved **$kept** active/current/latest useful run(s), including recon **32686475370** and product run **32692407760**."
 
-# trigger
+# verified cleanup trigger

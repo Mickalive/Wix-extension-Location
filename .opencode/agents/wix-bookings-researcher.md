@@ -9,8 +9,14 @@ permission:
     "reports/recon/**": allow
   bash:
     "*": deny
+    "pwd": allow
+    "ls*": allow
+    "find *": allow
     "git status*": allow
     "git diff*": allow
+    "git branch*": allow
+    "git log*": allow
+    "git rev-parse*": allow
   task: deny
   webfetch: allow
   websearch: allow

@@ -28,14 +28,39 @@ The build director mounts all candidate and audit snapshots, integrates only acc
 
 ## Safety / quality gates
 
-- Main prompt hash is checked before every autonomous job.
+- `MAIN_PROMPT.md` is the immutable product constitution and its SHA-256 is checked by the autonomous workflows.
 - Candidate path scopes are enforced by workflow shell.
-- Candidate agents cannot alter orchestration or governance.
+- Candidate agents cannot alter `MAIN_PROMPT.md`, orchestration, agent definitions, retry/recovery infrastructure, or governance.
 - Missing audit means no integration for that lane.
 - Failed deterministic checks reject the integrated cycle and preserve the previous accepted commit.
 - Developer Preview Wix features remain disabled unless the technical contract explicitly reclassifies them based on current official docs.
 - Release and Marketplace submission are never automated without explicit human-owned Wix credentials and readiness.
 
+## Ox provider resilience
+
+Provider/network outages are infrastructure failures, not product failures.
+
+Every OpenCode/OX invocation uses the same trusted retry script on `main` and `lab/wix-rules`:
+- up to 6 attempts inside one job;
+- 300 seconds fixed between attempts after a classified transient provider/network failure;
+- immediate stop on a non-transient failure;
+- exhausted transient retries exit with an explicit `WIX_OPENCODE_FAILURE_KIND=transient` marker.
+
+Six attempts are only a per-job-pass limit. They are not a global abandonment limit.
+
+`Wix Autonomous Launch Bridge` runs a watchdog on a nominal five-minute schedule. The watchdog:
+- detects the current persistent phase (`recon` or `build`);
+- does nothing while the relevant autonomous workflow is already active;
+- inspects the latest failed run only for that current phase;
+- reads failed-job logs and restarts only when every failed job is classified as a transient OX/provider outage;
+- never automatically restarts non-transient, code, test, architecture, billing, or platform-contract failures;
+- re-runs only failed jobs in the same GitHub run, preserving successful jobs and already-persisted candidate/audit snapshots;
+- may repeat on later watchdog passes with no repository-defined global retry ceiling until OX recovers or a real non-transient failure occurs.
+
+The watchdog also understands the legacy retry marker from the initial Wix recon run, so a transient provider failure produced by the old 3-attempt policy can still be recovered and resumed under the new retry policy.
+
 ## Looping
 
 After a successful accepted cycle, the trusted workflow reads the director decision. `continue` dispatches the next build cycle. `stop` or `release_candidate` ends the loop and reports the exact status to issue #1.
+
+A transient OX outage is never by itself a valid reason for the autonomous product effort to stop permanently.

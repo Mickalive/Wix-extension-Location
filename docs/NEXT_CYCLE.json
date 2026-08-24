@@ -1,0 +1,43 @@
+{
+  "cycle": 1,
+  "objective": "Complete Wix reconnaissance before product construction.",
+  "lanes": {
+    "integration": {
+      "status": "blocked",
+      "task": "",
+      "why_needed": "Product construction is gated on the audited Wix technical contract.",
+      "source_evidence": ["docs/state.json", "docs/NEXT_CYCLE.md"],
+      "acceptance_criteria": [],
+      "blocker": "Reconnaissance phase is not yet complete.",
+      "completion_evidence": null
+    },
+    "rules": {
+      "status": "blocked",
+      "task": "",
+      "why_needed": "Product construction is gated on the audited Wix technical contract.",
+      "source_evidence": ["docs/state.json", "docs/NEXT_CYCLE.md"],
+      "acceptance_criteria": [],
+      "blocker": "Reconnaissance phase is not yet complete.",
+      "completion_evidence": null
+    },
+    "dashboard": {
+      "status": "blocked",
+      "task": "",
+      "why_needed": "Product construction is gated on the audited Wix technical contract.",
+      "source_evidence": ["docs/state.json", "docs/NEXT_CYCLE.md"],
+      "acceptance_criteria": [],
+      "blocker": "Reconnaissance phase is not yet complete.",
+      "completion_evidence": null
+    },
+    "billing": {
+      "status": "blocked",
+      "task": "",
+      "why_needed": "Product construction is gated on the audited Wix technical contract.",
+      "source_evidence": ["docs/state.json", "docs/NEXT_CYCLE.md"],
+      "acceptance_criteria": [],
+      "blocker": "Reconnaissance phase is not yet complete.",
+      "completion_evidence": null
+    }
+  },
+  "critical_external_blocker": null
+}

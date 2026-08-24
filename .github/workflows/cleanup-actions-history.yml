@@ -1,0 +1,47 @@
+name: One-shot Actions History Cleanup
+
+on:
+  push:
+    branches: [main]
+    paths: [".github/workflows/cleanup-actions-history.yml"]
+  workflow_dispatch:
+
+permissions:
+  actions: write
+  contents: write
+  issues: write
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+      - name: Delete obsolete completed Actions runs
+        env:
+          GH_TOKEN: ${{ github.token }}
+          KEEP_RECON_RUN: "32686475370"
+        shell: bash
+        run: |
+          set -euo pipefail
+          runs=$(gh run list --repo "$GITHUB_REPOSITORY" --limit 100 --json databaseId,name,status,createdAt)
+          latest_ci=$(jq -r '[.[] | select(.name == "CI" and .status == "completed")] | sort_by(.createdAt) | last | .databaseId // empty' <<<"$runs")
+          latest_build=$(jq -r '[.[] | select(.name == "Wix Autonomous Product Factory" and .status == "completed")] | sort_by(.createdAt) | last | .databaseId // empty' <<<"$runs")
+          latest_launch=$(jq -r '[.[] | select(.name == "Wix Autonomous Launch Bridge" and .status == "completed")] | sort_by(.createdAt) | last | .databaseId // empty' <<<"$runs")
+          deleted=0
+          while IFS=$'\t' read -r id name status; do
+            [[ -n "$id" ]] || continue
+            if [[ "$status" != completed || "$id" == "$GITHUB_RUN_ID" || "$id" == "$KEEP_RECON_RUN" || "$id" == "$latest_ci" || "$id" == "$latest_build" || "$id" == "$latest_launch" ]]; then continue; fi
+            gh api --method DELETE "repos/$GITHUB_REPOSITORY/actions/runs/$id" >/dev/null || true
+            deleted=$((deleted + 1))
+          done < <(jq -r '.[] | [.databaseId,.name,.status] | @tsv' <<<"$runs")
+          gh issue comment 1 --repo "$GITHUB_REPOSITORY" --body "### Final Actions cleanup\nDeleted **${deleted}** obsolete completed run(s). Preserved the active recon run, active work, and only the latest useful CI/build/launch snapshots."
+      - name: Self-delete
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "wix-maintenance"
+          git config user.email "wix-maintenance@users.noreply.github.com"
+          git rm .github/workflows/cleanup-actions-history.yml
+          git commit -m "chore: remove final one-shot Actions cleanup"
+          git push origin HEAD:main

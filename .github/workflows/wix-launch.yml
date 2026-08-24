@@ -6,8 +6,12 @@ on:
       - main
     paths:
       - ".wix/launch/*.json"
-  schedule:
-    - cron: "*/5 * * * *"
+  workflow_run:
+    workflows:
+      - "Wix Platform Recon"
+      - "Wix Autonomous Product Factory"
+    types:
+      - completed
   workflow_dispatch:
 
 permissions:
@@ -15,11 +19,9 @@ permissions:
   actions: write
   issues: write
 
-# Launch requests and watchdog ticks are independent. Watchdog ticks are disposable,
-# so a newer tick may cancel an older one instead of building up a queue.
 concurrency:
-  group: wix-autonomous-${{ github.event_name == 'push' && 'launch' || 'watchdog' }}
-  cancel-in-progress: true
+  group: wix-autonomous-${{ github.event_name == 'push' && 'launch' || 'recovery' }}
+  cancel-in-progress: false
 
 env:
   STATUS_ISSUE: "1"
@@ -37,7 +39,6 @@ jobs:
         with:
           fetch-depth: 2
           persist-credentials: false
-
       - name: Resolve request
         id: request
         shell: bash
@@ -47,8 +48,6 @@ jobs:
           test -n "$file"
           test -f "$file"
           jq -e 'type == "object"' "$file" >/dev/null
-          # Recon is effectively unbounded on the normal autonomous path. The very
-          # high safety ceiling exists only to keep malformed input finite.
           recon_cycles=$(jq -er '.recon_cycles // 1000000 | if type == "number" and floor == . and . >= 1 and . <= 1000000 then . else error("invalid recon_cycles") end' "$file")
           build_cycles=$(jq -er '.build_cycles // 0 | if type == "number" and floor == . and . >= 0 and . <= 10000 then . else error("invalid build_cycles") end' "$file")
           note=$(jq -er '.human_note // "" | if type == "string" and length <= 4000 then . else error("invalid human_note") end' "$file")
@@ -59,7 +58,6 @@ jobs:
             echo "$note"
             echo "WIX_NOTE"
           } >> "$GITHUB_OUTPUT"
-
       - name: Detect persistent phase
         id: phase
         env:
@@ -76,8 +74,7 @@ jobs:
           fi
           [[ "$phase" == recon || "$phase" == build ]]
           echo "phase=$phase" >> "$GITHUB_OUTPUT"
-
-      - name: Dispatch autonomous phase
+      - name: Dispatch only when no phase run is already active
         env:
           GH_TOKEN: ${{ github.token }}
           PHASE: ${{ steps.phase.outputs.phase }}
@@ -94,68 +91,68 @@ jobs:
             workflow=wix-build-loop.yml
             target="Wix Autonomous Product Factory"
           fi
-
-          active=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow "$workflow" --limit 30 --json status \
-            | jq '[.[] | select(.status != "completed")] | length')
+          active=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow "$workflow" --limit 30 --json status | jq '[.[] | select(.status != "completed")] | length')
           if (( active > 0 )); then
             gh issue comment "$STATUS_ISSUE" --repo "$GITHUB_REPOSITORY" --body "### Autonomous Wix launch already active
             Phase: **${PHASE}**
             Workflow: **${target}**
-            Duplicate launch request ignored; the persistent accepted state is unchanged."
+            Duplicate launch request ignored."
             exit 0
           fi
-
           if [[ "$PHASE" == recon ]]; then
-            gh workflow run "$workflow" --repo "$GITHUB_REPOSITORY" --ref main \
-              -f cycle_index=1 -f max_cycles="$RECON_CYCLES" -f human_note="$NOTE"
+            gh workflow run "$workflow" --repo "$GITHUB_REPOSITORY" --ref main -f cycle_index=1 -f max_cycles="$RECON_CYCLES" -f human_note="$NOTE"
           else
-            gh workflow run "$workflow" --repo "$GITHUB_REPOSITORY" --ref main \
-              -f cycle_index=1 -f max_cycles="$BUILD_CYCLES" -f human_note="$NOTE"
+            gh workflow run "$workflow" --repo "$GITHUB_REPOSITORY" --ref main -f cycle_index=1 -f max_cycles="$BUILD_CYCLES" -f human_note="$NOTE"
           fi
           gh issue comment "$STATUS_ISSUE" --repo "$GITHUB_REPOSITORY" --body "### Autonomous Wix process dispatched
           Phase detected: **${PHASE}**
-          Workflow: **${target}**
-          No product agent can bypass the audit/director gates."
+          Workflow: **${target}**"
 
-  watchdog:
-    name: Recover transient Ox outage
-    if: ${{ github.event.repository.visibility == 'private' && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') }}
+  recover:
+    name: Recover transient OX failure after five minutes
+    if: ${{ github.event.repository.visibility == 'private' && ((github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'failure') || github.event_name == 'workflow_dispatch') }}
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    timeout-minutes: 12
     steps:
-      - name: Checkout watchdog
+      - name: Checkout recovery logic
         uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
         with:
           fetch-depth: 1
           persist-credentials: false
-
-      - name: Detect current persistent phase
-        id: phase
+      - name: Wait five minutes after a failed autonomous run
+        if: ${{ github.event_name == 'workflow_run' }}
+        run: sleep 300
+      - name: Resolve workflow to recover
+        id: target
         env:
+          EVENT_NAME: ${{ github.event_name }}
+          FAILED_WORKFLOW: ${{ github.event.workflow_run.name }}
           GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
           set -euo pipefail
-          auth=$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)
-          phase=recon
-          if git -c "http.extraheader=AUTHORIZATION: basic $auth" ls-remote --exit-code --heads origin "refs/heads/$LANE_BRANCH" >/dev/null 2>&1; then
-            git -c "http.extraheader=AUTHORIZATION: basic $auth" fetch origin "$LANE_BRANCH:refs/remotes/origin/$LANE_BRANCH"
-            phase=$(git show "origin/$LANE_BRANCH:docs/state.json" | jq -er '.phase')
+          if [[ "$EVENT_NAME" == workflow_run ]]; then
+            case "$FAILED_WORKFLOW" in
+              "Wix Platform Recon") workflow=wix-recon.yml ;;
+              "Wix Autonomous Product Factory") workflow=wix-build-loop.yml ;;
+              *) echo "::error::Unexpected workflow_run source: $FAILED_WORKFLOW"; exit 1 ;;
+            esac
+          else
+            auth=$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)
+            phase=recon
+            if git -c "http.extraheader=AUTHORIZATION: basic $auth" ls-remote --exit-code --heads origin "refs/heads/$LANE_BRANCH" >/dev/null 2>&1; then
+              git -c "http.extraheader=AUTHORIZATION: basic $auth" fetch origin "$LANE_BRANCH:refs/remotes/origin/$LANE_BRANCH"
+              phase=$(git show "origin/$LANE_BRANCH:docs/state.json" | jq -er '.phase')
+            fi
+            if [[ "$phase" == recon ]]; then workflow=wix-recon.yml; else workflow=wix-build-loop.yml; fi
           fi
-          [[ "$phase" == recon || "$phase" == build ]]
-          echo "phase=$phase" >> "$GITHUB_OUTPUT"
-
-      - name: Re-run only transiently failed Ox jobs
+          echo "workflow=$workflow" >> "$GITHUB_OUTPUT"
+      - name: Re-run only transient OX failures
         env:
           GH_TOKEN: ${{ github.token }}
-          PHASE: ${{ steps.phase.outputs.phase }}
+          WIX_LOOP_WORKFLOW: ${{ steps.target.outputs.workflow }}
           WIX_TRACKING_ISSUE: "1"
         shell: bash
         run: |
           set -euo pipefail
-          if [[ "$PHASE" == recon ]]; then
-            export WIX_LOOP_WORKFLOW=wix-recon.yml
-          else
-            export WIX_LOOP_WORKFLOW=wix-build-loop.yml
-          fi
           bash .github/scripts/recover-transient-opencode.sh

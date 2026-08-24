@@ -17,9 +17,16 @@ Owns Wix App Market monetization and operations: pricing plans, instance/plan id
 Independently falsifies all reconnaissance findings against current official documentation. Must flag stale/deprecated docs, Developer Preview features, unsupported assumptions and unresolved contradictions.
 
 ### wix-recon-director
-Integrates only verified findings into the technical contract and build blueprint. Decides whether the repo may advance from `recon` to `build`.
+Integrates only verified findings into the technical contract and build blueprint. Decides whether the repo may advance from `recon` to `build`. When build is authorized, it must seed the first evidence-backed task for each productive product lane in `docs/NEXT_CYCLE.json`.
 
 ## Stage 2 — Product Factory
+
+### Autonomous task contract
+`docs/NEXT_CYCLE.json` is the machine-readable work queue for the next build cycle. Every builder must read its own lane entry before changing code.
+
+An `active` lane must execute exactly the assigned evidence-backed task and its acceptance criteria. Builders do not invent unrelated features, refactors or polish. If the latest persisted audit for that lane is `FIX_BEFORE_INTEGRATION` or `REJECT`, audit repair takes priority over the scheduled task and must be completed before new work.
+
+After each cycle, the Director must replace completed work with the next highest-value non-redundant task justified by accepted evidence. A lane may be marked `complete` only with completion evidence, or `blocked` only by a concrete external prerequisite. The global process must keep useful lanes moving autonomously until no evidence-backed work remains, at which point the Director must propose `release_candidate` rather than manufacture busywork.
 
 ### wix-integration-builder
 Owns Wix-specific adapters, extension registration, API access, persistence integration, schedule mutation safety and project/bootstrap structure. It must not implement generic business rules or pricing policy.
@@ -37,13 +44,13 @@ Owns pricing-plan recognition, count of managed active Bookings locations, entit
 Each builder lane has an independent adversarial audit. Auditors inspect the real candidate diff, run deterministic checks, verify scope boundaries and try edge cases rather than rubber-stamping. Every audit ends with exactly `VERDICT: ACCEPT`, `VERDICT: FIX_BEFORE_INTEGRATION`, or `VERDICT: REJECT`.
 
 ### Mandatory repair feedback loop
-Only `VERDICT: ACCEPT` permits integration. `FIX_BEFORE_INTEGRATION` and `REJECT` send the exact findings back to the same specialized builder in the next autonomous cycle. That builder must repair the findings before starting new feature work, add regression tests, and submit a fresh candidate to a new independent audit. A technical/OX audit crash is infrastructure failure and is handled by retry/watchdog rather than being misrouted to a code builder.
+Only `VERDICT: ACCEPT` permits integration. `FIX_BEFORE_INTEGRATION` and `REJECT` send the exact findings back to the same specialized builder in the next autonomous cycle. That builder must repair the findings before starting new feature work, add regression tests, and submit a fresh candidate to a new independent audit. A technical/OX audit crash is infrastructure failure and is handled by retry/recovery rather than being misrouted to a code builder.
 
 ### wix-build-director
-The only integration authority. It reads candidates and audits, ports only `ACCEPT` work into `lab/wix-rules`, preserves failed-audit findings as the next repair brief, resolves cross-lane conflicts for accepted work, runs integration checks, updates next-cycle directives, and decides continue/stop/release_candidate.
+The only integration authority and continuous team planner. It reads candidates and audits, ports only `ACCEPT` work into `lab/wix-rules`, preserves failed-audit findings as repair work, resolves accepted cross-lane conflicts, runs integration checks, writes the next evidence-backed tasks to `docs/NEXT_CYCLE.json`, and decides continue/stop/release_candidate.
 
 ### release-readiness-auditor
-Runs after integrated state exists. It checks build/test health, technical-contract compliance, Wix production-readiness assumptions, permissions, destructive-write safety, billing coherence and remaining manual prerequisites. It may block release candidacy.
+Runs only when the Director proposes a release candidate. It checks build/test health, technical-contract compliance, Wix production-readiness assumptions, permissions, destructive-write safety, billing coherence and remaining manual prerequisites. It may reject release candidacy and feed exact blockers back into the next autonomous cycle.
 
 ## Immutable boundaries
 

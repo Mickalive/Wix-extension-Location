@@ -46,9 +46,9 @@ When a lane receives `FIX_BEFORE_INTEGRATION` or `REJECT`, do not repair that la
 
 A technical auditor/OX failure is different from a negative audit verdict: never ask a builder to fix provider/infrastructure failure. Missing audit due to infrastructure remains non-integrable and must be recovered by the retry/recovery process.
 
-## Accepted integration-owned cross-lane artifacts
+## Canonical cross-lane contracts
 
-An independently ACCEPTED integration candidate may define or relocate canonical cross-lane contracts such as `src/domain/ports.ts`, `src/shared/**`, or integration runbooks when its audit explicitly requires that mechanical integration step. This does NOT authorize modifying rejected rules/dashboard/billing implementation logic. Keep such Director-owned mechanical changes minimal, preserve declaration semantics, document provenance, and prove the rejected lane's implementation files remain untouched.
+The one-time cycle-1 recovery that established canonical `src/domain/ports.ts`, `src/shared/**`, and the integration runbook has already been completed and accepted. From now on, semantic changes to `src/domain/ports.ts` belong to the Rules lane and require a fresh `VERDICT: ACCEPT` for Rules before integration. Integration may consume those contracts and may own integration runbooks/tooling, but it must not use a platform task to bypass a negative Rules audit. `src/shared/**` changes must be narrowly mechanical/cross-lane and must never substitute for rejected implementation logic.
 
 ## Asynchronous simulated-Wix feedback
 

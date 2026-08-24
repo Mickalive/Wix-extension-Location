@@ -3,7 +3,6 @@ name: CI
 on:
   push:
     branches:
-      - main
       - lab/wix-rules
   pull_request:
 

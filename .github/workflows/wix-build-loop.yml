@@ -131,7 +131,7 @@ jobs:
           OPENCODE_RETRY_LABEL: build-${{ matrix.role }}
         shell: bash
         run: |
-          bash .github/scripts/run-opencode-with-retry.sh opencode run --model "$OX_MODEL" --agent "$AGENT" "Run Wix product lane $ROLE, cycle $CYCLE_INDEX, from the persistent accepted state. Read MAIN_PROMPT.md, the audited Wix Technical Contract, Build Blueprint, $DIRECTIVE and NEXT_CYCLE. Complete one coherent tested slice in your lane only. Do not commit/push or alter orchestration. Human note: ${HUMAN_NOTE:-}"
+          bash .github/scripts/run-opencode-with-retry.sh opencode run --model "$OX_MODEL" --agent "$AGENT" "Run Wix product lane $ROLE, cycle $CYCLE_INDEX, from the persistent accepted state. Read MAIN_PROMPT.md, the audited Wix Technical Contract, Build Blueprint, $DIRECTIVE and NEXT_CYCLE. Complete one coherent tested slice in your lane only. Before new feature work, repair any latest failed audit for this lane. Do not commit/push or alter orchestration. Human note: ${HUMAN_NOTE:-}"
       - name: Enforce lane boundaries and persist candidate
         env:
           GH_TOKEN: ${{ github.token }}
@@ -164,7 +164,7 @@ jobs:
   audit:
     name: Auditor — ${{ matrix.label }}
     needs: [prepare, candidate]
-    if: ${{ always() && needs.prepare.result == 'success' && needs.candidate.result != 'cancelled' }}
+    if: ${{ always() && needs.prepare.result == 'success' && needs.candidate.result == 'success' }}
     strategy:
       fail-fast: false
       matrix:
@@ -201,13 +201,9 @@ jobs:
           target="/tmp/wix_${ROLE}_candidate"
           branch="cycle/wix-build/${GITHUB_RUN_ID}/${ROLE}"
           auth=$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)
-          if git -c "http.extraheader=AUTHORIZATION: basic $auth" fetch origin "$branch:refs/remotes/origin/$branch"; then
-            git worktree add --detach "$target" "origin/$branch"
-            echo "found=true" >> "$GITHUB_OUTPUT"
-          else
-            git worktree add --detach "$target" HEAD
-            echo "found=false" >> "$GITHUB_OUTPUT"
-          fi
+          git -c "http.extraheader=AUTHORIZATION: basic $auth" fetch origin "$branch:refs/remotes/origin/$branch"
+          git worktree add --detach "$target" "origin/$branch"
+          echo "found=true" >> "$GITHUB_OUTPUT"
       - name: Set up Node
         uses: actions/setup-node@ae0d4ed08881f17d1511386f5be3e62356acd4a6
         with:
@@ -243,6 +239,7 @@ jobs:
           upper=${ROLE^^}
           report="reports/audits/CYCLE_${GITHUB_RUN_ID}_${upper}.md"
           test -f "$report"
+          tail -n 1 "$report" | grep -Eq '^VERDICT: (ACCEPT|FIX_BEFORE_INTEGRATION|REJECT)$'
           unexpected=0
           while IFS= read -r -d '' path; do
             [[ "$path" == "$report" ]] || { echo "::error::Unexpected audit path: $path"; unexpected=1; }
@@ -259,7 +256,7 @@ jobs:
   director:
     name: Integration director and deterministic gate
     needs: [prepare, candidate, audit]
-    if: ${{ always() && needs.prepare.result == 'success' && needs.audit.result != 'cancelled' }}
+    if: ${{ always() && needs.prepare.result == 'success' && needs.candidate.result == 'success' && needs.audit.result == 'success' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 180
     outputs:
@@ -285,8 +282,8 @@ jobs:
           for role in integration rules dashboard billing; do
             for kind in "$role" "audit-$role"; do
               branch="cycle/wix-build/${GITHUB_RUN_ID}/${kind}"
-              git -c "http.extraheader=AUTHORIZATION: basic $auth" fetch origin "$branch:refs/remotes/origin/$branch" || true
-              if git show-ref --verify --quiet "refs/remotes/origin/$branch"; then git worktree add --detach "/tmp/wix_${kind}" "origin/$branch"; fi
+              git -c "http.extraheader=AUTHORIZATION: basic $auth" fetch origin "$branch:refs/remotes/origin/$branch"
+              git worktree add --detach "/tmp/wix_${kind}" "origin/$branch"
             done
           done
       - name: Set up Node
@@ -304,19 +301,46 @@ jobs:
           OPENCODE_RETRY_LABEL: build-director
         shell: bash
         run: |
-          bash .github/scripts/run-opencode-with-retry.sh opencode run --model "$OX_MODEL" --agent wix-build-director "Direct Wix product cycle $CYCLE_INDEX. Candidate worktrees when present: /tmp/wix_integration, /tmp/wix_rules, /tmp/wix_dashboard, /tmp/wix_billing. Independent audits: /tmp/wix_audit-integration, /tmp/wix_audit-rules, /tmp/wix_audit-dashboard, /tmp/wix_audit-billing. Inspect real diffs and audits. Port only accepted work into the current lab/wix-rules checkout, resolve cross-lane interfaces, run checks, update directives/state, and write reports/director/CYCLE_${GITHUB_RUN_ID}.md and .json."
-      - name: Persist audit evidence and validate protected paths
+          bash .github/scripts/run-opencode-with-retry.sh opencode run --model "$OX_MODEL" --agent wix-build-director "Direct Wix product cycle $CYCLE_INDEX. Candidate worktrees: /tmp/wix_integration, /tmp/wix_rules, /tmp/wix_dashboard, /tmp/wix_billing. Independent audits: /tmp/wix_audit-integration, /tmp/wix_audit-rules, /tmp/wix_audit-dashboard, /tmp/wix_audit-billing. Inspect real diffs and audits. Only VERDICT: ACCEPT lanes may be integrated. Negative verdicts must be routed back to the same builder via repair_lanes and NEXT_CYCLE. Run checks, update directives/state, and write reports/director/CYCLE_${GITHUB_RUN_ID}.md and .json."
+      - name: Persist audit evidence and enforce verdicts
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p reports/audits reports/director
+          test -f "reports/director/CYCLE_${GITHUB_RUN_ID}.json"
+          jq -er '.decision | select(. == "continue" or . == "stop" or . == "release_candidate")' "reports/director/CYCLE_${GITHUB_RUN_ID}.json" >/dev/null
+          start="${{ steps.start.outputs.sha }}"
           for role in integration rules dashboard billing; do
             upper=${role^^}
             src="/tmp/wix_audit-${role}/reports/audits/CYCLE_${GITHUB_RUN_ID}_${upper}.md"
-            [[ -f "$src" ]] && cp "$src" "reports/audits/CYCLE_${GITHUB_RUN_ID}_${upper}.md"
+            test -f "$src"
+            verdict=$(tail -n 1 "$src" | sed -n 's/^VERDICT: //p')
+            [[ "$verdict" == ACCEPT || "$verdict" == FIX_BEFORE_INTEGRATION || "$verdict" == REJECT ]]
+            cp "$src" "reports/audits/CYCLE_${GITHUB_RUN_ID}_${upper}.md"
+
+            if [[ "$verdict" != ACCEPT ]]; then
+              jq -e --arg role "$role" '(.repair_lanes // []) | index($role) != null' "reports/director/CYCLE_${GITHUB_RUN_ID}.json" >/dev/null
+              case "$role" in
+                integration)
+                  touched=$(git diff --name-only "$start" -- package.json package-lock.json tsconfig.json astro.config.mjs extensions.ts wix.config.example.json .gitignore 'vite.config.*' 'vitest.config.*' 'eslint.config.*' src/env.d.ts src/platform src/extensions/backend tests/platform || true)
+                  ;;
+                rules)
+                  touched=$(git diff --name-only "$start" -- src/domain tests/domain || true)
+                  ;;
+                dashboard)
+                  touched=$(git diff --name-only "$start" -- src/extensions/dashboard src/ui tests/ui || true)
+                  ;;
+                billing)
+                  touched=$(git diff --name-only "$start" -- src/billing tests/billing || true)
+                  ;;
+              esac
+              if [[ -n "$touched" ]]; then
+                echo "::error::Director modified $role-owned files despite audit verdict $verdict:"
+                echo "$touched"
+                exit 1
+              fi
+            fi
           done
-          test -f "reports/director/CYCLE_${GITHUB_RUN_ID}.json"
-          jq -er '.decision | select(. == "continue" or . == "stop" or . == "release_candidate")' "reports/director/CYCLE_${GITHUB_RUN_ID}.json" >/dev/null
           printf '%s  MAIN_PROMPT.md\n' "$MAIN_PROMPT_SHA256" | sha256sum --check --strict
           protected=$(git diff --name-only | grep -E '^(\.github/|\.opencode/|MAIN_PROMPT\.md$|AGENTS\.md$|opencode\.json$|docs/WIX_TECHNICAL_CONTRACT\.md$|docs/BUILD_BLUEPRINT\.md$|directives/DIRECTOR\.md$)' || true)
           test -z "$protected"
@@ -473,7 +497,7 @@ jobs:
             note="Previous director attempt failed the deterministic integration gate. Read the persisted director report and repair the proven failures."
           elif [[ "$DIRECTOR_DECISION" == continue ]]; then
             should_continue=1
-            note="Continue from the accepted state and latest release-readiness findings."
+            note="Continue from the accepted state. Mandatory failed-audit repair lanes must fix their persisted audit findings before new feature work."
           elif [[ "$DIRECTOR_DECISION" == release_candidate && "$RELEASE_VERDICT" == NOT_READY ]]; then
             should_continue=1
             note="Director proposed release candidate, but independent release audit rejected readiness. Fix the release blockers."

@@ -22,9 +22,13 @@ Four product lanes run from the same accepted commit:
 
 Each lane gets its own candidate branch. No candidate may commit or push itself; trusted workflow shell persists snapshots.
 
-Each lane has a separate auditor working from the untouched accepted state plus a mounted candidate worktree. Audit reports are persisted separately.
+Each lane has a separate auditor working from the untouched accepted state plus a mounted candidate worktree. Audit reports are persisted separately and must end with exactly `VERDICT: ACCEPT`, `VERDICT: FIX_BEFORE_INTEGRATION`, or `VERDICT: REJECT`.
 
-The build director mounts all candidate and audit snapshots, integrates only accepted work into the current checkout of `lab/wix-rules`, runs deterministic checks, and updates `docs/NEXT_CYCLE.md`.
+Only `ACCEPT` permits integration. A negative audit verdict is a feedback event, not a dead end: the Director preserves the findings in accepted evidence and assigns them back to the same specialized builder for the next autonomous cycle. That builder fixes the blocking findings first, adds regression tests, and the resulting repair receives a fresh independent audit. `REJECT` means rebuild from accepted state rather than blindly patching the rejected candidate.
+
+An audit job that fails because OX/network/provider infrastructure is unavailable is not code feedback. Retry/watchdog handles that failure and the affected lane remains non-integrable until a real audit exists.
+
+The build director mounts all candidate and audit snapshots, integrates only `ACCEPT` work into the current checkout of `lab/wix-rules`, runs deterministic checks, and updates `docs/NEXT_CYCLE.md`.
 
 ## Safety / quality gates
 
@@ -32,6 +36,7 @@ The build director mounts all candidate and audit snapshots, integrates only acc
 - Candidate path scopes are enforced by workflow shell.
 - Candidate agents cannot alter `MAIN_PROMPT.md`, orchestration, agent definitions, retry/recovery infrastructure, or governance.
 - Missing audit means no integration for that lane.
+- `FIX_BEFORE_INTEGRATION` or `REJECT` means no integration and mandatory same-lane repair before new feature work.
 - Failed deterministic checks reject the integrated cycle and preserve the previous accepted commit.
 - Developer Preview Wix features remain disabled unless the technical contract explicitly reclassifies them based on current official docs.
 - Release and Marketplace submission are never automated without explicit human-owned Wix credentials and readiness.
@@ -61,6 +66,6 @@ The watchdog also understands the legacy retry marker from the initial Wix recon
 
 ## Looping
 
-After a successful accepted cycle, the trusted workflow reads the director decision. `continue` dispatches the next build cycle. `stop` or `release_candidate` ends the loop and reports the exact status to issue #1.
+After a successful accepted cycle, the trusted workflow reads the director decision. `continue` dispatches the next build cycle, including mandatory same-lane audit repairs when present. `stop` or `release_candidate` ends the loop and reports the exact status to issue #1.
 
 A transient OX outage is never by itself a valid reason for the autonomous product effort to stop permanently.

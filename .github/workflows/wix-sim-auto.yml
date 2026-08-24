@@ -1,0 +1,88 @@
+name: Wix Simulated QA Auto Lane
+
+on:
+  workflow_run:
+    workflows: ["Wix Autonomous Product Factory"]
+    types: [completed]
+
+permissions:
+  contents: write
+
+env:
+  SOURCE_RUN_ID: ${{ github.event.workflow_run.id }}
+
+jobs:
+  probe:
+    name: Check product snapshots exist
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    outputs:
+      ready: ${{ steps.check.outputs.ready }}
+    steps:
+      - name: Verify all four candidates and audits exist
+        id: check
+        shell: bash
+        run: |
+          set -euo pipefail
+          ready=true
+          for role in integration rules dashboard billing; do
+            for kind in "$role" "audit-$role"; do
+              ref="refs/heads/cycle/wix-build/${SOURCE_RUN_ID}/${kind}"
+              if ! git ls-remote --exit-code "https://github.com/${GITHUB_REPOSITORY}.git" "$ref" >/dev/null 2>&1; then
+                echo "Missing $ref; this Product Factory run did not reach a complete lane snapshot set."
+                ready=false
+              fi
+            done
+          done
+          echo "ready=$ready" >> "$GITHUB_OUTPUT"
+
+  simulate:
+    name: Run asynchronous adversarial Wix simulation
+    needs: probe
+    if: ${{ needs.probe.outputs.ready == 'true' }}
+    uses: ./.github/workflows/wix-sim.yml
+    with:
+      source_run_id: ${{ github.event.workflow_run.id }}
+      cycle_index: ${{ github.event.workflow_run.run_number }}
+
+  publish_feedback:
+    name: Publish latest QA feedback pointer
+    needs: simulate
+    if: ${{ needs.simulate.result == 'success' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Checkout accepted state for git tooling
+        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+        with:
+          fetch-depth: 0
+          ref: lab/wix-rules
+          persist-credentials: false
+
+      - name: Publish immutable QA snapshot and moving latest pointer
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_RUN_ID: ${{ github.event.workflow_run.id }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          auth=$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)
+          sim_ref="cycle/wix-build/${SOURCE_RUN_ID}/simulation"
+          git -c "http.extraheader=AUTHORIZATION: basic $auth" fetch origin "$sim_ref:refs/remotes/origin/$sim_ref"
+          sim_sha=$(git rev-parse "origin/$sim_ref")
+          git -c "http.extraheader=AUTHORIZATION: basic $auth" push --force origin "$sim_sha:refs/heads/qa/wix-sim/${SOURCE_RUN_ID}"
+
+          git switch --detach "$sim_sha"
+          report="reports/simulation/CYCLE_${SOURCE_RUN_ID}.json"
+          markdown="reports/simulation/CYCLE_${SOURCE_RUN_ID}.md"
+          test -f "$report" && test -f "$markdown"
+          verdict=$(jq -er '.verdict | select(. == "PASS" or . == "FAIL" or . == "INCONCLUSIVE")' "$report")
+          mkdir -p reports/simulation
+          jq -n --arg source_run_id "$SOURCE_RUN_ID" --arg verdict "$verdict" --arg report "$report" --arg markdown "$markdown" --arg source_sha "$sim_sha" '{source_run_id:$source_run_id, verdict:$verdict, report:$report, markdown:$markdown, source_sha:$source_sha}' > reports/simulation/LATEST.json
+
+          git config user.name "wix-simulation-feedback"
+          git config user.email "wix-simulation-feedback@users.noreply.github.com"
+          git switch -C qa/wix-sim-latest
+          git add reports/simulation/LATEST.json
+          git commit --allow-empty -m "Wix QA: latest feedback from Product Factory ${SOURCE_RUN_ID}"
+          git -c "http.extraheader=AUTHORIZATION: basic $auth" push --force origin HEAD:refs/heads/qa/wix-sim-latest

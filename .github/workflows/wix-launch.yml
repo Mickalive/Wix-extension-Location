@@ -17,7 +17,6 @@ on:
 permissions:
   contents: read
   actions: write
-  issues: write
 
 concurrency:
   group: wix-autonomous-${{ github.event_name == 'push' && 'launch' || 'recovery' }}
@@ -93,7 +92,7 @@ jobs:
           fi
           active=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow "$workflow" --limit 30 --json status | jq '[.[] | select(.status != "completed")] | length')
           if (( active > 0 )); then
-            gh issue comment "$STATUS_ISSUE" --repo "$GITHUB_REPOSITORY" --body "### Autonomous Wix launch already active
+            printf '%s\n' "### Autonomous Wix launch already active
             Phase: **${PHASE}**
             Workflow: **${target}**
             Duplicate launch request ignored."
@@ -104,7 +103,7 @@ jobs:
           else
             gh workflow run "$workflow" --repo "$GITHUB_REPOSITORY" --ref main -f cycle_index=1 -f max_cycles="$BUILD_CYCLES" -f human_note="$NOTE"
           fi
-          gh issue comment "$STATUS_ISSUE" --repo "$GITHUB_REPOSITORY" --body "### Autonomous Wix process dispatched
+          printf '%s\n' "### Autonomous Wix process dispatched
           Phase detected: **${PHASE}**
           Workflow: **${target}**"
 

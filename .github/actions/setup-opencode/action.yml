@@ -4,6 +4,13 @@ description: Install the reviewed OpenCode version used by the keyless Ox workfl
 runs:
   using: composite
   steps:
+    - name: Verify immutable agent job descriptions
+      shell: bash
+      run: |
+        set -euo pipefail
+        test -f .opencode/job-descriptions/MANIFEST.sha256
+        sha256sum --check --strict .opencode/job-descriptions/MANIFEST.sha256
+
     - name: Download and verify the pinned installer
       shell: bash
       env:

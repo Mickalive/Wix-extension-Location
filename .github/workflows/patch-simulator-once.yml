@@ -127,3 +127,5 @@ jobs:
           git add .github/workflows/wix-build-loop.yml
           git commit -m "qa: wire simulated Wix gate before Director"
           git push origin lab/wix-rules
+
+# trigger

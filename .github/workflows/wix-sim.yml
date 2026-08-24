@@ -1,20 +1,9 @@
 name: Wix Simulated Acceptance Environment
 
 on:
-  workflow_call:
-    inputs:
-      source_run_id:
-        description: "Product Factory run whose candidates are under simulation"
-        required: true
-        type: string
-      cycle_index:
-        description: "Product cycle index"
-        required: true
-        type: string
-    outputs:
-      verdict:
-        description: "PASS, FAIL, or INCONCLUSIVE"
-        value: ${{ jobs.simulate.outputs.verdict }}
+  workflow_run:
+    workflows: ["Wix Autonomous Product Factory"]
+    types: [completed]
   workflow_dispatch:
     inputs:
       source_run_id:
@@ -22,65 +11,81 @@ on:
         required: true
         type: string
       cycle_index:
-        description: "Product cycle index"
-        required: true
+        description: "Optional product cycle label"
+        required: false
         type: string
-        default: "1"
+        default: "manual"
 
 permissions:
   contents: write
 
+concurrency:
+  group: wix-simulation-lane
+  cancel-in-progress: false
+
 env:
   OX_MODEL: opencode/x-preview-f-free
-  LANE_BRANCH: lab/wix-rules
   MAIN_PROMPT_SHA256: 9cdd0500552998adedbae7e2cc7605ca443187393b6299f0bf4ffdcba18c9101
 
 jobs:
   simulate:
-    name: Adversarial simulated Wix runtime
+    name: Autonomous adversarial simulated Wix runtime
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 240
-    outputs:
-      verdict: ${{ steps.validate.outputs.verdict }}
     steps:
-      - name: Checkout persistent accepted state
+      - name: Checkout governance baseline
         uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
         with:
           fetch-depth: 0
           ref: lab/wix-rules
           persist-credentials: false
 
-      - name: Verify constitution and build phase
-        id: base
+      - name: Resolve source Product Factory run
+        id: source
         shell: bash
+        env:
+          MANUAL_SOURCE_RUN_ID: ${{ inputs.source_run_id }}
+          MANUAL_CYCLE: ${{ inputs.cycle_index }}
+          EVENT_SOURCE_RUN_ID: ${{ github.event.workflow_run.id }}
         run: |
           set -euo pipefail
-          [[ "${{ inputs.source_run_id }}" =~ ^[0-9]+$ ]]
-          [[ "${{ inputs.cycle_index }}" =~ ^[1-9][0-9]*$ ]]
+          if [[ "$GITHUB_EVENT_NAME" == workflow_run ]]; then
+            source="$EVENT_SOURCE_RUN_ID"
+            cycle="auto"
+          else
+            source="$MANUAL_SOURCE_RUN_ID"
+            cycle="${MANUAL_CYCLE:-manual}"
+          fi
+          [[ "$source" =~ ^[0-9]+$ ]]
           printf '%s  MAIN_PROMPT.md\n' "$MAIN_PROMPT_SHA256" | sha256sum --check --strict
-          test "$(jq -r '.phase' docs/state.json)" = build
-          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          echo "source_run_id=$source" >> "$GITHUB_OUTPUT"
+          echo "cycle_label=$cycle" >> "$GITHUB_OUTPUT"
 
       - name: Mount all candidate and audit snapshots
+        id: snapshots
         env:
           GH_TOKEN: ${{ github.token }}
-          SOURCE_RUN_ID: ${{ inputs.source_run_id }}
+          SOURCE_RUN_ID: ${{ steps.source.outputs.source_run_id }}
         shell: bash
         run: |
           set -euo pipefail
           auth=$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)
+          base=""
           for role in integration rules dashboard billing; do
             for kind in "$role" "audit-$role"; do
               branch="cycle/wix-build/${SOURCE_RUN_ID}/${kind}"
               git -c "http.extraheader=AUTHORIZATION: basic $auth" fetch origin "$branch:refs/remotes/origin/$branch"
               git worktree add --detach "/tmp/wix_${kind}" "origin/$branch"
             done
+            candidate_parent=$(git -C "/tmp/wix_${role}" rev-parse HEAD^)
+            if [[ -z "$base" ]]; then base="$candidate_parent"; else test "$base" = "$candidate_parent"; fi
           done
+          echo "base_sha=$base" >> "$GITHUB_OUTPUT"
 
       - name: Assemble combined candidate without trusting audit verdicts
         env:
-          BASE_SHA: ${{ steps.base.outputs.sha }}
-          SOURCE_RUN_ID: ${{ inputs.source_run_id }}
+          BASE_SHA: ${{ steps.snapshots.outputs.base_sha }}
         shell: bash
         run: |
           set -euo pipefail
@@ -143,18 +148,18 @@ jobs:
 
       - name: Simulate Wix Bookings behavior adversarially
         env:
-          SOURCE_RUN_ID: ${{ inputs.source_run_id }}
-          CYCLE_INDEX: ${{ inputs.cycle_index }}
+          SOURCE_RUN_ID: ${{ steps.source.outputs.source_run_id }}
+          CYCLE_LABEL: ${{ steps.source.outputs.cycle_label }}
           OPENCODE_RETRY_LABEL: wix-simulation
         shell: bash
         run: |
           set -euo pipefail
-          bash .github/scripts/run-opencode-with-retry.sh opencode run --model "$OX_MODEL" --agent wix-simulation-auditor "Simulate Wix acceptance for Product Factory run $SOURCE_RUN_ID, cycle $CYCLE_INDEX. Combined product worktree: /tmp/wix_sim_under_test. Raw deterministic evidence: /tmp/wix_sim_evidence. Candidate worktrees: /tmp/wix_integration, /tmp/wix_rules, /tmp/wix_dashboard, /tmp/wix_billing. Independent audits: /tmp/wix_audit-integration, /tmp/wix_audit-rules, /tmp/wix_audit-dashboard, /tmp/wix_audit-billing. Execute the mandatory scenario families that are locally meaningful, build extra temporary fixtures under /tmp as needed, and write reports/simulation/CYCLE_${SOURCE_RUN_ID}.md plus .json. Do not modify product code."
+          bash .github/scripts/run-opencode-with-retry.sh opencode run --model "$OX_MODEL" --agent wix-simulation-auditor "Autonomous simulated-Wix QA for Product Factory run $SOURCE_RUN_ID, cycle label $CYCLE_LABEL. This lane is independent and must not block builders/director. Combined product worktree: /tmp/wix_sim_under_test. Raw deterministic evidence: /tmp/wix_sim_evidence. Candidate worktrees: /tmp/wix_integration, /tmp/wix_rules, /tmp/wix_dashboard, /tmp/wix_billing. Independent audits: /tmp/wix_audit-integration, /tmp/wix_audit-rules, /tmp/wix_audit-dashboard, /tmp/wix_audit-billing. Execute the mandatory locally meaningful scenarios, build temporary fixtures under /tmp as needed, and write reports/simulation/CYCLE_${SOURCE_RUN_ID}.md plus .json. Do not modify product code."
 
       - name: Validate simulator evidence contract
         id: validate
         env:
-          SOURCE_RUN_ID: ${{ inputs.source_run_id }}
+          SOURCE_RUN_ID: ${{ steps.source.outputs.source_run_id }}
         shell: bash
         run: |
           set -euo pipefail
@@ -171,18 +176,22 @@ jobs:
           if [[ "$verdict" == FAIL ]]; then (( blockers > 0 )); fi
           echo "verdict=$verdict" >> "$GITHUB_OUTPUT"
 
-      - name: Persist immutable simulation snapshot for the Director
+      - name: Persist QA snapshot and latest pointer without touching accepted product branch
         env:
           GH_TOKEN: ${{ github.token }}
-          SOURCE_RUN_ID: ${{ inputs.source_run_id }}
-          BASE_SHA: ${{ steps.base.outputs.sha }}
-          BRANCH: cycle/wix-build/${{ inputs.source_run_id }}/simulation
+          SOURCE_RUN_ID: ${{ steps.source.outputs.source_run_id }}
+          BASE_SHA: ${{ steps.snapshots.outputs.base_sha }}
+          VERDICT: ${{ steps.validate.outputs.verdict }}
+          BRANCH: qa/wix-sim/${{ steps.source.outputs.source_run_id }}
         shell: bash
         run: |
           set -euo pipefail
+          mkdir -p reports/simulation
+          jq -n --arg source "$SOURCE_RUN_ID" --arg verdict "$VERDICT" --arg report "reports/simulation/CYCLE_${SOURCE_RUN_ID}.json" \
+            '{source_run_id:$source,verdict:$verdict,report:$report}' > reports/simulation/LATEST.json
           unexpected=0
           while IFS= read -r -d '' path; do
-            [[ "$path" == "reports/simulation/CYCLE_${SOURCE_RUN_ID}.md" || "$path" == "reports/simulation/CYCLE_${SOURCE_RUN_ID}.json" ]] || { echo "::error::Unexpected simulator path: $path"; unexpected=1; }
+            [[ "$path" == "reports/simulation/CYCLE_${SOURCE_RUN_ID}.md" || "$path" == "reports/simulation/CYCLE_${SOURCE_RUN_ID}.json" || "$path" == "reports/simulation/LATEST.json" ]] || { echo "::error::Unexpected simulator path: $path"; unexpected=1; }
           done < <({ git diff --name-only -z; git diff --cached --name-only -z; git ls-files --others --exclude-standard -z; })
           test "$unexpected" -eq 0
           printf '%s  MAIN_PROMPT.md\n' "$MAIN_PROMPT_SHA256" | sha256sum --check --strict
@@ -190,6 +199,7 @@ jobs:
           git config user.email "wix-simulation-auditor@users.noreply.github.com"
           git switch -C "$BRANCH" "$BASE_SHA"
           git add -- reports/simulation
-          git commit --allow-empty -m "Wix build ${SOURCE_RUN_ID}: simulated acceptance evidence"
+          git commit --allow-empty -m "Wix simulation ${SOURCE_RUN_ID}: ${VERDICT}"
           auth=$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)
           git -c "http.extraheader=AUTHORIZATION: basic $auth" push --force origin "HEAD:refs/heads/$BRANCH"
+          git -c "http.extraheader=AUTHORIZATION: basic $auth" push --force origin "HEAD:refs/heads/qa/wix-sim-latest"

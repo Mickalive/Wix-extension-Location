@@ -50,7 +50,7 @@ jobs:
           fetch-depth: 0
           ref: lab/wix-rules
           persist-credentials: false
-      - name: Validate build gate
+      - name: Validate build gate and autonomous work queue
         id: input
         env:
           CYCLE_INDEX: ${{ inputs.cycle_index }}
@@ -65,6 +65,19 @@ jobs:
           printf '%s  MAIN_PROMPT.md\n' "$MAIN_PROMPT_SHA256" | sha256sum --check --strict
           test "$(jq -r '.phase' docs/state.json)" = build
           grep -q 'STABLE_PRODUCTION' docs/WIX_TECHNICAL_CONTRACT.md
+          test -f docs/NEXT_CYCLE.json
+          jq -e '.lanes | type == "object"' docs/NEXT_CYCLE.json >/dev/null
+          for role in integration rules dashboard billing; do
+            jq -e --arg r "$role" '.lanes[$r] != null and (.lanes[$r].status == "active" or .lanes[$r].status == "blocked" or .lanes[$r].status == "complete")' docs/NEXT_CYCLE.json >/dev/null
+            status=$(jq -r --arg r "$role" '.lanes[$r].status' docs/NEXT_CYCLE.json)
+            if [[ "$status" == active ]]; then
+              jq -e --arg r "$role" '(.lanes[$r].task|type=="string" and length>0) and (.lanes[$r].why_needed|type=="string" and length>0) and (.lanes[$r].source_evidence|type=="array" and length>0) and (.lanes[$r].acceptance_criteria|type=="array" and length>0)' docs/NEXT_CYCLE.json >/dev/null
+            elif [[ "$status" == blocked ]]; then
+              jq -e --arg r "$role" '.lanes[$r].blocker|type=="string" and length>0' docs/NEXT_CYCLE.json >/dev/null
+            else
+              jq -e --arg r "$role" '.lanes[$r].completion_evidence|type=="string" and length>0' docs/NEXT_CYCLE.json >/dev/null
+            fi
+          done
           echo "cycle_index=$CYCLE_INDEX" >> "$GITHUB_OUTPUT"
           echo "max_cycles=$MAX_CYCLES" >> "$GITHUB_OUTPUT"
       - name: Report cycle start
@@ -74,9 +87,10 @@ jobs:
           CYCLE_INDEX: ${{ steps.input.outputs.cycle_index }}
         shell: bash
         run: |
+          active=$(jq '[.lanes[] | select(.status == "active")] | length' docs/NEXT_CYCLE.json)
           gh issue comment "$STATUS_ISSUE" --repo "$GITHUB_REPOSITORY" --body "### Wix product cycle ${CYCLE_INDEX} started
           Run: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}
-          Four independent lanes are running. Each lane contains its own builder followed by an independent adversarial auditor."
+          Evidence-backed active lanes: **${active}**. Blocked/complete lanes will not consume OX. Every active builder is independently audited before integration."
 
   lane:
     name: Lane — ${{ matrix.label }}
@@ -110,23 +124,33 @@ jobs:
           fetch-depth: 0
           ref: lab/wix-rules
           persist-credentials: false
-      - name: Record base and verify constitution
-        id: base
+      - name: Record base and resolve exact assigned task
+        id: plan
+        env:
+          ROLE: ${{ matrix.role }}
         shell: bash
         run: |
           set -euo pipefail
           printf '%s  MAIN_PROMPT.md\n' "$MAIN_PROMPT_SHA256" | sha256sum --check --strict
-          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          echo "base_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          status=$(jq -er --arg r "$ROLE" '.lanes[$r].status | select(. == "active" or . == "blocked" or . == "complete")' docs/NEXT_CYCLE.json)
+          echo "status=$status" >> "$GITHUB_OUTPUT"
+          if [[ "$status" == active ]]; then
+            jq -e --arg r "$ROLE" '(.lanes[$r].task|length>0) and (.lanes[$r].why_needed|length>0) and (.lanes[$r].source_evidence|length>0) and (.lanes[$r].acceptance_criteria|length>0)' docs/NEXT_CYCLE.json >/dev/null
+          fi
       - name: Set up Node
+        if: ${{ steps.plan.outputs.status == 'active' }}
         uses: actions/setup-node@ae0d4ed08881f17d1511386f5be3e62356acd4a6
         with:
           node-version: 22.13.0
       - name: Install accepted dependencies
-        if: ${{ hashFiles('package-lock.json') != '' }}
+        if: ${{ steps.plan.outputs.status == 'active' && hashFiles('package-lock.json') != '' }}
         run: npm ci --ignore-scripts --no-audit --no-fund
       - name: Set up reviewed OpenCode
+        if: ${{ steps.plan.outputs.status == 'active' }}
         uses: ./.github/actions/setup-opencode
-      - name: Run bounded builder
+      - name: Run only the Director-assigned useful task
+        if: ${{ steps.plan.outputs.status == 'active' }}
         env:
           ROLE: ${{ matrix.role }}
           AGENT: ${{ matrix.agent }}
@@ -136,41 +160,53 @@ jobs:
           OPENCODE_RETRY_LABEL: build-${{ matrix.role }}
         shell: bash
         run: |
-          bash .github/scripts/run-opencode-with-retry.sh opencode run --model "$OX_MODEL" --agent "$AGENT" "Run Wix product lane $ROLE, cycle $CYCLE_INDEX, from the persistent accepted state. Read MAIN_PROMPT.md, docs/WIX_TECHNICAL_CONTRACT.md, docs/BUILD_BLUEPRINT.md, $DIRECTIVE, docs/NEXT_CYCLE.md, and the latest persisted audit for this lane when one exists. If the previous audit verdict was FIX_BEFORE_INTEGRATION or REJECT, address every blocker before new feature work. Complete one coherent tested slice in your lane only. Do not commit/push or alter orchestration. Human note: ${HUMAN_NOTE:-}"
-      - name: Enforce lane boundaries and persist candidate
+          set -euo pipefail
+          task=$(jq -r --arg r "$ROLE" '.lanes[$r].task' docs/NEXT_CYCLE.json)
+          why=$(jq -r --arg r "$ROLE" '.lanes[$r].why_needed' docs/NEXT_CYCLE.json)
+          evidence=$(jq -c --arg r "$ROLE" '.lanes[$r].source_evidence' docs/NEXT_CYCLE.json)
+          criteria=$(jq -c --arg r "$ROLE" '.lanes[$r].acceptance_criteria' docs/NEXT_CYCLE.json)
+          bash .github/scripts/run-opencode-with-retry.sh opencode run --model "$OX_MODEL" --agent "$AGENT" "Run Wix product lane $ROLE, cycle $CYCLE_INDEX, from the persistent accepted state. Read MAIN_PROMPT.md, AGENTS.md, docs/WIX_TECHNICAL_CONTRACT.md, docs/BUILD_BLUEPRINT.md, $DIRECTIVE, docs/NEXT_CYCLE.json and the latest persisted audit for this lane. Your exact Director-assigned task is: $task. Why it is needed now: $why. Source evidence: $evidence. Acceptance criteria: $criteria. If a newer persisted audit verdict is FIX_BEFORE_INTEGRATION or REJECT, repair every blocker first and do not start unrelated work. Otherwise execute ONLY the assigned task; do not invent extra features, refactors or polish. Complete a coherent tested slice in your lane only. Do not commit/push or alter orchestration. Human note: ${HUMAN_NOTE:-}"
+      - name: Enforce boundaries and persist candidate or verified no-op
         id: candidate
         env:
           GH_TOKEN: ${{ github.token }}
           ROLE: ${{ matrix.role }}
+          STATUS: ${{ steps.plan.outputs.status }}
+          BASE_SHA: ${{ steps.plan.outputs.base_sha }}
           BRANCH: cycle/wix-build/${{ github.run_id }}/${{ matrix.role }}
         shell: bash
         run: |
           set -euo pipefail
-          unexpected=0
-          while IFS= read -r -d '' path; do
-            ok=0
-            case "$ROLE:$path" in
-              integration:package.json|integration:package-lock.json|integration:tsconfig.json|integration:astro.config.mjs|integration:extensions.ts|integration:wix.config.example.json|integration:.gitignore|integration:vite.config.*|integration:vitest.config.*|integration:eslint.config.*|integration:src/env.d.ts|integration:src/platform/*|integration:src/platform/**|integration:src/extensions/backend/*|integration:src/extensions/backend/**|integration:tests/platform/*|integration:tests/platform/**) ok=1 ;;
-              rules:src/domain/*|rules:src/domain/**|rules:tests/domain/*|rules:tests/domain/**) ok=1 ;;
-              dashboard:src/extensions/dashboard/*|dashboard:src/extensions/dashboard/**|dashboard:src/ui/*|dashboard:src/ui/**|dashboard:tests/ui/*|dashboard:tests/ui/**) ok=1 ;;
-              billing:src/billing/*|billing:src/billing/**|billing:tests/billing/*|billing:tests/billing/**) ok=1 ;;
-            esac
-            (( ok == 1 )) || { echo "::error::Unexpected $ROLE path: $path"; unexpected=1; }
-          done < <({ git diff --name-only -z; git diff --cached --name-only -z; git ls-files --others --exclude-standard -z; })
-          test "$unexpected" -eq 0
+          if [[ "$STATUS" == active ]]; then
+            unexpected=0
+            while IFS= read -r -d '' path; do
+              ok=0
+              case "$ROLE:$path" in
+                integration:package.json|integration:package-lock.json|integration:tsconfig.json|integration:astro.config.mjs|integration:extensions.ts|integration:wix.config.example.json|integration:.gitignore|integration:vite.config.*|integration:vitest.config.*|integration:eslint.config.*|integration:src/env.d.ts|integration:src/platform/*|integration:src/platform/**|integration:src/extensions/backend/*|integration:src/extensions/backend/**|integration:tests/platform/*|integration:tests/platform/**) ok=1 ;;
+                rules:src/domain/*|rules:src/domain/**|rules:tests/domain/*|rules:tests/domain/**) ok=1 ;;
+                dashboard:src/extensions/dashboard/*|dashboard:src/extensions/dashboard/**|dashboard:src/ui/*|dashboard:src/ui/**|dashboard:tests/ui/*|dashboard:tests/ui/**) ok=1 ;;
+                billing:src/billing/*|billing:src/billing/**|billing:tests/billing/*|billing:tests/billing/**) ok=1 ;;
+              esac
+              (( ok == 1 )) || { echo "::error::Unexpected $ROLE path: $path"; unexpected=1; }
+            done < <({ git diff --name-only -z; git diff --cached --name-only -z; git ls-files --others --exclude-standard -z; })
+            test "$unexpected" -eq 0
+          else
+            git diff --quiet
+            test -z "$(git ls-files --others --exclude-standard)"
+          fi
           printf '%s  MAIN_PROMPT.md\n' "$MAIN_PROMPT_SHA256" | sha256sum --check --strict
           git config user.name "wix-$ROLE-builder"
           git config user.email "wix-$ROLE-builder@users.noreply.github.com"
-          git switch -C "$BRANCH"
-          git add -A
-          git commit --allow-empty -m "Wix build $GITHUB_RUN_ID: $ROLE candidate"
+          git switch -C "$BRANCH" "$BASE_SHA"
+          if [[ "$STATUS" == active ]]; then git add -A; fi
+          git commit --allow-empty -m "Wix build $GITHUB_RUN_ID: $ROLE candidate ($STATUS)"
           echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
           auth=$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)
           git -c "http.extraheader=AUTHORIZATION: basic $auth" push --force origin "HEAD:refs/heads/$BRANCH"
       - name: Mount immutable candidate and restore untouched audit base
         env:
           ROLE: ${{ matrix.role }}
-          BASE_SHA: ${{ steps.base.outputs.sha }}
+          BASE_SHA: ${{ steps.plan.outputs.base_sha }}
           CANDIDATE_SHA: ${{ steps.candidate.outputs.sha }}
         shell: bash
         run: |
@@ -181,15 +217,15 @@ jobs:
           git worktree add --detach "/tmp/wix_${ROLE}_candidate" "$CANDIDATE_SHA"
           printf '%s  MAIN_PROMPT.md\n' "$MAIN_PROMPT_SHA256" | sha256sum --check --strict
       - name: Install candidate dependencies
+        if: ${{ steps.plan.outputs.status == 'active' }}
         env:
           ROLE: ${{ matrix.role }}
         shell: bash
         run: |
           target="/tmp/wix_${ROLE}_candidate"
-          if [[ -f "$target/package-lock.json" ]]; then
-            npm --prefix "$target" ci --ignore-scripts --no-audit --no-fund
-          fi
+          if [[ -f "$target/package-lock.json" ]]; then npm --prefix "$target" ci --ignore-scripts --no-audit --no-fund; fi
       - name: Run independent adversarial auditor
+        if: ${{ steps.plan.outputs.status == 'active' }}
         env:
           ROLE: ${{ matrix.role }}
           DIRECTIVE: ${{ matrix.directive }}
@@ -198,12 +234,34 @@ jobs:
         shell: bash
         run: |
           upper=${ROLE^^}
-          bash .github/scripts/run-opencode-with-retry.sh opencode run --model "$OX_MODEL" --agent lane-auditor "Audit Wix $ROLE candidate cycle $CYCLE_INDEX. Candidate worktree=/tmp/wix_${ROLE}_candidate. Current checkout is the untouched accepted state from before the builder. Read $DIRECTIVE and all binding contracts. Inspect the real diff, run relevant checks, and write only reports/audits/CYCLE_${GITHUB_RUN_ID}_${upper}.md. End with exactly VERDICT: ACCEPT, VERDICT: FIX_BEFORE_INTEGRATION, or VERDICT: REJECT."
-      - name: Validate and persist independent audit
+          bash .github/scripts/run-opencode-with-retry.sh opencode run --model "$OX_MODEL" --agent lane-auditor "Audit Wix $ROLE candidate cycle $CYCLE_INDEX. Candidate worktree=/tmp/wix_${ROLE}_candidate. Current checkout is the untouched accepted state from before the builder. Read $DIRECTIVE, docs/NEXT_CYCLE.json and all binding contracts. Verify the candidate actually satisfies the Director-assigned task and acceptance criteria without unrelated scope. Inspect the real diff, run relevant checks, and write only reports/audits/CYCLE_${GITHUB_RUN_ID}_${upper}.md. End with exactly VERDICT: ACCEPT, VERDICT: FIX_BEFORE_INTEGRATION, or VERDICT: REJECT."
+      - name: Create deterministic no-op audit for blocked or complete lane
+        if: ${{ steps.plan.outputs.status != 'active' }}
+        env:
+          ROLE: ${{ matrix.role }}
+          STATUS: ${{ steps.plan.outputs.status }}
+          BASE_SHA: ${{ steps.plan.outputs.base_sha }}
+          CANDIDATE_SHA: ${{ steps.candidate.outputs.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -z "$(git diff --name-only "$BASE_SHA" "$CANDIDATE_SHA")"
+          upper=${ROLE^^}
+          mkdir -p reports/audits
+          cat > "reports/audits/CYCLE_${GITHUB_RUN_ID}_${upper}.md" <<EOF
+          # $ROLE lane — deterministic no-op verification
+
+          Accepted work queue status: **$STATUS**.
+          No OX builder or OX auditor was invoked for this lane.
+          Git verified that the candidate introduces no file changes relative to the accepted base.
+
+          VERDICT: ACCEPT
+          EOF
+      - name: Validate and persist independent audit evidence
         env:
           GH_TOKEN: ${{ github.token }}
           ROLE: ${{ matrix.role }}
-          BASE_SHA: ${{ steps.base.outputs.sha }}
+          BASE_SHA: ${{ steps.plan.outputs.base_sha }}
           BRANCH: cycle/wix-build/${{ github.run_id }}/audit-${{ matrix.role }}
         shell: bash
         run: |
@@ -227,7 +285,7 @@ jobs:
           git -c "http.extraheader=AUTHORIZATION: basic $auth" push --force origin "HEAD:refs/heads/$BRANCH"
 
   director:
-    name: Integration director and deterministic gate
+    name: Integration director, planner and deterministic gate
     needs: [prepare, lane]
     if: ${{ always() && needs.prepare.result == 'success' && needs.lane.result == 'success' }}
     runs-on: ubuntu-24.04
@@ -268,14 +326,14 @@ jobs:
         run: npm ci --ignore-scripts --no-audit --no-fund
       - name: Set up reviewed OpenCode
         uses: ./.github/actions/setup-opencode
-      - name: Integrate audited work
+      - name: Integrate audited work and plan next useful tasks
         env:
           CYCLE_INDEX: ${{ needs.prepare.outputs.cycle_index }}
           OPENCODE_RETRY_LABEL: build-director
         shell: bash
         run: |
-          bash .github/scripts/run-opencode-with-retry.sh opencode run --model "$OX_MODEL" --agent wix-build-director "Direct Wix product cycle $CYCLE_INDEX. Candidate worktrees: /tmp/wix_integration, /tmp/wix_rules, /tmp/wix_dashboard, /tmp/wix_billing. Independent audit worktrees: /tmp/wix_audit-integration, /tmp/wix_audit-rules, /tmp/wix_audit-dashboard, /tmp/wix_audit-billing. Only VERDICT: ACCEPT lanes may be integrated. Any negative verdict must be listed in repair_lanes and routed back to that same builder in NEXT_CYCLE. Run checks, update allowed directives/state, and write reports/director/CYCLE_${GITHUB_RUN_ID}.md and .json."
-      - name: Enforce audit verdicts and protected paths
+          bash .github/scripts/run-opencode-with-retry.sh opencode run --model "$OX_MODEL" --agent wix-build-director "Direct Wix product cycle $CYCLE_INDEX. Candidate worktrees: /tmp/wix_integration, /tmp/wix_rules, /tmp/wix_dashboard, /tmp/wix_billing. Independent audit worktrees: /tmp/wix_audit-integration, /tmp/wix_audit-rules, /tmp/wix_audit-dashboard, /tmp/wix_audit-billing. Only VERDICT: ACCEPT lanes may be integrated. Any negative verdict must be listed in repair_lanes and routed back to that same builder. After integration, replace completed tasks with the next highest-value evidence-backed non-redundant tasks in docs/NEXT_CYCLE.json. Do not manufacture busywork; if no useful work remains, choose release_candidate. Run checks and write reports/director/CYCLE_${GITHUB_RUN_ID}.md and .json."
+      - name: Enforce audit verdicts, next-work evidence and protected paths
         shell: bash
         run: |
           set -euo pipefail
@@ -283,8 +341,9 @@ jobs:
           report_json="reports/director/CYCLE_${GITHUB_RUN_ID}.json"
           test -f "$report_json"
           decision=$(jq -er '.decision | select(. == "continue" or . == "stop" or . == "release_candidate")' "$report_json")
-          negative=0
+          test -f docs/NEXT_CYCLE.json
           start="${{ steps.start.outputs.sha }}"
+          negative=0
           for role in integration rules dashboard billing; do
             upper=${role^^}
             src="/tmp/wix_audit-${role}/reports/audits/CYCLE_${GITHUB_RUN_ID}_${upper}.md"
@@ -295,6 +354,8 @@ jobs:
             if [[ "$verdict" != ACCEPT ]]; then
               negative=1
               jq -e --arg role "$role" '(.repair_lanes // []) | index($role) != null' "$report_json" >/dev/null
+              jq -e --arg role "$role" '.lanes[$role].status == "active"' docs/NEXT_CYCLE.json >/dev/null
+              jq -e --arg evidence "reports/audits/CYCLE_${GITHUB_RUN_ID}_${upper}.md" --arg role "$role" '.lanes[$role].source_evidence | index($evidence) != null' docs/NEXT_CYCLE.json >/dev/null
               case "$role" in
                 integration) touched=$(git diff --name-only "$start" -- package.json package-lock.json tsconfig.json astro.config.mjs extensions.ts wix.config.example.json .gitignore 'vite.config.*' 'vitest.config.*' 'eslint.config.*' src/env.d.ts src/platform src/extensions/backend tests/platform || true) ;;
                 rules) touched=$(git diff --name-only "$start" -- src/domain tests/domain || true) ;;
@@ -308,9 +369,22 @@ jobs:
               fi
             fi
           done
-          if (( negative == 1 )); then
-            test "$decision" = continue
-          fi
+          if (( negative == 1 )); then test "$decision" = continue; fi
+          for role in integration rules dashboard billing; do
+            status=$(jq -er --arg r "$role" '.lanes[$r].status | select(. == "active" or . == "blocked" or . == "complete")' docs/NEXT_CYCLE.json)
+            if [[ "$status" == active ]]; then
+              jq -e --arg r "$role" '(.lanes[$r].task|type=="string" and length>0) and (.lanes[$r].why_needed|type=="string" and length>0) and (.lanes[$r].source_evidence|type=="array" and length>0) and (.lanes[$r].acceptance_criteria|type=="array" and length>0)' docs/NEXT_CYCLE.json >/dev/null
+            elif [[ "$status" == blocked ]]; then
+              jq -e --arg r "$role" '.lanes[$r].blocker|type=="string" and length>0' docs/NEXT_CYCLE.json >/dev/null
+            else
+              jq -e --arg r "$role" '.lanes[$r].completion_evidence|type=="string" and length>0' docs/NEXT_CYCLE.json >/dev/null
+            fi
+          done
+          active=$(jq '[.lanes[] | select(.status == "active")] | length' docs/NEXT_CYCLE.json)
+          blocked=$(jq '[.lanes[] | select(.status == "blocked")] | length' docs/NEXT_CYCLE.json)
+          complete=$(jq '[.lanes[] | select(.status == "complete")] | length' docs/NEXT_CYCLE.json)
+          if [[ "$decision" == continue ]]; then (( active > 0 )); fi
+          if [[ "$decision" == release_candidate ]]; then (( active == 0 && blocked == 0 && complete == 4 )); fi
           printf '%s  MAIN_PROMPT.md\n' "$MAIN_PROMPT_SHA256" | sha256sum --check --strict
           protected=$(git diff --name-only | grep -E '^(\.github/|\.opencode/|MAIN_PROMPT\.md$|AGENTS\.md$|opencode\.json$|docs/WIX_TECHNICAL_CONTRACT\.md$|docs/BUILD_BLUEPRINT\.md$|directives/DIRECTOR\.md$)' || true)
           test -z "$protected"
@@ -362,6 +436,7 @@ jobs:
             cp "reports/director/CYCLE_${GITHUB_RUN_ID}.md" /tmp/recovery/ 2>/dev/null || true
             cp "reports/director/CYCLE_${GITHUB_RUN_ID}.json" /tmp/recovery/ 2>/dev/null || true
             cp docs/NEXT_CYCLE.md /tmp/recovery/NEXT_CYCLE.md 2>/dev/null || true
+            cp docs/NEXT_CYCLE.json /tmp/recovery/NEXT_CYCLE.json 2>/dev/null || true
             cp reports/audits/CYCLE_${GITHUB_RUN_ID}_*.md /tmp/recovery/ 2>/dev/null || true
             git reset --hard "$START_SHA"
             git clean -fd
@@ -370,10 +445,11 @@ jobs:
             cp /tmp/recovery/CYCLE_${GITHUB_RUN_ID}.json reports/director/ 2>/dev/null || true
             cp /tmp/recovery/CYCLE_${GITHUB_RUN_ID}_*.md reports/audits/ 2>/dev/null || true
             cp /tmp/recovery/NEXT_CYCLE.md docs/NEXT_CYCLE.md 2>/dev/null || true
+            cp /tmp/recovery/NEXT_CYCLE.json docs/NEXT_CYCLE.json 2>/dev/null || true
             jq --argjson c "$CYCLE_INDEX" --arg r "$GITHUB_RUN_ID" '.cycle=$c | .release_candidate=false | .last_accepted_run=$r' docs/state.json > /tmp/state.json
             mv /tmp/state.json docs/state.json
             git switch -C "$LANE_BRANCH"
-            git add -- docs/NEXT_CYCLE.md docs/state.json reports/director reports/audits
+            git add -- docs/NEXT_CYCLE.md docs/NEXT_CYCLE.json docs/state.json reports/director reports/audits
             git commit --allow-empty -m "Wix build $GITHUB_RUN_ID: rejected by deterministic gate"
             git -c "http.extraheader=AUTHORIZATION: basic $auth" push origin "HEAD:refs/heads/$LANE_BRANCH"
             echo "decision=continue" >> "$GITHUB_OUTPUT"
@@ -421,7 +497,7 @@ jobs:
           OPENCODE_RETRY_LABEL: release-audit
         shell: bash
         run: |
-          bash .github/scripts/run-opencode-with-retry.sh opencode run --model "$OX_MODEL" --agent release-readiness-auditor "Audit the full accepted Wix plugin after build cycle ${{ needs.prepare.outputs.cycle_index }}. Run the strongest available checks and write only reports/release/READINESS_${GITHUB_RUN_ID}.md. End with exactly VERDICT: READY, VERDICT: NOT_READY, or VERDICT: BLOCKED_EXTERNAL."
+          bash .github/scripts/run-opencode-with-retry.sh opencode run --model "$OX_MODEL" --agent release-readiness-auditor "Audit the full accepted Wix plugin after build cycle ${{ needs.prepare.outputs.cycle_index }}. Run the strongest available checks and write only reports/release/READINESS_${GITHUB_RUN_ID}.md. Identify each blocker precisely enough that the Director can map it to a lane in the next cycle. End with exactly VERDICT: READY, VERDICT: NOT_READY, or VERDICT: BLOCKED_EXTERNAL."
       - name: Persist release audit
         id: persist
         env:
@@ -467,17 +543,16 @@ jobs:
             note="Previous director attempt failed deterministic tests. Repair only the proven failures from persisted reports before new work."
           elif [[ "$DIRECTOR_DECISION" == continue ]]; then
             should_continue=1
-            note="Continue from the accepted state. Mandatory failed-audit repair lanes must clear their persisted blockers before new feature work."
+            note="Execute only the evidence-backed lane tasks in docs/NEXT_CYCLE.json. Mandatory failed-audit repairs take priority."
           elif [[ "$DIRECTOR_DECISION" == release_candidate && "$RELEASE_VERDICT" == NOT_READY ]]; then
             should_continue=1
-            note="Independent release audit rejected readiness. Fix every release blocker before proposing release again."
+            note="Independent release audit rejected readiness. The next director must convert the persisted release blockers into evidence-backed lane tasks before further feature work."
           fi
-
           if (( should_continue == 1 )); then
             if (( MAX_CYCLES == 0 || next <= MAX_CYCLES )); then
               gh workflow run wix-build-loop.yml --repo "$GITHUB_REPOSITORY" --ref main -f cycle_index="$next" -f max_cycles="$MAX_CYCLES" -f human_note="$note"
             else
-              gh issue comment "$STATUS_ISSUE" --repo "$GITHUB_REPOSITORY" --body "Autonomous build reached its configured cycle cap. Accepted state is preserved on lab/wix-rules."
+              gh issue comment "$STATUS_ISSUE" --repo "$GITHUB_REPOSITORY" --body "Autonomous build reached its explicitly configured cycle cap. Accepted state is preserved on lab/wix-rules."
             fi
           elif [[ "$DIRECTOR_DECISION" == release_candidate && "$RELEASE_VERDICT" == READY ]]; then
             gh issue comment "$STATUS_ISSUE" --repo "$GITHUB_REPOSITORY" --body "## Release candidate READY

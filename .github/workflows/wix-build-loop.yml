@@ -1,0 +1,495 @@
+name: Wix Autonomous Product Factory
+
+on:
+  workflow_dispatch:
+    inputs:
+      human_note:
+        description: "Optional note subordinate to MAIN_PROMPT"
+        required: false
+        type: string
+        default: ""
+      cycle_index:
+        description: "Build cycle index"
+        required: false
+        type: number
+        default: 1
+      max_cycles:
+        description: "Maximum cycles; 0 = continue until director/release gate stops"
+        required: false
+        type: number
+        default: 0
+
+permissions:
+  contents: write
+  actions: write
+  issues: write
+
+concurrency:
+  group: wix-autonomous-product-factory
+  cancel-in-progress: false
+
+env:
+  OX_MODEL: opencode/x-preview-f-free
+  LANE_BRANCH: lab/wix-rules
+  MAIN_PROMPT_SHA256: 9cdd0500552998adedbae7e2cc7605ca443187393b6299f0bf4ffdcba18c9101
+  STATUS_ISSUE: "1"
+  CI: "true"
+
+jobs:
+  prepare:
+    name: Prepare accepted product state
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    outputs:
+      cycle_index: ${{ steps.input.outputs.cycle_index }}
+      max_cycles: ${{ steps.input.outputs.max_cycles }}
+    steps:
+      - name: Checkout accepted lane
+        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+        with:
+          fetch-depth: 0
+          ref: lab/wix-rules
+          persist-credentials: false
+      - name: Validate build gate
+        id: input
+        env:
+          CYCLE_INDEX: ${{ inputs.cycle_index }}
+          MAX_CYCLES: ${{ inputs.max_cycles }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "${{ github.event.repository.visibility }}" = private
+          [[ "$CYCLE_INDEX" =~ ^[1-9][0-9]*$ ]]
+          [[ "$MAX_CYCLES" =~ ^[0-9]+$ ]]
+          (( MAX_CYCLES == 0 || CYCLE_INDEX <= MAX_CYCLES ))
+          printf '%s  MAIN_PROMPT.md\n' "$MAIN_PROMPT_SHA256" | sha256sum --check --strict
+          test "$(jq -r '.phase' docs/state.json)" = build
+          grep -q 'STABLE_PRODUCTION' docs/WIX_TECHNICAL_CONTRACT.md
+          echo "cycle_index=$CYCLE_INDEX" >> "$GITHUB_OUTPUT"
+          echo "max_cycles=$MAX_CYCLES" >> "$GITHUB_OUTPUT"
+      - name: Report cycle start
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CYCLE_INDEX: ${{ steps.input.outputs.cycle_index }}
+        shell: bash
+        run: |
+          gh issue comment "$STATUS_ISSUE" --repo "$GITHUB_REPOSITORY" --body "### Wix product cycle ${CYCLE_INDEX} started
+          Run: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}
+          Four isolated builders will be independently audited before the director can integrate anything."
+
+  candidate:
+    name: Builder — ${{ matrix.label }}
+    needs: prepare
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - role: integration
+            label: Wix Integration
+            agent: wix-integration-builder
+            directive: directives/INTEGRATION.md
+          - role: rules
+            label: Rules Engine
+            agent: rules-engine-builder
+            directive: directives/RULES.md
+          - role: dashboard
+            label: Dashboard UX
+            agent: dashboard-builder
+            directive: directives/DASHBOARD.md
+          - role: billing
+            label: Billing & Entitlements
+            agent: billing-builder
+            directive: directives/BILLING.md
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    steps:
+      - name: Checkout accepted lane
+        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+        with:
+          fetch-depth: 0
+          ref: lab/wix-rules
+          persist-credentials: false
+      - name: Verify constitution
+        run: printf '%s  MAIN_PROMPT.md\n' "$MAIN_PROMPT_SHA256" | sha256sum --check --strict
+      - name: Set up Node
+        uses: actions/setup-node@ae0d4ed08881f17d1511386f5be3e62356acd4a6
+        with:
+          node-version: 22.13.0
+      - name: Install existing project dependencies
+        if: ${{ hashFiles('package-lock.json') != '' }}
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Set up reviewed OpenCode
+        uses: ./.github/actions/setup-opencode
+      - name: Run bounded builder
+        env:
+          ROLE: ${{ matrix.role }}
+          AGENT: ${{ matrix.agent }}
+          DIRECTIVE: ${{ matrix.directive }}
+          CYCLE_INDEX: ${{ needs.prepare.outputs.cycle_index }}
+          HUMAN_NOTE: ${{ inputs.human_note }}
+          OPENCODE_RETRY_LABEL: build-${{ matrix.role }}
+        shell: bash
+        run: |
+          bash .github/scripts/run-opencode-with-retry.sh opencode run --model "$OX_MODEL" --agent "$AGENT" "Run Wix product lane $ROLE, cycle $CYCLE_INDEX, from the persistent accepted state. Read MAIN_PROMPT.md, the audited Wix Technical Contract, Build Blueprint, $DIRECTIVE and NEXT_CYCLE. Complete one coherent tested slice in your lane only. Do not commit/push or alter orchestration. Human note: ${HUMAN_NOTE:-}"
+      - name: Enforce lane boundaries and persist candidate
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ROLE: ${{ matrix.role }}
+          BRANCH: cycle/wix-build/${{ github.run_id }}/${{ matrix.role }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          unexpected=0
+          while IFS= read -r -d '' path; do
+            ok=0
+            case "$ROLE:$path" in
+              integration:package.json|integration:package-lock.json|integration:tsconfig.json|integration:astro.config.mjs|integration:extensions.ts|integration:wix.config.example.json|integration:.gitignore|integration:vite.config.*|integration:vitest.config.*|integration:eslint.config.*|integration:src/env.d.ts|integration:src/platform/*|integration:src/platform/**|integration:src/extensions/backend/*|integration:src/extensions/backend/**|integration:tests/platform/*|integration:tests/platform/**) ok=1 ;;
+              rules:src/domain/*|rules:src/domain/**|rules:tests/domain/*|rules:tests/domain/**) ok=1 ;;
+              dashboard:src/extensions/dashboard/*|dashboard:src/extensions/dashboard/**|dashboard:src/ui/*|dashboard:src/ui/**|dashboard:tests/ui/*|dashboard:tests/ui/**) ok=1 ;;
+              billing:src/billing/*|billing:src/billing/**|billing:tests/billing/*|billing:tests/billing/**) ok=1 ;;
+            esac
+            (( ok == 1 )) || { echo "::error::Unexpected $ROLE path: $path"; unexpected=1; }
+          done < <({ git diff --name-only -z; git diff --cached --name-only -z; git ls-files --others --exclude-standard -z; })
+          test "$unexpected" -eq 0
+          printf '%s  MAIN_PROMPT.md\n' "$MAIN_PROMPT_SHA256" | sha256sum --check --strict
+          git config user.name "wix-$ROLE-builder"
+          git config user.email "wix-$ROLE-builder@users.noreply.github.com"
+          git switch -C "$BRANCH"
+          git add -A
+          git commit --allow-empty -m "Wix build $GITHUB_RUN_ID: $ROLE candidate"
+          auth=$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)
+          git -c "http.extraheader=AUTHORIZATION: basic $auth" push --force origin "HEAD:refs/heads/$BRANCH"
+
+  audit:
+    name: Auditor — ${{ matrix.label }}
+    needs: [prepare, candidate]
+    if: ${{ always() && needs.prepare.result == 'success' && needs.candidate.result != 'cancelled' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - role: integration
+            label: Wix Integration
+            directive: directives/INTEGRATION.md
+          - role: rules
+            label: Rules Engine
+            directive: directives/RULES.md
+          - role: dashboard
+            label: Dashboard UX
+            directive: directives/DASHBOARD.md
+          - role: billing
+            label: Billing & Entitlements
+            directive: directives/BILLING.md
+    runs-on: ubuntu-24.04
+    timeout-minutes: 150
+    steps:
+      - name: Checkout untouched accepted lane
+        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+        with:
+          fetch-depth: 0
+          ref: lab/wix-rules
+          persist-credentials: false
+      - name: Mount candidate
+        id: mount
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ROLE: ${{ matrix.role }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          target="/tmp/wix_${ROLE}_candidate"
+          branch="cycle/wix-build/${GITHUB_RUN_ID}/${ROLE}"
+          auth=$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)
+          if git -c "http.extraheader=AUTHORIZATION: basic $auth" fetch origin "$branch:refs/remotes/origin/$branch"; then
+            git worktree add --detach "$target" "origin/$branch"
+            echo "found=true" >> "$GITHUB_OUTPUT"
+          else
+            git worktree add --detach "$target" HEAD
+            echo "found=false" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Set up Node
+        uses: actions/setup-node@ae0d4ed08881f17d1511386f5be3e62356acd4a6
+        with:
+          node-version: 22.13.0
+      - name: Install candidate dependencies when present
+        env:
+          ROLE: ${{ matrix.role }}
+        shell: bash
+        run: |
+          target="/tmp/wix_${ROLE}_candidate"
+          if [[ -f "$target/package-lock.json" ]]; then npm --prefix "$target" ci --ignore-scripts --no-audit --no-fund; fi
+      - name: Set up reviewed OpenCode
+        uses: ./.github/actions/setup-opencode
+      - name: Run adversarial audit
+        env:
+          ROLE: ${{ matrix.role }}
+          DIRECTIVE: ${{ matrix.directive }}
+          CYCLE_INDEX: ${{ needs.prepare.outputs.cycle_index }}
+          FOUND: ${{ steps.mount.outputs.found }}
+          OPENCODE_RETRY_LABEL: audit-${{ matrix.role }}
+        shell: bash
+        run: |
+          upper=${ROLE^^}
+          bash .github/scripts/run-opencode-with-retry.sh opencode run --model "$OX_MODEL" --agent lane-auditor "Audit Wix $ROLE candidate cycle $CYCLE_INDEX. Candidate worktree=/tmp/wix_${ROLE}_candidate, found=$FOUND. Current checkout is untouched accepted state. Read $DIRECTIVE and all binding contracts. Inspect real diff, execute relevant checks, and write only reports/audits/CYCLE_${GITHUB_RUN_ID}_${upper}.md."
+      - name: Persist independent audit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ROLE: ${{ matrix.role }}
+          BRANCH: cycle/wix-build/${{ github.run_id }}/audit-${{ matrix.role }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          upper=${ROLE^^}
+          report="reports/audits/CYCLE_${GITHUB_RUN_ID}_${upper}.md"
+          test -f "$report"
+          unexpected=0
+          while IFS= read -r -d '' path; do
+            [[ "$path" == "$report" ]] || { echo "::error::Unexpected audit path: $path"; unexpected=1; }
+          done < <({ git diff --name-only -z; git diff --cached --name-only -z; git ls-files --others --exclude-standard -z; })
+          test "$unexpected" -eq 0
+          git config user.name "wix-$ROLE-auditor"
+          git config user.email "wix-$ROLE-auditor@users.noreply.github.com"
+          git switch -C "$BRANCH"
+          git add -- "$report"
+          git commit --allow-empty -m "Wix build $GITHUB_RUN_ID: $ROLE audit"
+          auth=$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)
+          git -c "http.extraheader=AUTHORIZATION: basic $auth" push --force origin "HEAD:refs/heads/$BRANCH"
+
+  director:
+    name: Integration director and deterministic gate
+    needs: [prepare, candidate, audit]
+    if: ${{ always() && needs.prepare.result == 'success' && needs.audit.result != 'cancelled' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    outputs:
+      decision: ${{ steps.outcome.outputs.decision }}
+      gate: ${{ steps.outcome.outputs.gate }}
+    steps:
+      - name: Checkout accepted lane
+        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+        with:
+          fetch-depth: 0
+          ref: lab/wix-rules
+          persist-credentials: false
+      - name: Record accepted start
+        id: start
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+      - name: Mount candidate and audit snapshots
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          auth=$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)
+          for role in integration rules dashboard billing; do
+            for kind in "$role" "audit-$role"; do
+              branch="cycle/wix-build/${GITHUB_RUN_ID}/${kind}"
+              git -c "http.extraheader=AUTHORIZATION: basic $auth" fetch origin "$branch:refs/remotes/origin/$branch" || true
+              if git show-ref --verify --quiet "refs/remotes/origin/$branch"; then git worktree add --detach "/tmp/wix_${kind}" "origin/$branch"; fi
+            done
+          done
+      - name: Set up Node
+        uses: actions/setup-node@ae0d4ed08881f17d1511386f5be3e62356acd4a6
+        with:
+          node-version: 22.13.0
+      - name: Install accepted dependencies when present
+        if: ${{ hashFiles('package-lock.json') != '' }}
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Set up reviewed OpenCode
+        uses: ./.github/actions/setup-opencode
+      - name: Integrate audited work
+        env:
+          CYCLE_INDEX: ${{ needs.prepare.outputs.cycle_index }}
+          OPENCODE_RETRY_LABEL: build-director
+        shell: bash
+        run: |
+          bash .github/scripts/run-opencode-with-retry.sh opencode run --model "$OX_MODEL" --agent wix-build-director "Direct Wix product cycle $CYCLE_INDEX. Candidate worktrees when present: /tmp/wix_integration, /tmp/wix_rules, /tmp/wix_dashboard, /tmp/wix_billing. Independent audits: /tmp/wix_audit-integration, /tmp/wix_audit-rules, /tmp/wix_audit-dashboard, /tmp/wix_audit-billing. Inspect real diffs and audits. Port only accepted work into the current lab/wix-rules checkout, resolve cross-lane interfaces, run checks, update directives/state, and write reports/director/CYCLE_${GITHUB_RUN_ID}.md and .json."
+      - name: Persist audit evidence and validate protected paths
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p reports/audits reports/director
+          for role in integration rules dashboard billing; do
+            upper=${role^^}
+            src="/tmp/wix_audit-${role}/reports/audits/CYCLE_${GITHUB_RUN_ID}_${upper}.md"
+            [[ -f "$src" ]] && cp "$src" "reports/audits/CYCLE_${GITHUB_RUN_ID}_${upper}.md"
+          done
+          test -f "reports/director/CYCLE_${GITHUB_RUN_ID}.json"
+          jq -er '.decision | select(. == "continue" or . == "stop" or . == "release_candidate")' "reports/director/CYCLE_${GITHUB_RUN_ID}.json" >/dev/null
+          printf '%s  MAIN_PROMPT.md\n' "$MAIN_PROMPT_SHA256" | sha256sum --check --strict
+          protected=$(git diff --name-only | grep -E '^(\.github/|\.opencode/|MAIN_PROMPT\.md$|AGENTS\.md$|opencode\.json$|docs/WIX_TECHNICAL_CONTRACT\.md$|docs/BUILD_BLUEPRINT\.md$|directives/DIRECTOR\.md$)' || true)
+          test -z "$protected"
+      - name: Save director attempt
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BRANCH: cycle/wix-build/${{ github.run_id }}/director-attempt
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "wix-build-director"
+          git config user.email "wix-build-director@users.noreply.github.com"
+          git switch -C "$BRANCH"
+          git add -A
+          git commit --allow-empty -m "Wix build $GITHUB_RUN_ID: director attempt"
+          auth=$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)
+          git -c "http.extraheader=AUTHORIZATION: basic $auth" push --force origin "HEAD:refs/heads/$BRANCH"
+      - name: Deterministic integration gate
+        id: gate
+        shell: bash
+        run: |
+          set -uo pipefail
+          logfile="${RUNNER_TEMP}/wix-gate.log"
+          : > "$logfile"
+          failed=0
+          if [[ -f package-lock.json ]]; then
+            npm ci --ignore-scripts --no-audit --no-fund 2>&1 | tee -a "$logfile" || failed=1
+            if (( failed == 0 )); then
+              if node -e 'const p=require("./package.json"); process.exit(p.scripts?.test?0:1)' >/dev/null 2>&1; then npm test 2>&1 | tee -a "$logfile" || failed=1; fi
+              if (( failed == 0 )) && node -e 'const p=require("./package.json"); process.exit(p.scripts?.typecheck?0:1)' >/dev/null 2>&1; then npm run typecheck 2>&1 | tee -a "$logfile" || failed=1; fi
+              if (( failed == 0 )) && node -e 'const p=require("./package.json"); process.exit(p.scripts?.build?0:1)' >/dev/null 2>&1; then npm run build 2>&1 | tee -a "$logfile" || failed=1; fi
+            fi
+          fi
+          if (( failed == 0 )); then echo "status=passed" >> "$GITHUB_OUTPUT"; else echo "status=failed" >> "$GITHUB_OUTPUT"; fi
+      - name: Accept cycle or preserve recovery metadata
+        id: outcome
+        env:
+          GH_TOKEN: ${{ github.token }}
+          START_SHA: ${{ steps.start.outputs.sha }}
+          GATE: ${{ steps.gate.outputs.status }}
+          CYCLE_INDEX: ${{ needs.prepare.outputs.cycle_index }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          decision=$(jq -r '.decision' "reports/director/CYCLE_${GITHUB_RUN_ID}.json")
+          auth=$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)
+          if [[ "$GATE" == passed ]]; then
+            git -c "http.extraheader=AUTHORIZATION: basic $auth" push origin "HEAD:refs/heads/$LANE_BRANCH"
+            echo "decision=$decision" >> "$GITHUB_OUTPUT"
+            echo "gate=passed" >> "$GITHUB_OUTPUT"
+          else
+            mkdir -p /tmp/recovery
+            cp "reports/director/CYCLE_${GITHUB_RUN_ID}.md" /tmp/recovery/ 2>/dev/null || true
+            cp "reports/director/CYCLE_${GITHUB_RUN_ID}.json" /tmp/recovery/ 2>/dev/null || true
+            cp docs/NEXT_CYCLE.md /tmp/recovery/NEXT_CYCLE.md 2>/dev/null || true
+            git reset --hard "$START_SHA"
+            mkdir -p reports/director
+            cp /tmp/recovery/CYCLE_* reports/director/ 2>/dev/null || true
+            cp /tmp/recovery/NEXT_CYCLE.md docs/NEXT_CYCLE.md 2>/dev/null || true
+            jq --argjson c "$CYCLE_INDEX" --arg r "$GITHUB_RUN_ID" '.cycle=$c | .release_candidate=false | .last_accepted_run=$r' docs/state.json > /tmp/state.json
+            mv /tmp/state.json docs/state.json
+            git switch -C "$LANE_BRANCH"
+            git add -- docs/NEXT_CYCLE.md docs/state.json reports/director
+            git commit --allow-empty -m "Wix build $GITHUB_RUN_ID: rejected by deterministic gate"
+            git -c "http.extraheader=AUTHORIZATION: basic $auth" push origin "HEAD:refs/heads/$LANE_BRANCH"
+            echo "decision=continue" >> "$GITHUB_OUTPUT"
+            echo "gate=failed" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Report director outcome
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DECISION: ${{ steps.outcome.outputs.decision }}
+          GATE: ${{ steps.outcome.outputs.gate }}
+        shell: bash
+        run: |
+          gh issue comment "$STATUS_ISSUE" --repo "$GITHUB_REPOSITORY" --body "### Wix build director outcome
+          Run: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}
+          Director: **${DECISION}**
+          Deterministic gate: **${GATE}**"
+
+  release_audit:
+    name: Cross-functional release-readiness audit
+    needs: [prepare, director]
+    if: ${{ needs.director.result == 'success' && needs.director.outputs.gate == 'passed' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 150
+    outputs:
+      verdict: ${{ steps.persist.outputs.verdict }}
+    steps:
+      - name: Checkout latest accepted lane
+        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+        with:
+          fetch-depth: 0
+          ref: lab/wix-rules
+          persist-credentials: false
+      - name: Set up Node
+        uses: actions/setup-node@ae0d4ed08881f17d1511386f5be3e62356acd4a6
+        with:
+          node-version: 22.13.0
+      - name: Install dependencies
+        if: ${{ hashFiles('package-lock.json') != '' }}
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Set up reviewed OpenCode
+        uses: ./.github/actions/setup-opencode
+      - name: Run release auditor
+        env:
+          OPENCODE_RETRY_LABEL: release-audit
+        shell: bash
+        run: |
+          bash .github/scripts/run-opencode-with-retry.sh opencode run --model "$OX_MODEL" --agent release-readiness-auditor "Audit the full accepted Wix plugin after build cycle ${{ needs.prepare.outputs.cycle_index }}. Write only reports/release/READINESS_${GITHUB_RUN_ID}.md and end with exactly one line: VERDICT: READY, VERDICT: NOT_READY, or VERDICT: BLOCKED_EXTERNAL."
+      - name: Persist release audit
+        id: persist
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          report="reports/release/READINESS_${GITHUB_RUN_ID}.md"
+          test -f "$report"
+          verdict=$(grep -E '^VERDICT: (READY|NOT_READY|BLOCKED_EXTERNAL)$' "$report" | tail -1 | sed 's/^VERDICT: //')
+          test -n "$verdict"
+          git config user.name "wix-release-auditor"
+          git config user.email "wix-release-auditor@users.noreply.github.com"
+          git add -- "$report"
+          git commit --allow-empty -m "Wix build $GITHUB_RUN_ID: release readiness audit"
+          auth=$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)
+          git -c "http.extraheader=AUTHORIZATION: basic $auth" push origin "HEAD:refs/heads/$LANE_BRANCH"
+          echo "verdict=$verdict" >> "$GITHUB_OUTPUT"
+
+  dispatch:
+    name: Continue or stop product factory
+    needs: [prepare, director, release_audit]
+    if: ${{ always() && needs.director.result == 'success' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Resolve next action
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CYCLE_INDEX: ${{ needs.prepare.outputs.cycle_index }}
+          MAX_CYCLES: ${{ needs.prepare.outputs.max_cycles }}
+          DIRECTOR_DECISION: ${{ needs.director.outputs.decision }}
+          GATE: ${{ needs.director.outputs.gate }}
+          RELEASE_VERDICT: ${{ needs.release_audit.outputs.verdict }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          next=$((CYCLE_INDEX + 1))
+          should_continue=0
+          note=""
+          if [[ "$GATE" == failed ]]; then
+            should_continue=1
+            note="Previous director attempt failed the deterministic integration gate. Read the persisted director report and repair the proven failures."
+          elif [[ "$DIRECTOR_DECISION" == continue ]]; then
+            should_continue=1
+            note="Continue from the accepted state and latest release-readiness findings."
+          elif [[ "$DIRECTOR_DECISION" == release_candidate && "$RELEASE_VERDICT" == NOT_READY ]]; then
+            should_continue=1
+            note="Director proposed release candidate, but independent release audit rejected readiness. Fix the release blockers."
+          fi
+          if (( should_continue == 1 )); then
+            if (( MAX_CYCLES == 0 || next <= MAX_CYCLES )); then
+              gh workflow run wix-build-loop.yml --repo "$GITHUB_REPOSITORY" --ref main -f cycle_index="$next" -f max_cycles="$MAX_CYCLES" -f human_note="$note"
+            else
+              gh issue comment "$STATUS_ISSUE" --repo "$GITHUB_REPOSITORY" --body "Autonomous build reached its configured cycle cap. Accepted state is preserved on lab/wix-rules."
+            fi
+          elif [[ "$DIRECTOR_DECISION" == release_candidate && "$RELEASE_VERDICT" == READY ]]; then
+            gh issue comment "$STATUS_ISSUE" --repo "$GITHUB_REPOSITORY" --body "## Release candidate READY
+          The director and independent release auditor agree. Autonomous coding has stopped. Check the accepted branch and the exact Wix-side human prerequisites before release/Marketplace submission."
+          elif [[ "$RELEASE_VERDICT" == BLOCKED_EXTERNAL ]]; then
+            gh issue comment "$STATUS_ISSUE" --repo "$GITHUB_REPOSITORY" --body "## Build blocked only by an external Wix prerequisite
+          Autonomous coding has stopped with the accepted state preserved. See the latest readiness report for the minimum human action."
+          else
+            gh issue comment "$STATUS_ISSUE" --repo "$GITHUB_REPOSITORY" --body "Autonomous build stopped by director decision: ${DIRECTOR_DECISION}. Accepted state is preserved."
+          fi

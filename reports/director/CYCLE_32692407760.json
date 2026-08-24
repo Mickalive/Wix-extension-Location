@@ -1,0 +1,83 @@
+{
+  "run_id": 32692407760,
+  "role": "wix-build-director",
+  "date": "2026-08-24",
+  "decision": "continue",
+  "accepted_branch": "lab/wix-rules",
+  "accepted_head_at_pass": "5d99372",
+  "accepted_lanes": ["integration"],
+  "rejected_lanes": [],
+  "repair_lanes": ["rules", "dashboard", "billing"],
+  "lane_audit_verdicts": {
+    "integration": {
+      "verdict": "ACCEPT",
+      "audit_path": "reports/audits/CYCLE_32692407760_INTEGRATION.md",
+      "immutable_source": "cycle/wix-build/32692407760/audit-integration",
+      "candidate_commit": "ef94fa9",
+      "disposition": "integrated"
+    },
+    "rules": {
+      "verdict": "FIX_BEFORE_INTEGRATION",
+      "audit_path": "reports/audits/CYCLE_32692407760_RULES.md",
+      "immutable_source": "cycle/wix-build/32692407760/audit-rules",
+      "candidate_commit": "40e7c97",
+      "disposition": "not_integrated_repair_routed_to_rules_engine_builder"
+    },
+    "dashboard": {
+      "verdict": "FIX_BEFORE_INTEGRATION",
+      "audit_path": "reports/audits/CYCLE_32692407760_DASHBOARD.md",
+      "immutable_source": "cycle/wix-build/32692407760/audit-dashboard",
+      "candidate_commit": "2337dac",
+      "disposition": "not_integrated_repair_routed_to_dashboard_builder"
+    },
+    "billing": {
+      "verdict": "FIX_BEFORE_INTEGRATION",
+      "audit_path": "reports/audits/CYCLE_32692407760_BILLING.md",
+      "immutable_source": "cycle/wix-build/32692407760/audit-billing",
+      "candidate_commit": "e57569e",
+      "disposition": "not_integrated_repair_routed_to_billing_builder"
+    }
+  },
+  "integration_record": {
+    "note": "The ACCEPT-lane integration and canonical-contract relocation were completed by the prior one-time recovery pass (commits 21bc5dc..2422aa0, 744445f, bfd5e2d, 16c44cc, f68b367) after the shell gate had misclassified the audit-mandated relocation as rejected Rules work. This pass independently re-verified that recovery against the candidate and the audit's binding conditions instead of redoing it.",
+    "verification_performed": [
+      "src/domain/ports.ts body identical to staged src/platform/contracts/domain-ports.ts with exactly the mandated import rewrite to '../shared/types' (both import and re-export blocks)",
+      "src/shared/types.ts and src/shared/errors.ts shape-identical to staged contracts (comment/provenance headers differ only; no type or value declaration differs)",
+      "docs/runbooks/T_VP0_SCAFFOLD.md byte-identical to the staged runbook (audit condition 2)",
+      "platform/test imports resolve via the README-permitted barrel option: src/platform/contracts/index.ts re-exports '../../shared/types', '../../shared/errors', '../../domain/ports' (audit condition 1, 'stays or is deleted' branch)",
+      "no immutable governance file touched; diff scope limited to integration-lane allowlist paths"
+    ],
+    "relocation_conditions_status": "both audit conditions satisfied"
+  },
+  "simulation_source_run": null,
+  "simulation_verdict": null,
+  "simulation_dispositions": [],
+  "simulation_note": "Asynchronous simulated-Wix QA is not yet available: /tmp/wix_simulation_latest/reports/simulation/LATEST.json absent and remote branch qa/wix-sim-latest does not exist (git ls-remote checked this pass). Per Director policy its absence did not delay this cycle. The next Director pass must mount and disposition it when present.",
+  "tests": [
+    {"name": "npm ci", "result": "PASS", "detail": "47 packages, lockfile-faithful, credential-free"},
+    {"name": "npm run typecheck (tsc --noEmit strict + noUncheckedIndexedAccess)", "result": "PASS", "detail": "zero errors on accepted tree"},
+    {"name": "npm run check:purity", "result": "PASS", "detail": "no '@wix/' imports under src/domain/** and src/billing/pure/**"},
+    {"name": "npm run test:unit / vitest run", "result": "PASS", "detail": "33/33 tests, 4 files (purity negative fixture emits expected PURITY GATE FAILED stderr, asserted)"},
+    {"name": "offline rerun with HTTP(S)_PROXY=http://127.0.0.1:9", "result": "PASS", "detail": "33/33 with all egress blocked - network independence proven"},
+    {"name": "wix build", "result": "NOT_RUNNABLE", "detail": "requires human-owned scaffold/bind (Contract §16); documented residual, not a failure"}
+  ],
+  "audit_spot_checks": [
+    "RULES B1 confirmed live: wallClock.ts line 20 imports isValidWindowStartMinute from './intlZone'",
+    "BILLING F1 confirmed live: countFromAdapters passes collectAllPages wrapper objects instead of .pages",
+    "DASHBOARD F-B1 confirmed live: DiffPreviewModal describeOp has lossy UPDATE_EXCEPTION/REMOVE_EXCEPTION rendering"
+  ],
+  "residual_risks": [
+    "Simulated-Wix QA for this run has not completed; when it lands, every blocker needs an explicit repair/resolved/superseded disposition",
+    "Empirical dev-site gates T-VP0–T-VP5, T-WH1–6, T-BK1–4, T-RB1–2 remain open behind human-owned credentials; no production-capability claims are made anywhere in accepted code",
+    "RESCHEDULE enforcement is contractually fail-open/best-effort forever (Contract §5.3); TOCTOU residual risk for count caps must stay disclosed in-product (C6)",
+    "Dashboard validation duplication (F-N1) remains until the repaired Rules lane achieves ACCEPT and the mirror is repointed with a parity test",
+    "Cross-midnight duplicate-protection v1 limitation (rules audit A2) must be documented in the repaired rules candidate",
+    "Recovery marks RECOVERED even when rollback incomplete (integration audit obs. N2) - revisit at gate T-RB1"
+  ],
+  "external_blocker": null,
+  "next_cycle": {
+    "plan": "docs/NEXT_CYCLE.json (cycle 2)",
+    "summary": "integration INT-C2-1 platform services layer v1 (orchestrator hardening, token-verified HTTP handlers, webhook ingestion); rules/dashboard/billing mandatory repair briefs RULES-C2-1-REPAIR / DASH-C2-1-REPAIR / BILL-C2-1-REPAIR, each citing its accepted audit path and requiring a fresh independent VERDICT: ACCEPT before integration",
+    "decision": "continue"
+  }
+}

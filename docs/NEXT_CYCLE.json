@@ -1,100 +1,120 @@
 {
-  "cycle": 1,
+  "cycle": 2,
   "phase": "build",
-  "generated_by": "wix-recon-director",
+  "generated_by": "wix-build-director",
   "date": "2026-08-24",
+  "decision_record": "reports/director/CYCLE_32692407760.json",
   "authority": {
-    "decision": "start_build",
-    "decision_record": "reports/director/RECON_DECISION.json",
     "contract": "docs/WIX_TECHNICAL_CONTRACT.md",
     "blueprint": "docs/BUILD_BLUEPRINT.md"
   },
-  "repair_priority_rule": "If a lane's latest persisted audit is FIX_BEFORE_INTEGRATION or REJECT, repairing those findings takes priority over the scheduled task.",
+  "repair_priority_rule": "If a lane's latest persisted audit is FIX_BEFORE_INTEGRATION or REJECT, repairing those findings takes priority over any scheduled feature work. A repaired candidate requires a fresh independent audit before integration.",
+  "decision": "continue",
+  "repair_lanes": ["rules", "dashboard", "billing"],
+  "objective": "Repair all three negatively audited lanes against exact audit blockers (fresh independent audits required), while the accepted Integration lane hardens its orchestrator and delivers the token-verified HTTP services layer and webhook ingestion pipeline (Blueprint §4 flows 2/4).",
+  "canonical_contracts_notice": "src/domain/ports.ts, src/shared/types.ts, src/shared/errors.ts are accepted canonical contracts (frozen by cycle-1 platform tests). Semantic changes belong to the Rules lane / Director contract amendment and require a fresh VERDICT: ACCEPT before integration. Repair lanes must consume these shapes, not fork them.",
   "lanes": {
     "integration": {
       "status": "active",
-      "task_id": "INT-C1-1",
-      "task": "Credential-free platform foundation per Blueprint sections 1/3/4: (a) project tooling (TypeScript + Vitest config, 'npm run test:unit' script runnable without Wix credentials, CI purity gate that fails when any '@wix/' import appears under src/domain/** or src/billing/pure/**); (b) finalize src/domain/ports.ts adapter interfaces plus src/shared DTOs exactly as shaped in Blueprint section 3; (c) implement in-memory fake adapters for every port; (d) implement the snapshot -> diff -> apply -> verify -> rollback schedule-mutation orchestrator in src/platform/schedule-mutation against the ScheduleGateway port with deterministic UUIDv5 idempotency keys, revision-conflict retry, crash-mid-apply recovery from the persisted snapshot, and an audit-log entry per mutation; (e) write docs/runbooks/T_VP0_SCAFFOLD.md recording the exact commands, evidence to capture (generate-menu contents, wix.config.json fields, dependency pins), and the documented dashboard-created-extension fallback, ready to execute the moment human-owned credentials exist.",
-      "why_needed": "All three other lanes compile against these ports; the Technical Contract makes destructive-write safety (section 9) mandatory before any schedule mutation code can exist; audit blocker B5 requires T-VP0 to be the first empirical step and its runbook must be prepared in advance.",
+      "task_id": "INT-C2-1",
+      "task": "Platform services layer v1, credential-free, inside src/platform/** (+ tests/platform/**): (a) Orchestrator hardening per accepted-audit observation N1: completeApply and failApply must reject EVERY terminal journal state (APPLY_COMPLETED, ROLLED_BACK, RECOVERED, failed-terminal) with INVALID_STATE PlatformError instead of only APPLY_COMPLETED; add regression tests proving a post-rollback or post-recovery completeApply call fails fast without appending a second audit entry. (b) Token-verified HTTP endpoint handler layer as pure, Wix-import-free modules under src/platform/http/** (thin src/pages/api/* adapters deferred to scaffold; document the wiring protocol in a README header like the cycle-1 contracts staging): GET active RuleSet; PUT RuleSet performing domain-side validation seam + revision-checked saveRuleSet via RulesConfigStore; POST apply-plan accepting ONLY a confirmed-diff hash reference; GET mutation status; POST recover for crash-mid-apply recovery. Every handler verifies the caller through an injected TokenVerifier port (adapter seam for @wix/essentials auth.getTokenInfo per Contract §6 - HTTP endpoints have NO built-in permissions model) and fails CLOSED with a typed shared-errors code on missing/invalid/expired tokens; request/response DTOs come from src/shared/types and errors from src/shared/errors; no business-rule logic. (c) Webhook ingestion pipeline under src/platform/webhooks/**: envelope-id dedup store port, entityEventSequence ordering buffer, idempotent at-least-once dispatch to registered handlers, and deterministic chaos tests proving duplicate deliveries, out-of-order sequences, and replays after simulated crashes converge exactly once; signature verification is an injected port (no fabricated crypto claims); document the Contract §6 constraints (1250 ms deadline, <=12 retries, duplicates expected) in module docs.",
+      "why_needed": "Blueprint §4 binding flows 2 (configuration via token-verified HTTP endpoints) and 4 (webhook counters with dedup/ordering/idempotency) have no platform implementation yet; Contract §6 makes explicit caller-token verification mandatory for every HTTP endpoint; accepted-audit observation N1 is a concrete hardening finding on integrated code. All three items are owned by this lane, need no credentials, and do not overlap any repair lane.",
       "source_evidence": [
-        "docs/WIX_TECHNICAL_CONTRACT.md section 9 (mandatory destructive-write gates) and section 15 (T-VP0)",
-        "docs/BUILD_BLUEPRINT.md sections 1, 3, 4 (module map, ports, binding flows)",
-        "reports/audits/RECON.md blockers B5/M1/N4 (unified-CLI generation check + fallback)"
+        "reports/audits/CYCLE_32692407760_INTEGRATION.md non-blocking observations 1-3 (terminal-state guard too narrow)",
+        "docs/BUILD_BLUEPRINT.md section 4 flows 2 and 4 (configuration flow, counters flow)",
+        "docs/WIX_TECHNICAL_CONTRACT.md section 6 (HTTP endpoints reachable by anyone who knows the URL; webhook JWT/retry/dedup facts)",
+        "docs/NEXT_CYCLE.md cycle-2 plan (Blueprint sequencing: cycle 2 = platform wiring)"
       ],
       "acceptance_criteria": [
-        "'npm ci && npm run test:unit' passes with zero Wix credentials and no network access to wixapis.com",
-        "purity gate demonstrably fails the build when a fixture injects an '@wix/' import into src/domain/** or src/billing/pure/** (negative test committed)",
-        "orchestrator tests prove: snapshot persisted before first write; replaying apply with an identical idempotency key results in exactly one applied change; stale-revision conflict retries with fresh revision then succeeds; simulated crash mid-apply followed by recovery run restores the exact pre-apply state; every mutation appends one audit entry",
-        "every port has a fake implementation exercised by at least one consumer test",
-        "docs/runbooks/T_VP0_SCAFFOLD.md exists and names the fallback extension-creation path verbatim from the plugin page"
+        "'npm ci && npm run check' passes with zero credentials and zero network egress (proxy-blocked rerun also green)",
+        "completeApply/failApply regression tests prove INVALID_STATE rejection for every terminal state and that no duplicate audit entry is appended",
+        "every HTTP handler test proves: valid token => handler executes; missing/invalid token => typed fail-closed error and zero store mutation",
+        "PUT RuleSet test proves revision conflict surfaces REVISION_CONFLICT without partial writes; apply-plan test proves execution requires the confirmed-diff hash reference",
+        "webhook chaos tests prove: same envelope id delivered twice => handler runs once; out-of-order entityEventSequence => ordered convergence; replay after simulated mid-dispatch crash => exactly-once effective processing",
+        "purity gate stays green: no '@wix/' imports anywhere under src/platform/http or src/platform/webhooks (Wix access only via injected ports)",
+        "grep test proves no rule/pricing logic leaked into src/platform (orchestrator applies confirmed plans; endpoints validate shape + revision only)"
       ],
-      "out_of_scope": "real scaffold execution (human credentials), any @wix SDK call sites beyond port signatures, business rules, pricing policy"
+      "out_of_scope": "real scaffold/wix release, validation-plugin wiring (blocked on Rules repair acceptance), billing enforcement consumption (blocked on Billing repair acceptance), any UI",
+      "blocker": null,
+      "completion_evidence": null
     },
     "rules": {
       "status": "active",
-      "task_id": "RULES-C1-1",
-      "task": "Pure availability-rules core v1 in src/domain/** per Blueprint sections 1/3/6: RuleSet model covering per-location and per-service weekly windows including split daily windows, date-specific exceptions/closures/temporary overrides with explicit precedence, maximum-count limits per day/per service/per location with a declared status-inclusion policy (default PENDING+CONFIRMED), and identity-free-first duplicate protection with an optional identity-key hook; site-IANA-zone day-boundary math through the injected Clock port (never fixed offsets); explainable RuleOutcome (ruleId + machine code + customer-safe message) for every allow/block decision; exhaustive Vitest coverage including negative and edge cases.",
-      "why_needed": "This core IS the enforceable product; contract invariant C1 mandates identity-free-first duplicate design, capability classifications 1-8 assume this logic, and no Wix wiring has value until evaluation is provably correct and deterministic.",
+      "task_id": "RULES-C2-1-REPAIR",
+      "repair_of": "RULES-C1-1",
+      "task": "MANDATORY REPAIR BRIEF - fix every blocking finding of reports/audits/CYCLE_32692407760_RULES.md before any new feature work, then submit the repaired candidate to a fresh independent audit. Blockers: (B1) src/domain/time/wallClock.ts imports isValidWindowStartMinute from './intlZone'; it is exported from '../model/primitives' - fix the specifier (TS2305 + cascading TypeError today). (B2) tests/domain/evaluate.test.ts and tests/domain/ruleset.validate.test.ts use depth-3 import specifiers that resolve above the repo root; change to '../../src/domain' and './helpers/*'. (B3) Five red assertions are provably wrong TESTS - fix fixtures/expectations WITHOUT changing correct implementation behavior: (1)(2) duplicates.test.ts confuses local wall time with UTC so the two identity-key tests never overlap - make instants genuinely overlap (e.g. existing booking 17:00Z-18:00Z vs proposal factsAt(WED,810,870)=17:30Z-18:30Z) keeping negative controls meaningful; (3) localDate.test.ts expects EST after US DST began 2026-03-08 - correct answer 22:30 Mar 8 local (1350), EDT; (4) wallClock.test.ts spring-forward 02:30 must advance to next valid local time 03:00 EDT (07:00Z), not 03:30; (5) Lord_Howe 02:05 on 2026-10-04 must advance to 02:30 LHDT (2026-10-03T15:30Z), not 02:35. Then ADD a genuinely-overlapping identity-key conflict test so IDENTITY_TIME_CONFLICT is asserted end-to-end (acceptance criterion 5 is currently unproven). (B4) IMPLEMENTATION DEFECT: slots ending exactly at local midnight are falsely blocked as overnight_slot even when a configured window ends at minute 1440 - treat an end instant landing on next-day 00:00 as endMinute=1440 for window fitting (only when endDate!==targetDate && minutesOfDay===0), keep genuine overnight spans blocked, and add regressions: 23:30-24:00 under [0,1440) ALLOWs; 23:30-00:30 BLOCKs as overnight. Non-blocking, fix in the same repair when safe: remove the literal '@wix/*' prose tripwire from src/domain/README.md wording; document the cross-midnight duplicate-protection v1 limitation; import RESERVED_RULE_IDS constants instead of hardcoding; strengthen duplicates negative controls so only the intended discriminator differs. Constraints: src/domain/ports.ts is an accepted canonical contract - preserve byte-identical unless a contract amendment is approved; repaired code must typecheck against accepted src/shared/types.ts shapes; self-verify via a scratch Vitest/tsc harness BEFORE submission (the cycle-1 candidate was submitted red, which the audit flagged as process failure A5).",
+      "why_needed": "Latest persisted audit for this lane is FIX_BEFORE_INTEGRATION; the mandatory repair feedback loop forbids new feature work until these blockers are fixed and a fresh independent audit returns ACCEPT. B4 is a customer-facing false-rejection defect in the enforceable core.",
       "source_evidence": [
-        "docs/WIX_TECHNICAL_CONTRACT.md sections 4 (data-model/timezone facts), 5.3 (payload fields available to rules), 10 (capability table), 11 (C1, C6)",
-        "docs/BUILD_BLUEPRINT.md sections 2, 3, 6 (ownership, evaluateRules signature, test strategy)",
-        "reports/recon/BOOKINGS_API.md sections 7-8 (timezone/DST behavior, capability classification)"
+        "reports/audits/CYCLE_32692407760_RULES.md",
+        "rules audit blocking findings B1-B4 and non-blocking findings A1-A5 (full report at the path above)",
+        "docs/WIX_TECHNICAL_CONTRACT.md section 4.7 (DST semantics the wrong expectations violated)",
+        "docs/NEXT_CYCLE.json cycle-1 acceptance criterion 5 (identity-key conflict coverage)"
       ],
       "acceptance_criteria": [
-        "zero '@wix/' imports under src/domain/** (CI purity gate green)",
-        "split-window test proves zero availability in the 12:00-14:00 gap for windows 09:00-12:00 + 14:00-18:00 on the same weekday",
-        "exception-precedence tests prove a date-specific closure overrides the weekly window and a bounded temporary override expires automatically",
-        "cap tests fix boundary semantics explicitly (booking at exactly the limit is blocked; cancellation frees capacity) for day, service, and location dimensions, each declaring included statuses",
-        "duplicate-protection tests block a second same service/day/slot booking with NO identity fields present, and use the identity key only when supplied",
-        "DST fixture tests reproduce contract section 4 facts: spring-forward nonexistent local time advances to next valid time; fall-back second occurrence is not bookable; per-day counts use the site zone, not UTC",
-        "every outcome carries ruleId + machine code + customer-safe message; a determinism property test asserts identical outcomes across 100 repeated evaluations"
+        "strict tsc (noUncheckedIndexedAccess) reports zero errors over src/domain + tests/domain",
+        "full Vitest suite green with zero skipped tests, including the new genuinely-overlapping IDENTITY_TIME_CONFLICT test",
+        "23:30-24:00 slot under a [0,1440) window evaluates ALLOW; 23:30-00:30 evaluates BLOCK overnight_slot (regression tests committed)",
+        "zero '@wix/' imports under src/domain/** (purity gate green); src/domain/ports.ts unchanged byte-for-byte",
+        "all five B3 fixture corrections present with comments citing contract section 4.7 semantics",
+        "fresh independent lane audit of the repaired candidate ends with VERDICT: ACCEPT"
       ],
-      "out_of_scope": "any I/O, network, Wix SDK usage, persistence, UI"
+      "out_of_scope": "new rule features beyond the repair, any I/O, Wix SDK usage, changes to ports/shared shapes",
+      "blocker": null,
+      "completion_evidence": null
     },
     "dashboard": {
       "status": "active",
-      "task_id": "DASH-C1-1",
-      "task": "Dashboard configuration shell per Blueprint sections 1/2/6 using React + @wix/design-system patterns: RulesEditor page supporting per-location and per-service weekly windows with split-hour rows, exception list editor, and cap inputs for all three dimensions; client-side validation that IMPORTS the pure domain validators (no duplicated rule logic); a diff-preview modal that renders exactly what a proposed schedule apply would change before any apply is possible; an ExplainPanel component rendering domain RuleOutcome explanations; all server access behind one typed services-bridge module (fetchWithAuth-shaped interface) so no direct SDK calls scatter through components; headless component tests.",
-      "why_needed": "The dashboard is the product's only user surface (contract architecture is dashboard-first); validation must mirror the domain exactly or invalid rulesets enter persistence; diff-and-confirm is mandated by contract section 9.2 before any destructive mutation.",
+      "task_id": "DASH-C2-1-REPAIR",
+      "repair_of": "DASH-C1-1",
+      "task": "MANDATORY REPAIR BRIEF - fix every blocking finding of reports/audits/CYCLE_32692407760_DASHBOARD.md before any new feature work, then submit to a fresh independent audit. Blockers: (F-B1) DiffPreviewModal.describeOp misrepresents exception mutations, violating binding Contract §9.2 'shows exactly what will change': describeOp('UPDATE_EXCEPTION') must render before->after detail (prior kind + hours if OVERRIDE -> new kind + hours, e.g. 'Change exception - 2026-12-25: closed all day -> open 10:00-14:00') including note changes when present; describeOp('REMOVE_EXCEPTION') must describe the removed entry including its kind/hours; extend computeScheduleDiff/diffPreviewModal tests asserting a CLOSED->OVERRIDE update exposes the new hours and removal lines expose the removed kind. (F-B2) Review/confirm flow is reachable while the draft is invalid: either disable 'Review changes' while state.issues.length > 0 with an explanatory title, OR keep it enabled but disable the modal Confirm button and render an in-modal warning listing blocking issues; add a negative UI test proving Confirm cannot reach confirmed:true through the UI while any issue is open. Non-blocking, fix in the same repair: (F-N2) implement focus restore-on-close or correct the DiffPreviewModal header comment; (F-N3) delete leftover src/ui/probe.txt and never port it; (F-N4) give onSave/onApply visible pending/unavailable feedback instead of silent no-ops; (F-N5) wrap bridge.request() JSON.parse failures into typed BridgeError BAD_RESPONSE with a test; (F-N6) rename tests/ui/zzDebug.test.js descriptively (e.g. windowRowWeekdayResolution.test.js); (F-N7) surface unknown weekday keys in windowOpsForScope instead of silently dropping them. Recorded obligation (NOT part of this repair, Director-tracked): repoint mirror.setValidationSource() to the canonical src/domain validators plus a cross-lane parity contract test once the repaired Rules lane achieves ACCEPT - the canonical validators do not exist in the accepted base yet, so the documented provisional seam remains correct for now.",
+      "why_needed": "Latest persisted audit for this lane is FIX_BEFORE_INTEGRATION; the diff-preview modal is the §9.2 informed-consent gate for irreversible schedule mutations and currently hides the new state of exception updates and permits confirming invalid proposals.",
       "source_evidence": [
-        "docs/WIX_TECHNICAL_CONTRACT.md sections 1 (binding dashboard architecture), 9.2 (diff-and-confirm), 12 (copy bans bind UI wording)",
-        "docs/BUILD_BLUEPRINT.md sections 1, 2, 6 (dashboard ownership, dependency direction, tests)",
-        "reports/recon/PLATFORM.md section 4.1 and reports/audits/RECON.md N5 (official quick-start dashboard pattern)"
+        "reports/audits/CYCLE_32692407760_DASHBOARD.md",
+        "dashboard audit blocking findings F-B1, F-B2 and non-blocking findings F-N1-F-N7 (full report at the path above)",
+        "docs/WIX_TECHNICAL_CONTRACT.md sections 9.2 (diff-and-confirm) and 12 (copy bans bind UI wording)"
       ],
       "acceptance_criteria": [
-        "editor covers all v1 rule types: per-location windows, per-service windows, >=2 split windows on one weekday, dated exceptions, caps for day/service/location",
-        "accessibility assertions in tests: labeled controls, keyboard operability, roles for the diff modal",
-        "invalid input (end<=start, zero-length or overlapping-invalid windows, negative/non-integer caps, exception without date) is blocked with messages asserted EQUAL to the domain validator messages",
-        "apply action stays disabled until the diff modal has been rendered and explicitly confirmed; test proves the gating",
-        "grep test proves no '@wix/' imports outside the single services-bridge module",
-        "component tests run green under 'npm run test:unit' without Wix credentials"
+        "rendered UPDATE_EXCEPTION line exposes both prior and new kind+hours; REMOVE_EXCEPTION line exposes the removed entry's kind/hours (asserted in tests)",
+        "negative UI test proves Confirm cannot reach confirmed:true through the UI while any validation issue is open",
+        "existing hash-gating, accessibility, and copy-disclosure suites stay green (63/63 baseline plus new tests) under the lane's own runner without credentials",
+        "src/ui/probe.txt absent; no silent Save/Apply controls; malformed bridge body maps to typed BridgeError",
+        "scope discipline preserved: changes only under src/ui/**, src/extensions/dashboard/**, tests/ui/**",
+        "fresh independent lane audit of the repaired candidate ends with VERDICT: ACCEPT"
       ],
-      "out_of_scope": "live Wix data fetching, release/hot-reload verification (needs dev site), any rule logic not imported from src/domain"
+      "out_of_scope": "live Wix data fetching, React/design-system mount (T-VP0 pin), validator repoint (deferred pending Rules ACCEPT)",
+      "blocker": null,
+      "completion_evidence": null
     },
     "billing": {
       "status": "active",
-      "task_id": "BILL-C1-1",
-      "task": "Billable-location counter and entitlement engine per Blueprint sections 1/6: pure counting core (src/billing/counter + src/billing/pure) implementing the ratified algorithm over fetched pages as plain input - paginated locations with archived=false liveness, paginated services (non-hidden counted-service policy v1), distinct BUSINESS business.id intersection, single-location floor treating computed 0 as 1; thin paging-adapter interfaces for the integration lane to back later; tier mapping of the four plan identifiers to maxLocations (1 / 3 / 10 / unlimited); entitlement state machine (free, trial-in-progress, paid, dunning expired-date-but-isFree-false, renewal-cancelled-until-expiry, cloned originInstanceId) honoring contract C2 advisory-only expiration; fail-open posture on billing/count failures emitting a persistent warning signal; over-limit coverage ordering (default location first, then alphabetical by id) that never deletes user data; upgrade URL builder per contract section 7.",
-      "why_needed": "Wix makes developer-side plan restriction mandatory and review-tested; the ratified counting algorithm resolves audit blockers B3/M4/M5; every enforcement path and the dashboard meter consume EntitlementGate, so it must exist before wiring cycles.",
+      "task_id": "BILL-C2-1-REPAIR",
+      "repair_of": "BILL-C1-1",
+      "task": "MANDATORY REPAIR BRIEF - fix every blocking finding of reports/audits/CYCLE_32692407760_BILLING.md before any new feature work, then submit to a fresh independent audit. Blockers: (F1) src/billing/counter/countFromAdapters.ts destructures collectAllPages() results positionally and passes the wrapper objects to the pure core, crashing every invocation (TypeError: locationPages is not iterable) and failing strict tsc - return countBillableLocations(locationPages.pages, servicePages.pages). (F2) counterAdapters.test.ts expects count 130 but the fixture's modulo patterns provably cover only 123 distinct ids - assert 123 with a deriving comment or redesign patterns to cover all 130. (F3) the runaway-adapter fixture never increments calls yet asserts calls === MAX_PAGES_PER_SOURCE - increment the counter inside fetchPage. (F4) add BillingPagingAdapter to the type import from ./ports in counterAdapters.test.ts (TS2552). (F5) coverage.test.ts invalid cast result as Record<string, unknown> - use as unknown as Record<string, unknown> or iterate Object.keys with explicit typing (TS2352). Regression proof required: npx vitest run 51/51 AND tsc --noEmit strict clean over src/billing/** + tests/billing/**. Non-blocking, include during repair: document in the paging-port docstring that adapters MUST throw on infrastructure failure and return null only when Wix genuinely reports no billing data (null-snapshot semantics handoff to the Integration lane). Constraint: align entitlement/gate types with the accepted canonical src/shared/types.ts + src/domain/ports.ts EntitlementGate/PolicyDecision shapes; any needed shape change goes through Director contract amendment, never a silent fork.",
+      "why_needed": "Latest persisted audit for this lane is FIX_BEFORE_INTEGRATION; the paging-driver entry point - the exact surface the Integration lane will back with paginated listLocations/queryServices - crashes on every call and fails the Blueprint §6 typecheck gate.",
       "source_evidence": [
-        "docs/WIX_TECHNICAL_CONTRACT.md section 7 (ratified definition, policies, posture) and section 11 (C2, C3, C5)",
-        "docs/BUILD_BLUEPRINT.md sections 1, 6 (billing modules, tests)",
-        "reports/recon/COMMERCE_MARKETPLACE.md sections 9.2-9.3 (algorithm + edge-case table) and reports/audits/RECON.md section 4.2 (pagination + queryLocations.exists corrections)"
+        "reports/audits/CYCLE_32692407760_BILLING.md",
+        "billing audit blocking findings F1-F5 and non-blocking observations 1-4 (full report at the path above)",
+        "docs/BUILD_BLUEPRINT.md section 6 (typecheck is part of the mandatory CI gate)",
+        "docs/WIX_TECHNICAL_CONTRACT.md section 11 C5 (pagination/liveness/floor invariants already proven - preserve them)"
       ],
       "acceptance_criteria": [
-        "counting tests prove correct pagination beyond 50 locations and beyond 100 services, dedup of overlapping service references, exclusion of archived locations even when status reads ACTIVE, exclusion of hidden services, and the CUSTOM-only floor to 1",
-        "entitlement decision-table tests cover: isFree=true; trial freeTrialInfo.status=IN_PROGRESS treated paid; expirationDate passed but isFree=false treated PAID; auto-renewal cancelled before period end still paid; isFree=true after expiry mapped to free tier; originInstanceId clone handled as independent instance",
-        "over-limit ordering test asserts stable selection (default first, then alphabetical by id) across repeated runs and asserts no deletion path exists",
-        "simulated billing/count API failure produces fail-open decisions AND a raised warning signal (asserted), never a silent block or silent allow-without-warning",
-        "zero '@wix/' imports under src/billing/pure/** and the counter core (CI purity gate green)",
-        "upgrade URL builder output matches https://www.wix.com/apps/upgrade/<APP_ID>?appInstanceId=<INSTANCE_ID> exactly"
+        "countFromAdapters drains multi-page location/service adapters and returns the correct billable count (crash repro test now green)",
+        "npx vitest run reports 51/51 with zero skips; tsc --noEmit strict clean over src/billing + tests/billing",
+        "runaway-adapter guard test asserts calls === MAX_PAGES_PER_SOURCE with a fixture that actually counts",
+        "zero '@wix/' imports under src/billing/pure/** and counter core (purity gate green); scope limited to src/billing/** + tests/billing/**",
+        "paging-port docstring states throw-on-infrastructure-failure / null-only-when-genuinely-absent semantics",
+        "fresh independent lane audit of the repaired candidate ends with VERDICT: ACCEPT"
       ],
-      "out_of_scope": "real Wix API calls (adapters belong to integration lane), pricing-page UI, trial configuration"
+      "out_of_scope": "real Wix API calls, pricing-page UI, trial configuration, tier feature differences beyond location count",
+      "blocker": null,
+      "completion_evidence": null
     }
   },
   "cross_lane_compatibility": {
-    "shared_contracts": "src/domain/ports.ts and src/shared/types|errors are finalized by INT-C1-1 item (b) in the shapes pre-declared in Blueprint section 3; rules/dashboard/billing code against those shapes merges without conflict because directory ownership is disjoint (Blueprint section 2).",
-    "collective_effect": "Cycle 1 delivers the complete credential-free MVP foundation: ports+fakes+safety orchestrator (integration), enforceable rule core (rules), configurable+explainable UI (dashboard), and the monetization meter/gate (billing) - exactly the four pillars the empirical gates will exercise once human-owned credentials exist.",
+    "shared_contracts": "Canonical src/domain/ports.ts + src/shared/{types,errors}.ts are accepted and consumed by the integrated platform suite (33/33 green). Repair lanes must compile against them; semantic changes require Rules-lane ACCEPT + Director amendment.",
+    "sequencing": "Rules repair lands first among consumers: dashboard validator repoint (F-N1) and validation-plugin wiring wait for a Rules ACCEPT audit; billing enforcement-hook consumption waits for a Billing ACCEPT audit.",
+    "collective_effect": "Cycle 2 converts the three negative audits into repair candidates with fresh audits, and extends the accepted platform with the §4.2 configuration flow and §4.4 counter transport - the remaining credential-free platform work before cross-lane wiring becomes possible.",
     "forbidden_everywhere": "product source claiming production capability before gates T-VP*/T-WH*/T-BK*/T-RB* pass; PREVIEW_GATED dependencies; UNSUPPORTED mechanisms; fabricated Wix identifiers; secrets in repo."
-  }
+  },
+  "critical_external_blocker": null
 }

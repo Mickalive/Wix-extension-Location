@@ -1,31 +1,38 @@
-# Next Cycle — Build Cycle 1
+# Next Cycle — Build Cycle 2
 
-Current phase: **BUILD** (advanced from `recon` on 2026-08-24 by wix-recon-director; decision record: `reports/director/RECON_DECISION.json`).
+Current phase: **BUILD**. Planning authority: `reports/director/CYCLE_32692407760.json` (Director pass over Product Factory run 32692407760, 2026-08-24). Machine-readable queue: `docs/NEXT_CYCLE.json`.
 
-## Why build is authorized
+## Outcome of cycle 1 (run 32692407760)
 
-The independent recon audit returned **PASS_WITH_BLOCKERS**: every load-bearing architectural claim survived falsification against current official Wix documentation, no deprecated path is in the chosen stack, and no Developer Preview capability is required for the MVP. All seven audit blockers (B1–B7) were contract-writing tasks and are now resolved as binding invariants in `docs/WIX_TECHNICAL_CONTRACT.md` (see decision record, `blocker_resolution`). The director additionally spot-checked three load-bearing pages live on 2026-08-24 — including a new verified fact: booking-count reads require one of three elevated scopes (`READ-CALENDAR-WITH-PARTICIPANTS` selected as least-privilege), now fixed in the contract's scope table.
+| Lane | Audit verdict | Disposition |
+|---|---|---|
+| integration | `VERDICT: ACCEPT` | **Integrated** into accepted `lab/wix-rules` (tooling + purity gate, canonical ports/DTOs, fakes for all seven ports, Contract §9 mutation orchestrator with crash recovery, T-VP0 runbook). Deterministic gate green: strict typecheck, purity, 33/33 tests incl. offline rerun. |
+| rules | `VERDICT: FIX_BEFORE_INTEGRATION` | **Repair lane** — blockers B1–B4 routed back to rules-engine-builder (`RULES-C2-1-REPAIR`). |
+| dashboard | `VERDICT: FIX_BEFORE_INTEGRATION` | **Repair lane** — blockers F-B1/F-B2 routed back to dashboard-builder (`DASH-C2-1-REPAIR`). |
+| billing | `VERDICT: FIX_BEFORE_INTEGRATION` | **Repair lane** — blockers F1–F5 routed back to billing-builder (`BILL-C2-1-REPAIR`). |
 
-Remaining unknowns are empirical dev-site gates (T-VP0–T-VP5, T-WH1–6, T-BK1–4, T-RB1–2). Per the audit they block **production claims**, not build start. Until human-owned credentials exist (Wix account, scaffold/bind, dev-site consent, CI API key), all lanes do credential-free work. No lane is blocked.
+All four full audit reports are preserved verbatim under `reports/audits/CYCLE_32692407760_*.md`. Per the mandatory repair feedback loop, no negatively audited candidate was integrated; each repair requires a fresh independent audit ending in `VERDICT: ACCEPT`.
 
-## Lane assignments (machine-readable source: `docs/NEXT_CYCLE.json`)
+Asynchronous simulated-Wix QA: **not yet available** (no `qa/wix-sim-latest`, no `LATEST.json`). Per policy it did not delay this cycle; the next Director pass must consume it when present.
+
+## Lane assignments for cycle 2
 
 | Lane | Task | Summary | Status |
 |---|---|---|---|
-| integration | INT-C1-1 | Credential-free platform foundation: project tooling + purity gate, finalize `src/domain/ports.ts` + shared DTOs, fake adapters for every port, snapshot→diff→apply→verify→rollback schedule-mutation orchestrator with UUIDv5 idempotency keys / revision retries / crash recovery / audit log, and the T-VP0 scaffold runbook with documented fallback. | active |
-| rules | RULES-C1-1 | Pure availability-rules core v1: per-location/per-service weekly windows incl. split hours, dated exceptions with precedence, day/service/location caps with declared status policy, identity-free-first duplicate protection, site-IANA-zone DST-safe time math via injected Clock, explainable RuleOutcome everywhere; exhaustive Vitest incl. negative/edge/DST fixtures. | active |
-| dashboard | DASH-C1-1 | Rules editor shell on @wix/design-system patterns: windows/split-hours/exceptions/caps forms validated by importing the pure domain validators, diff-preview modal gating any apply behind explicit confirm, ExplainPanel rendering domain outcomes, single typed services bridge, accessibility assertions, headless tests. | active |
-| billing | BILL-C1-1 | Billable-location counter (ratified algorithm: paginated locations ∩ paginated non-hidden services' BUSINESS ids, archived=false liveness, 0→1 floor) + entitlement state machine (free/trial/paid/dunning/expiry/clone) honoring advisory-only expiration, fail-open-with-warning posture, stable over-limit ordering, upgrade URL builder; pure core fully unit-tested. | active |
+| integration | INT-C2-1 | Platform services layer v1: orchestrator terminal-state hardening (audit obs. N1); token-verified HTTP endpoint handlers as pure modules (RuleSet get/put with revision-checked save, apply-plan requiring confirmed-diff hash, mutation status/recover) with injected TokenVerifier port and fail-closed semantics; webhook ingestion pipeline with envelope-id dedup, entityEventSequence ordering, idempotent exactly-once dispatch plus chaos tests. | active |
+| rules | RULES-C2-1-REPAIR | Repair brief B1–B4: wrong import specifier breaking the build; two unloadable test suites; five provably wrong test fixtures/expectations (wall-time/UTC confusion ×2, EST-vs-EDT, spring-forward 02:30→03:00 not 03:30, Lord Howe 02:05→02:30) plus missing genuine IDENTITY_TIME_CONFLICT coverage; real midnight-boundary false-block defect (end-at-00:00 must fit a [0,1440) window) with regressions. Ports file frozen; self-verify before submission; fresh audit required. | active (repair) |
+| dashboard | DASH-C2-1-REPAIR | Repair brief F-B1/F-B2: diff modal must render exception before→after detail and removal detail (§9.2); confirm flow must be unreachable while the draft is invalid (with negative UI test). Plus F-N2…F-N7 hardening. Validator repoint stays Director-tracked until Rules ACCEPT. Fresh audit required. | active (repair) |
+| billing | BILL-C2-1-REPAIR | Repair brief F1–F5: paging driver passes `.pages` (crash + TS2345); fixture asserts 130 vs provable 123; runaway fixture never counts calls; missing type import; invalid cast. Regression proof: 51/51 vitest + strict tsc clean. Align to canonical shared shapes; document throw-vs-null adapter semantics. Fresh audit required. | active (repair) |
 
 ## Cross-lane rules
 
-- Ports and shared DTOs are finalized by INT-C1-1 in the shapes pre-declared in Blueprint §3; directory ownership is disjoint (Blueprint §2), so the four tasks merge without conflict.
-- Repair priority: if a lane's latest persisted audit is `FIX_BEFORE_INTEGRATION` or `REJECT`, repairing those findings precedes the scheduled task.
+- Canonical contracts `src/domain/ports.ts`, `src/shared/types.ts`, `src/shared/errors.ts` are accepted and frozen; semantic changes require Rules-lane ACCEPT + Director amendment.
+- Sequencing: validation-plugin wiring waits for Rules ACCEPT; billing enforcement consumption waits for Billing ACCEPT; dashboard validator repoint waits for Rules ACCEPT.
 - Forbidden everywhere: production-capability claims before empirical gates pass, PREVIEW_GATED dependencies, UNSUPPORTED mechanisms, fabricated Wix identifiers, committed secrets.
 
 ## Pending external prerequisites (tracked, non-blocking)
 
 1. Human Wix account + CLI authorization; owner/co-owner API key stored as CI secret.
-2. One-time scaffold/bind producing real appId, namespace, code identifier → executes T-VP0 runbook.
+2. One-time scaffold/bind producing real appId → executes `docs/runbooks/T_VP0_SCAFFOLD.md`.
 3. One interactive dev-site install consent.
 4. Later: payout setup, release approvals, marketplace submission (never automated).

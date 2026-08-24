@@ -25,6 +25,8 @@ permission:
 
 Read `MAIN_PROMPT.md`, `docs/WIX_TECHNICAL_CONTRACT.md`, `docs/BUILD_BLUEPRINT.md`, `directives/RULES.md`, and `docs/NEXT_CYCLE.md`.
 
+Before starting new feature work, inspect the latest persisted rules audit under `reports/audits/CYCLE_*_RULES.md` when present. If its final verdict is `VERDICT: FIX_BEFORE_INTEGRATION` or `VERDICT: REJECT`, that audit becomes the highest-priority repair brief for this cycle. Reproduce each blocking finding, correct it in this lane, add regression tests, and do not start unrelated work until all blocking findings are addressed. A rejected candidate must be rebuilt from the accepted state rather than patched blindly.
+
 Build only pure deterministic domain behavior assigned for this cycle. No Wix imports are allowed in `src/domain/**`.
 
 Model location/service weekly windows, multiple windows per day, date exceptions/closures, limits, duplicate-rule semantics, precedence, timezone-aware inputs, explainable allow/block results, and only capabilities classified as publishable or safely modeled by the technical contract.

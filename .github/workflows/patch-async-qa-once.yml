@@ -1,0 +1,81 @@
+name: One-shot wire async QA feedback
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/patch-async-qa-once.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+        with:
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Build deterministic patcher
+        shell: bash
+        run: |
+          cat > /tmp/patch_async_qa.py <<'PY'
+          from pathlib import Path
+          p=Path('.github/workflows/wix-build-loop.yml')
+          s=p.read_text()
+          if 'Mount latest asynchronous simulated-Wix feedback if available' in s:
+              raise SystemExit(0)
+
+          director_marker='''      - name: Set up Node\n        uses: actions/setup-node@ae0d4ed08881f17d1511386f5be3e62356acd4a6\n'''
+          director_idx=s.index('\n  director:\n')
+          head, tail=s[:director_idx], s[director_idx:]
+          if director_marker not in tail:
+              raise SystemExit('director node marker missing')
+          qa_mount='''      - name: Mount latest asynchronous simulated-Wix feedback if available\n        env:\n          GH_TOKEN: ${{ github.token }}\n        shell: bash\n        run: |\n          set -euo pipefail\n          auth=$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)\n          mkdir -p /tmp/wix_simulation_latest\n          if git -c "http.extraheader=AUTHORIZATION: basic $auth" ls-remote --exit-code --heads origin qa/wix-sim-latest >/dev/null 2>&1; then\n            git -c "http.extraheader=AUTHORIZATION: basic $auth" fetch origin qa/wix-sim-latest:refs/remotes/origin/qa/wix-sim-latest\n            rmdir /tmp/wix_simulation_latest\n            git worktree add --detach /tmp/wix_simulation_latest origin/qa/wix-sim-latest\n            test -f /tmp/wix_simulation_latest/reports/simulation/LATEST.json\n            echo "Mounted latest asynchronous Wix simulation evidence."\n          else\n            echo "No asynchronous Wix simulation evidence available yet; Director continues without waiting."\n          fi\n'''
+          tail=tail.replace(director_marker, qa_mount+director_marker,1)
+          s=head+tail
+
+          old='Independent audit worktrees: /tmp/wix_audit-integration, /tmp/wix_audit-rules, /tmp/wix_audit-dashboard, /tmp/wix_audit-billing. Only VERDICT: ACCEPT lanes may be integrated.'
+          new='Independent audit worktrees: /tmp/wix_audit-integration, /tmp/wix_audit-rules, /tmp/wix_audit-dashboard, /tmp/wix_audit-billing. Latest asynchronous QA may be mounted at /tmp/wix_simulation_latest; if LATEST.json exists you MUST disposition every blocker as repair/resolved/superseded with evidence, but if it is absent you MUST continue without waiting. Only VERDICT: ACCEPT lanes may be integrated.'
+          if old not in s:
+              raise SystemExit('director prompt anchor missing')
+          s=s.replace(old,new,1)
+
+          anchor='''          decision=$(jq -er '.decision | select(. == "continue" or . == "stop" or . == "release_candidate")' "$report_json")\n          test -f docs/NEXT_CYCLE.json\n'''
+          insert='''          decision=$(jq -er '.decision | select(. == "continue" or . == "stop" or . == "release_candidate")' "$report_json")\n          test -f docs/NEXT_CYCLE.json\n\n          qa_latest=/tmp/wix_simulation_latest/reports/simulation/LATEST.json\n          if [[ -f "$qa_latest" ]]; then\n            qa_source=$(jq -er '.source_run_id | type=="string" and length>0' "$qa_latest" >/dev/null && jq -r '.source_run_id' "$qa_latest")\n            qa_verdict=$(jq -er '.verdict | select(. == "PASS" or . == "FAIL" or . == "INCONCLUSIVE")' "$qa_latest")\n            qa_report_rel=$(jq -er '.report | type=="string" and length>0' "$qa_latest" >/dev/null && jq -r '.report' "$qa_latest")\n            qa_report="/tmp/wix_simulation_latest/$qa_report_rel"\n            test -f "$qa_report"\n            jq -e --arg s "$qa_source" --arg v "$qa_verdict" '.simulation_source_run == $s and .simulation_verdict == $v and (.simulation_dispositions|type=="array")' "$report_json" >/dev/null\n            while IFS= read -r blocker; do\n              id=$(jq -r '.id' <<<"$blocker")\n              jq -e --arg id "$id" '[.simulation_dispositions[] | select(.id==$id and (.disposition=="repair" or .disposition=="resolved" or .disposition=="superseded") and (.evidence|type=="array" and length>0))] | length == 1' "$report_json" >/dev/null\n              disposition=$(jq -r --arg id "$id" '.simulation_dispositions[] | select(.id==$id) | .disposition' "$report_json")\n              if [[ "$disposition" == repair ]]; then\n                while IFS= read -r role; do\n                  [[ "$role" == integration || "$role" == rules || "$role" == dashboard || "$role" == billing ]]\n                  jq -e --arg role "$role" '(.repair_lanes // []) | index($role) != null' "$report_json" >/dev/null\n                  jq -e --arg role "$role" '.lanes[$role].status == "active"' docs/NEXT_CYCLE.json >/dev/null\n                done < <(jq -r '.lanes[]' <<<"$blocker")\n              fi\n            done < <(jq -c '.blockers[]?' "$qa_report")\n          fi\n'''
+          if anchor not in s:
+              raise SystemExit('director enforcement anchor missing')
+          s=s.replace(anchor,insert,1)
+
+          p.write_text(s)
+          PY
+
+      - name: Patch main and self-remove
+        shell: bash
+        run: |
+          set -euo pipefail
+          python /tmp/patch_async_qa.py
+          grep -q 'Mount latest asynchronous simulated-Wix feedback if available' .github/workflows/wix-build-loop.yml
+          grep -q 'simulation_dispositions' .github/workflows/wix-build-loop.yml
+          git config user.name "wix-workflow-maintenance"
+          git config user.email "wix-workflow-maintenance@users.noreply.github.com"
+          git rm .github/workflows/patch-async-qa-once.yml
+          git add .github/workflows/wix-build-loop.yml
+          git commit -m "qa: consume latest async Wix simulation in Director"
+          git push origin main
+
+      - name: Patch accepted lab orchestration only
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin lab/wix-rules
+          git switch -C lab/wix-rules origin/lab/wix-rules
+          python /tmp/patch_async_qa.py
+          grep -q 'Mount latest asynchronous simulated-Wix feedback if available' .github/workflows/wix-build-loop.yml
+          git add .github/workflows/wix-build-loop.yml
+          git commit -m "qa: consume latest async Wix simulation in Director"
+          git push origin lab/wix-rules

@@ -61,3 +61,5 @@ jobs:
           git add .github .opencode AGENTS.md directives/DIRECTOR.md docs/agent-workflow.md
           git commit -m "sync public-safe autonomous infrastructure"
           git push origin "$LAB_BRANCH"
+
+# one-shot trigger

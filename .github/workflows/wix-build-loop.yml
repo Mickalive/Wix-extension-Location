@@ -22,7 +22,6 @@ on:
 permissions:
   contents: write
   actions: write
-  issues: write
 
 concurrency:
   group: wix-autonomous-product-factory
@@ -88,7 +87,7 @@ jobs:
         shell: bash
         run: |
           active=$(jq '[.lanes[] | select(.status == "active")] | length' docs/NEXT_CYCLE.json)
-          gh issue comment "$STATUS_ISSUE" --repo "$GITHUB_REPOSITORY" --body "### Wix product cycle ${CYCLE_INDEX} started
+          printf '%s\n' "### Wix product cycle ${CYCLE_INDEX} started
           Run: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}
           Evidence-backed active lanes: **${active}**. Blocked/complete lanes will not consume OX. Every active builder is independently audited before integration."
 
@@ -465,7 +464,7 @@ jobs:
           GATE: ${{ steps.outcome.outputs.gate }}
         shell: bash
         run: |
-          gh issue comment "$STATUS_ISSUE" --repo "$GITHUB_REPOSITORY" --body "### Wix build director outcome
+          printf '%s\n' "### Wix build director outcome
           Run: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}
           Director: **${DECISION}**
           Deterministic gate: **${GATE}**"
@@ -554,14 +553,14 @@ jobs:
             if (( MAX_CYCLES == 0 || next <= MAX_CYCLES )); then
               gh workflow run wix-build-loop.yml --repo "$GITHUB_REPOSITORY" --ref main -f cycle_index="$next" -f max_cycles="$MAX_CYCLES" -f human_note="$note"
             else
-              gh issue comment "$STATUS_ISSUE" --repo "$GITHUB_REPOSITORY" --body "Autonomous build reached its explicitly configured cycle cap. Accepted state is preserved on lab/wix-rules."
+              printf '%s\n' "Autonomous build reached its explicitly configured cycle cap. Accepted state is preserved on lab/wix-rules."
             fi
           elif [[ "$DIRECTOR_DECISION" == release_candidate && "$RELEASE_VERDICT" == READY ]]; then
-            gh issue comment "$STATUS_ISSUE" --repo "$GITHUB_REPOSITORY" --body "## Release candidate READY
+            printf '%s\n' "## Release candidate READY
             Director, deterministic gate and independent release auditor agree. Autonomous coding has stopped."
           elif [[ "$RELEASE_VERDICT" == BLOCKED_EXTERNAL ]]; then
-            gh issue comment "$STATUS_ISSUE" --repo "$GITHUB_REPOSITORY" --body "## Build blocked only by an external Wix prerequisite
+            printf '%s\n' "## Build blocked only by an external Wix prerequisite
             Accepted code is preserved. See the release report for the minimum human-owned Wix action."
           else
-            gh issue comment "$STATUS_ISSUE" --repo "$GITHUB_REPOSITORY" --body "Autonomous build stopped by director decision: ${DIRECTOR_DECISION}. Accepted state is preserved."
+            printf '%s\n' "Autonomous build stopped by director decision: ${DIRECTOR_DECISION}. Accepted state is preserved."
           fi

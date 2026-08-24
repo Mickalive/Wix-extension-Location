@@ -1,0 +1,58 @@
+name: One-shot Actions History Cleanup
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/cleanup-actions-history.yml"
+  workflow_dispatch:
+
+permissions:
+  actions: write
+  contents: write
+  issues: write
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+        with:
+          fetch-depth: 1
+      - name: Delete obsolete completed Actions runs
+        env:
+          GH_TOKEN: ${{ github.token }}
+          KEEP_RECON_RUN: "32686475370"
+        shell: bash
+        run: |
+          set -euo pipefail
+          runs=$(gh run list --repo "$GITHUB_REPOSITORY" --limit 100 --json databaseId,name,status,conclusion,createdAt)
+          latest_ci=$(jq -r '[.[] | select(.name == "CI" and .status == "completed")] | sort_by(.createdAt) | last | .databaseId // empty' <<<"$runs")
+          latest_build=$(jq -r '[.[] | select(.name == "Wix Autonomous Product Factory" and .status == "completed")] | sort_by(.createdAt) | last | .databaseId // empty' <<<"$runs")
+          latest_launch=$(jq -r '[.[] | select(.name == "Wix Autonomous Launch Bridge" and .status == "completed")] | sort_by(.createdAt) | last | .databaseId // empty' <<<"$runs")
+          deleted=0
+          kept=0
+          while IFS=$'\t' read -r id name status; do
+            [[ -n "$id" ]] || continue
+            if [[ "$status" != completed || "$id" == "$GITHUB_RUN_ID" || "$id" == "$KEEP_RECON_RUN" || "$id" == "$latest_ci" || "$id" == "$latest_build" || "$id" == "$latest_launch" ]]; then
+              kept=$((kept + 1))
+              continue
+            fi
+            echo "Deleting obsolete run $id ($name)"
+            gh api --method DELETE "repos/$GITHUB_REPOSITORY/actions/runs/$id" >/dev/null || echo "::warning::Could not delete run $id"
+            deleted=$((deleted + 1))
+          done < <(jq -r '.[] | [.databaseId, .name, .status] | @tsv' <<<"$runs")
+          echo "Deleted $deleted obsolete completed run(s); kept $kept relevant/active run(s)."
+          gh issue comment 1 --repo "$GITHUB_REPOSITORY" --body "### Actions history cleanup\nDeleted **${deleted}** obsolete completed run(s). Preserved active runs, recon run ${KEEP_RECON_RUN}, and the latest useful CI/build/launch snapshots. The temporary cleanup workflow will now remove itself."
+      - name: Remove temporary cleanup workflow from repository
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "wix-maintenance"
+          git config user.email "wix-maintenance@users.noreply.github.com"
+          git rm .github/workflows/cleanup-actions-history.yml
+          git commit -m "chore: remove one-shot Actions cleanup workflow"
+          git push origin HEAD:main

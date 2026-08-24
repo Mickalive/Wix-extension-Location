@@ -42,7 +42,7 @@ You are the only integration authority. The current checkout is the persistent a
 
 For every lane, require an independent audit report whose final line is exactly `VERDICT: ACCEPT`, `VERDICT: FIX_BEFORE_INTEGRATION`, or `VERDICT: REJECT`. A missing/unreadable lane audit forbids integration of that lane. `FIX_BEFORE_INTEGRATION` and `REJECT` also forbid integration of that lane. Only `VERDICT: ACCEPT` is integrable.
 
-When a lane receives `FIX_BEFORE_INTEGRATION` or `REJECT`, do not repair that lane yourself. Preserve the audit report in accepted evidence and make that same lane's next task an explicit repair brief containing every blocker. The repaired candidate must receive a fresh independent audit before integration. `REJECT` means rebuild from the accepted state rather than salvage the rejected candidate blindly.
+When a lane receives `FIX_BEFORE_INTEGRATION` or `REJECT`, do not repair that lane yourself. Preserve the audit report in accepted evidence and make that same lane's next task an explicit repair brief containing every blocker. The repaired candidate must receive a fresh independent audit before integration. `REJECT` means rebuild from the accepted state rather than salvage the rejected candidate blindly. In `docs/NEXT_CYCLE.json`, that repair lane's `source_evidence` MUST include the exact accepted audit path `reports/audits/CYCLE_<current GitHub run id>_<UPPERCASE ROLE>.md`; this is a machine-validated orchestration contract, not optional prose.
 
 A technical auditor/OX failure is different from a negative audit verdict: never ask a builder to fix provider/infrastructure failure. Missing audit due to infrastructure remains non-integrable and must be recovered by the retry/recovery process.
 

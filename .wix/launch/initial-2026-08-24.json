@@ -1,5 +1,5 @@
 {
-  "recon_cycles": 3,
+  "recon_cycles": 1000000,
   "build_cycles": 0,
-  "human_note": "First prove current Wix architecture and production API feasibility. Then build the complete Advanced Rules plugin autonomously with independent lane audits and release-readiness review. Prioritize an operational publishable product over code volume."
+  "human_note": "First prove current Wix architecture and production API feasibility. Then build the complete Advanced Rules plugin autonomously with independent builder-auditor lanes and release-readiness review. Prioritize an operational publishable product over code volume."
 }

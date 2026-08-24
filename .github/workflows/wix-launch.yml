@@ -6,6 +6,9 @@ on:
       - main
     paths:
       - ".wix/launch/*.json"
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -23,7 +26,7 @@ env:
 jobs:
   dispatch:
     name: Dispatch current autonomous phase
-    if: ${{ github.event.repository.visibility == 'private' }}
+    if: ${{ github.event_name == 'push' && github.event.repository.visibility == 'private' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
@@ -93,3 +96,46 @@ jobs:
           Phase detected: **${PHASE}**
           Workflow: **${target}**
           No product agent can bypass the audit/director gates."
+
+  watchdog:
+    name: Recover transient Ox outage
+    if: ${{ github.event.repository.visibility == 'private' && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout watchdog
+        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Detect current persistent phase
+        id: phase
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          auth=$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)
+          phase=recon
+          if git -c "http.extraheader=AUTHORIZATION: basic $auth" ls-remote --exit-code --heads origin "refs/heads/$LANE_BRANCH" >/dev/null 2>&1; then
+            git -c "http.extraheader=AUTHORIZATION: basic $auth" fetch origin "$LANE_BRANCH:refs/remotes/origin/$LANE_BRANCH"
+            phase=$(git show "origin/$LANE_BRANCH:docs/state.json" | jq -er '.phase')
+          fi
+          [[ "$phase" == recon || "$phase" == build ]]
+          echo "phase=$phase" >> "$GITHUB_OUTPUT"
+
+      - name: Re-run only transiently failed Ox jobs
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PHASE: ${{ steps.phase.outputs.phase }}
+          WIX_TRACKING_ISSUE: "1"
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "$PHASE" == recon ]]; then
+            export WIX_LOOP_WORKFLOW=wix-recon.yml
+          else
+            export WIX_LOOP_WORKFLOW=wix-build-loop.yml
+          fi
+          bash .github/scripts/recover-transient-opencode.sh

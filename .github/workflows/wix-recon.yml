@@ -158,7 +158,7 @@ jobs:
   audit:
     name: Independent reconnaissance audit
     needs: [prepare, research]
-    if: ${{ always() && needs.prepare.result == 'success' && needs.research.result != 'cancelled' }}
+    if: ${{ always() && needs.prepare.result == 'success' && needs.research.result == 'success' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 120
     steps:

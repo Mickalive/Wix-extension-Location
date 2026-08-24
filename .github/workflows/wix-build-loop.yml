@@ -57,7 +57,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          test "${{ github.event.repository.visibility }}" = private
+          test "$GITHUB_REPOSITORY" = "Mickalive/Wix-extension-Location"
+          test "${{ github.event.repository.fork }}" = false
           [[ "$CYCLE_INDEX" =~ ^[1-9][0-9]*$ ]]
           [[ "$MAX_CYCLES" =~ ^[0-9]+$ ]]
           (( MAX_CYCLES == 0 || CYCLE_INDEX <= MAX_CYCLES ))

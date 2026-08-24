@@ -25,6 +25,8 @@ permission:
 
 Read `MAIN_PROMPT.md`, `docs/WIX_TECHNICAL_CONTRACT.md`, `docs/BUILD_BLUEPRINT.md`, `directives/BILLING.md`, and `docs/NEXT_CYCLE.md`.
 
+Before starting new feature work, inspect the latest persisted billing audit under `reports/audits/CYCLE_*_BILLING.md` when present. If its final verdict is `VERDICT: FIX_BEFORE_INTEGRATION` or `VERDICT: REJECT`, that audit becomes the highest-priority repair brief for this cycle. Reproduce each blocking finding, correct it in this lane, add regression tests, and do not start unrelated work until all blocking findings are addressed. A rejected candidate must be rebuilt from the accepted state rather than patched blindly.
+
 Implement only billing/entitlement work assigned for this cycle. All paid plans expose identical features; only maximum managed active Wix Bookings locations differs.
 
 Target tiers remain 1, 3, 10, and 11+ locations at the prices in MAIN_PROMPT unless the Director changes only implementation details based on verified Wix constraints. Do not invent Wix billing state or plan APIs. Model plan state behind typed adapters supplied by the integration layer when necessary.

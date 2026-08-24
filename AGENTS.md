@@ -34,10 +34,13 @@ Owns the Wix dashboard configuration UX, accessibility, validation, preview/expl
 Owns pricing-plan recognition, count of managed active Bookings locations, entitlement enforcement, upgrade states and billing-related tests. Feature availability must remain identical across paid tiers; only supported location count changes.
 
 ### lane-auditor
-Each builder lane has an independent adversarial audit. Auditors inspect the real candidate diff, run deterministic checks, verify scope boundaries and try edge cases rather than rubber-stamping.
+Each builder lane has an independent adversarial audit. Auditors inspect the real candidate diff, run deterministic checks, verify scope boundaries and try edge cases rather than rubber-stamping. Every audit ends with exactly `VERDICT: ACCEPT`, `VERDICT: FIX_BEFORE_INTEGRATION`, or `VERDICT: REJECT`.
+
+### Mandatory repair feedback loop
+Only `VERDICT: ACCEPT` permits integration. `FIX_BEFORE_INTEGRATION` and `REJECT` send the exact findings back to the same specialized builder in the next autonomous cycle. That builder must repair the findings before starting new feature work, add regression tests, and submit a fresh candidate to a new independent audit. A technical/OX audit crash is infrastructure failure and is handled by retry/watchdog rather than being misrouted to a code builder.
 
 ### wix-build-director
-The only integration authority. It reads candidates and audits, ports only accepted work into `lab/wix-rules`, resolves cross-lane conflicts, runs integration checks, updates next-cycle directives, and decides continue/stop/release_candidate.
+The only integration authority. It reads candidates and audits, ports only `ACCEPT` work into `lab/wix-rules`, preserves failed-audit findings as the next repair brief, resolves cross-lane conflicts for accepted work, runs integration checks, updates next-cycle directives, and decides continue/stop/release_candidate.
 
 ### release-readiness-auditor
 Runs after integrated state exists. It checks build/test health, technical-contract compliance, Wix production-readiness assumptions, permissions, destructive-write safety, billing coherence and remaining manual prerequisites. It may block release candidacy.

@@ -29,6 +29,19 @@
  *       returned unwrapped, including a legit `null` ("nothing pending for
  *       this scope"). Same strict envelope rule as above.
  *
+ * Entitlement meter endpoint (DASH-C4-1a; Blueprint §4 flow 5):
+ *   getEntitlementMeter()     -> GET <base>/meter
+ *       success body is the PINNED cross-lane DTO (identically pinned in
+ *       INT-C4-1c and docs/NEXT_CYCLE.json cross_lane_compatibility):
+ *         { meter:    { count: number|null, degraded: boolean },
+ *           coverage: { allowedLocationIds: string[], overLimit: boolean,
+ *                       degraded: boolean, warning: string|null } }
+ *       returned verbatim after strict shape validation. 404 (documented n/a:
+ *       no usage information) maps to `null`. An empty 2xx body, malformed
+ *       JSON, or any body not matching the pinned shape is a protocol
+ *       violation and surfaces as BAD_RESPONSE — the dashboard must never
+ *       render an entitlement state invented from a drifted payload.
+ *
  * Path prefix note: paths here are relative to `baseUrl` exactly like the
  * existing `/ruleset` and `/apply-plan` methods; final URL reconciliation is
  * a scaffold-time concern documented in src/platform/http/README.md.
@@ -209,6 +222,65 @@ export function createServicesBridge(options = {}) {
     return parsed[envelopeKey];
   }
 
+  /**
+   * Strict pinned-DTO request for the entitlement meter. Identical error
+   * taxonomy to `request`/`requestEnvelope`, but the 2xx body MUST match the
+   * pinned `{meter, coverage}` shape exactly (see module header): an empty,
+   * malformed, or drifted success body is BAD_RESPONSE, never silently
+   * interpreted as data. Only a 404 status maps to `null` (documented n/a).
+   */
+  async function requestPinnedMeterDto(path) {
+    const transport = await getTransport();
+    let raw;
+    try {
+      raw = await transport(`${baseUrl}${path}`, {
+        method: 'GET',
+        headers: {},
+        body: undefined,
+        timeoutMs,
+      });
+    } catch (error) {
+      throw new BridgeError('TRANSPORT_FAILURE', `Request to GET ${path} failed before a response arrived.`, {
+        cause: error,
+      });
+    }
+
+    const status = extractStatus(raw);
+    if (status === 404) return null;
+    if (status < 200 || status >= 300) {
+      throw new BridgeError(`HTTP_${status}`, `GET ${path} responded with status ${status}.`, {
+        status,
+      });
+    }
+
+    const text = await readBodyText(raw);
+    if (text.trim() === '') {
+      throw new BridgeError(
+        'BAD_RESPONSE',
+        `GET ${path} returned an empty 2xx body where the entitlement meter DTO was required.`,
+        { status },
+      );
+    }
+    let parsed;
+    try {
+      parsed = JSON.parse(text);
+    } catch (error) {
+      throw new BridgeError(
+        'BAD_RESPONSE',
+        `GET ${path} returned a 2xx body that is not valid JSON.`,
+        { status, cause: error },
+      );
+    }
+    if (!isEntitlementMeterDto(parsed)) {
+      throw new BridgeError(
+        'BAD_RESPONSE',
+        `GET ${path} returned a 2xx body that does not match the pinned entitlement meter DTO.`,
+        { status },
+      );
+    }
+    return parsed;
+  }
+
   return {
     request,
     /** Active rule set or null when none exists (404 semantics). */
@@ -249,5 +321,36 @@ export function createServicesBridge(options = {}) {
     recover(scope) {
       return requestEnvelope('/recover', { method: 'POST', body: { scope }, envelopeKey: 'recovery' });
     },
+    /**
+     * Billable-location meter + entitlement coverage (DASH-C4-1a; Blueprint
+     * §4 flow 5). Returns the pinned `{meter, coverage}` DTO verbatim, or
+     * null when the endpoint reports no usage information (404 semantics).
+     */
+    getEntitlementMeter() {
+      return requestPinnedMeterDto('/meter');
+    },
   };
+}
+
+/**
+ * Strict shape check for the pinned entitlement meter DTO. Required fields
+ * must carry exactly the pinned types; unknown extra fields are tolerated so
+ * a purely additive backend extension cannot break the dashboard.
+ *
+ * @param {unknown} value
+ * @returns {boolean}
+ */
+function isEntitlementMeterDto(value) {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
+  const { meter, coverage } = value;
+  if (typeof meter !== 'object' || meter === null || Array.isArray(meter)) return false;
+  if (typeof coverage !== 'object' || coverage === null || Array.isArray(coverage)) return false;
+  if (!(meter.count === null || typeof meter.count === 'number')) return false;
+  if (typeof meter.degraded !== 'boolean') return false;
+  if (!Array.isArray(coverage.allowedLocationIds)) return false;
+  if (!coverage.allowedLocationIds.every((id) => typeof id === 'string')) return false;
+  if (typeof coverage.overLimit !== 'boolean') return false;
+  if (typeof coverage.degraded !== 'boolean') return false;
+  if (!(coverage.warning === null || typeof coverage.warning === 'string')) return false;
+  return true;
 }

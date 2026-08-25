@@ -672,6 +672,17 @@ export function renderRulesEditorPage(options) {
     }
   }
 
+  /**
+   * Audit N-A (CYCLE_32792897988_DASHBOARD): the "Recover interrupted apply"
+   * affordance requires a tracked ScheduleScope, so failed-state guidance may
+   * mention it ONLY when state.lastMutation?.scope is known. Without a scope
+   * the sentence would be unfollowable — exactly the first-probe-failure /
+   * all-null-probe states where no observation ever carried one.
+   */
+  function hasRecoverableScope() {
+    return Boolean(store.getState().lastMutation?.scope);
+  }
+
   /** Maps one bounded-poll outcome to the visible terminal apply state. */
   function dispatchApplyOutcome(outcome, draftAtApply) {
     switch (outcome.kind) {
@@ -699,19 +710,31 @@ export function renderRulesEditorPage(options) {
       case 'FAILED_TERMINAL':
         store.dispatch({
           type: 'APPLY_FAILED',
-          message: `The apply ended in an unresolved state (${outcome.state}). It will not progress on its own. Use “Recover interrupted apply” to restore your schedules.`,
+          message:
+            `The apply ended in an unresolved state (${outcome.state}). It will not progress on its own.` +
+            (hasRecoverableScope()
+              ? ' Use “Recover interrupted apply” to restore your schedules.'
+              : ''),
         });
         return;
       case 'EXHAUSTED':
         store.dispatch({
           type: 'APPLY_FAILED',
-          message: `The apply result could not be confirmed after ${outcome.attempts} checks. Use “Recover interrupted apply” if your schedules seem stuck, or check back later.`,
+          message:
+            `The apply result could not be confirmed after ${outcome.attempts} checks.` +
+            (hasRecoverableScope()
+              ? ' Use “Recover interrupted apply” if your schedules seem stuck, or check back later.'
+              : ' Check back later.'),
         });
         return;
       case 'ERROR':
         store.dispatch({
           type: 'APPLY_FAILED',
-          message: `${describeBridgeFailure(outcome.error, 'Apply')} It is not known whether the change set completed. Use “Recover interrupted apply” if your schedules seem stuck.`,
+          message:
+            `${describeBridgeFailure(outcome.error, 'Apply')} It is not known whether the change set completed.` +
+            (hasRecoverableScope()
+              ? ' Use “Recover interrupted apply” if your schedules seem stuck.'
+              : ''),
         });
         return;
       default:
@@ -724,8 +747,16 @@ export function renderRulesEditorPage(options) {
    * Explicit user-initiated recovery (T-RB1 UX counterpart). Reached ONLY
    * from the recover button's click handler — never from rendering, polling
    * or timers.
+   *
+   * Audit N-B (CYCLE_32792897988_DASHBOARD): same-tick synthetic multi-clicks
+   * can reach this handler before the disabled re-render lands, so a trivial
+   * synchronous in-flight guard collapses them into one bridge call. Server
+   * recovery is idempotent anyway; this keeps the client honest too.
    */
+  let recoverInFlight = false;
+
   async function handleRecover() {
+    if (recoverInFlight) return;
     const state = store.getState();
     const scope = state.lastMutation?.scope ?? null;
     if (!bridge || !scope) {
@@ -735,6 +766,7 @@ export function renderRulesEditorPage(options) {
       });
       return;
     }
+    recoverInFlight = true;
     store.dispatch({ type: 'RECOVER_START' });
     try {
       const recovery = await bridge.recover(scope);
@@ -748,6 +780,8 @@ export function renderRulesEditorPage(options) {
         type: 'RECOVER_UNAVAILABLE',
         message: describeBridgeFailure(error, 'Recovery'),
       });
+    } finally {
+      recoverInFlight = false;
     }
   }
 

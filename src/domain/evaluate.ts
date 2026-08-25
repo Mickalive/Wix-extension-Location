@@ -14,6 +14,23 @@
  *   3. caps per day/service/location with declared statuses;
  *   4. duplicate protection (identity-free first, C1).
  *
+ * Target-aware semantics (cycle 4, RULES-C4-1; Contract §5.3): an OPTIONAL
+ * `deps.targetContext` distinguishes CREATE from CANCEL and RESCHEDULE.
+ * Absent context ⇒ every family evaluates exactly as before (CREATE
+ * semantics, bit-for-bit). Per-target rule-family matrix and rationale:
+ * src/domain/README.md ("Target-aware evaluation"). Summary:
+ *   - CREATE: all families (legacy behavior verbatim).
+ *   - CANCEL: classification families ONLY — a cancellation frees capacity,
+ *     claims no new opening hours, and unwinds a slot hold, so caps,
+ *     windows/exceptions, duplicates and entitlement coverage cannot
+ *     meaningfully constrain it; §5.3 keeps CANCEL fail-closed, so
+ *     classification still blocks on RULESET_INVALID / INVALID_SLOT /
+ *     EVALUATION_ERROR.
+ *   - RESCHEDULE: availability families evaluate against the PROPOSED slot
+ *     (windows/exceptions/caps exactly as CREATE); duplicate detection
+ *     excludes the subject booking being rescheduled (`subjectBookingId`)
+ *     while genuine overlaps with OTHER bookings still block.
+ *
  * B4 REPAIR (audit CYCLE_32692407760_RULES): stage 2 no longer rejects a slot
  * merely because its end lands on the next calendar day. resolveSlot
  * normalizes an end exactly at local midnight to endMinute=1440, which fits a
@@ -44,19 +61,33 @@ import type {
   PolicyDecision,
   RuleOutcome,
 } from '../shared/types';
-import type { RuleSet } from './ports';
+import type { EvaluationTargetContext, RuleSet } from './ports';
 
 /**
  * Pre-resolved evaluation dependencies. `countForQuery` returns null when the
  * counter is unavailable (platform adapter maps infrastructure failures to
  * null): caps then degrade fail-open WITH a visible notice — never silently
  * and never by throwing (Blueprint §4 flow 4).
+ *
+ * `targetContext` is ADDITIVE (cycle 4, RULES-C4-1) and optional: absent ⇒
+ * legacy CREATE semantics bit-for-bit, so accepted platform/billing consumers
+ * compile and behave unchanged (docs/NEXT_CYCLE.json
+ * canonical_contracts_notice).
  */
 export interface EvaluationDeps {
   entitlement: PolicyDecision;
   countForQuery(query: CountQuery): number | null;
   existingBookings(): readonly ExistingBookingFact[];
+  /** Optional target context; see {@link EvaluationTargetContext}. */
+  targetContext?: EvaluationTargetContext;
 }
+
+/**
+ * Safe default reproducing pre-cycle-4 behavior bit-for-bit. An unknown
+ * runtime target value also degrades to these CREATE semantics (strict typing
+ * prevents it; defense in depth keeps the default harmless).
+ */
+const DEFAULT_TARGET_CONTEXT: EvaluationTargetContext = { target: 'CREATE' };
 
 const MAX_SLOT_DURATION_MS = 24 * 60 * 60 * 1000;
 
@@ -125,34 +156,45 @@ export function evaluateRules(
 
     const explanations: Explanation[] = [];
 
+    // Cycle-4 target context (additive; absent ⇒ CREATE semantics verbatim).
+    const targetContext = deps.targetContext ?? DEFAULT_TARGET_CONTEXT;
+    const target = targetContext.target;
+
     // Stage 1 — entitlement coverage (fail-open on degraded billing signals).
-    if (deps.entitlement.degraded) {
-      explanations.push(
-        explanation(
-          'allow',
-          ENGINE_RULE_IDS.entitlement,
-          OUTCOME_CODES.entitlementDegradedFailOpen,
-          'Location coverage could not be verified and was allowed as a precaution.',
-        ),
-      );
-    } else if (
-      facts.locationId !== null &&
-      facts.locationId !== undefined &&
-      !deps.entitlement.allowedLocationIds.includes(facts.locationId)
-    ) {
-      explanations.push(
-        explanation(
-          'block',
-          ENGINE_RULE_IDS.entitlement,
-          OUTCOME_CODES.locationNotCovered,
-          'Online booking is not available for this location.',
-        ),
-      );
+    // CANCEL skips this family entirely: coverage decides where OUR rules are
+    // enforced for NEW bookings (Contract §7 over-limit posture — coverage
+    // restriction, never data trapping); it must never block cancelling an
+    // existing booking. See the matrix in src/domain/README.md.
+    if (target !== 'CANCEL') {
+      if (deps.entitlement.degraded) {
+        explanations.push(
+          explanation(
+            'allow',
+            ENGINE_RULE_IDS.entitlement,
+            OUTCOME_CODES.entitlementDegradedFailOpen,
+            'Location coverage could not be verified and was allowed as a precaution.',
+          ),
+        );
+      } else if (
+        facts.locationId !== null &&
+        facts.locationId !== undefined &&
+        !deps.entitlement.allowedLocationIds.includes(facts.locationId)
+      ) {
+        explanations.push(
+          explanation(
+            'block',
+            ENGINE_RULE_IDS.entitlement,
+            OUTCOME_CODES.locationNotCovered,
+            'Online booking is not available for this location.',
+          ),
+        );
+      }
     }
     // No locationId (CUSTOM/CUSTOMER location bookings arrive without one per
     // Contract §5.3) → nothing to check → non-blocking.
 
-    // Stage 0b — slot shape.
+    // Stage 0b — slot shape (EVERY target: §5.3 keeps CANCEL fail-closed, so
+    // classification still guards malformed requests).
     const slot = tryResolveSlot(facts);
     if (!slot.ok) {
       explanations.push(
@@ -163,11 +205,26 @@ export function evaluateRules(
           'The selected time is not a valid booking slot.',
         ),
       );
+    } else if (target === 'CANCEL') {
+      // CANCEL: classification families ran above (ruleset validity + slot
+      // shape); nothing else can meaningfully constrain REMOVING an existing
+      // booking:
+      //   - caps count occupancy the cancellation REDUCES (cancel-frees-
+      //     capacity; a maximum cannot be violated by removing a booking);
+      //   - windows/exceptions describe when NEW bookings may be claimed —
+      //     the vacated slot is not a new claim (a holiday closure must not
+      //     strand an existing reservation);
+      //   - duplicate protection stops double-HOLDING a slot; a cancellation
+      //     unwinds a hold;
+      //   - entitlement coverage is plan posture, not a booking rule (§7).
+      // With no blocking families, CANCEL resolves to the explicit allow
+      // below (or any future non-blocking notices).
     } else {
       const { targetDate, startMinute, endMinute, crossesMidnight } = slot.resolved;
       const weekday = weekdayOfDate(targetDate);
 
-      // Stage 2 — exceptions, then weekly windows.
+      // Stage 2 — exceptions, then weekly windows (CREATE and RESCHEDULE,
+      // both against the proposed slot; CANCEL never reaches this branch).
       const dayExceptions = resolveDayExceptions(rules, targetDate);
       let windows: MinuteWindow[] | null;
       let closedByException = false;
@@ -219,7 +276,9 @@ export function evaluateRules(
         }
       } // windows === null → weekly unconstrained (fresh-install default-open)
 
-      // Stage 3 — caps.
+      // Stage 3 — caps (CREATE and RESCHEDULE; CANCEL never reaches this
+      // branch). RESCHEDULE evaluates the PROPOSED slot: the queries bucket
+      // the proposed site-zone day exactly as CREATE does.
       for (const limit of applicableLimits(rules, facts)) {
         const query = countQueryForLimit(limit, facts, targetDate, facts.timezone);
         let count: number | null;
@@ -249,7 +308,12 @@ export function evaluateRules(
         }
       }
 
-      // Stage 4 — duplicates (identity-free first).
+      // Stage 4 — duplicates (identity-free first). RESCHEDULE excludes the
+      // SUBJECT booking being rescheduled (subjectBookingId): the mover's own
+      // still-existing booking must never flag DUPLICATE_BOOKING against its
+      // own proposed slot, while genuine overlaps with OTHER bookings (same
+      // service, or same identity key across services) still block. Without a
+      // subject id the exclusion is inert (documented residual — see README).
       const conflict = findDuplicateConflict(
         {
           serviceId: facts.serviceId,
@@ -257,6 +321,8 @@ export function evaluateRules(
           slotEndMs: slot.endMs,
           targetDate,
           identityKey: facts.identityKey ?? null,
+          excludeBookingId:
+            target === 'RESCHEDULE' ? (targetContext.subjectBookingId ?? null) : null,
         },
         deps.existingBookings(),
         facts.timezone,

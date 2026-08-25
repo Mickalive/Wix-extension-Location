@@ -10,17 +10,17 @@ evaluation deps.
 
 | Path | Responsibility |
 |---|---|
-| `ports.ts` | Canonical adapter ports (accepted contract; frozen — see `docs/NEXT_CYCLE.json`) |
+| `ports.ts` | Canonical adapter ports (accepted contract; cycle-4 ADDITIVE evolution `EvaluationTargetContext` authorized by `docs/NEXT_CYCLE.json` `canonical_contracts_notice`) |
 | `model/primitives.ts` | Local dates, wall-clock minutes, weekday math, reserved ids, window interval algebra |
 | `time/intlZone.ts` | IANA zone decomposition/construction; DST gap/overlap policies (Contract §4.7) |
 | `time/wallClock.ts` | Proposal slot → site-zone wall-clock facts (`resolveSlot`) |
 | `windows/weeklyWindows.ts` | Weekly windows per location/service; split hours; location ∩ service intersection |
 | `exceptions/exceptions.ts` | Date closures/overrides; CLOSED beats OVERRIDE; same-tier override intersection |
 | `limits/limits.ts` | Caps per day/service/location; declared statuses; site-zone day → UTC count bounds |
-| `duplicates/duplicates.ts` | Identity-free-first duplicate protection + optional identity key |
+| `duplicates/duplicates.ts` | Identity-free-first duplicate protection + optional identity key + RESCHEDULE subject exclusion |
 | `explain/explain.ts` | Explainable outcomes: stable ruleIds and machine codes, customer-safe messages |
 | `validate.ts` | Structural RuleSet validation shared with the dashboard mirror |
-| `evaluate.ts` | The single decision function (`evaluateRules`) |
+| `evaluate.ts` | The single decision function (`evaluateRules`); target-aware per CREATE/CANCEL/RESCHEDULE |
 
 ## Binding semantics
 
@@ -76,10 +76,123 @@ spans into weekly windows.
   identity.
 - Identity key (only when supplied): same key + overlapping time + different
   service ⇒ `IDENTITY_TIME_CONFLICT`.
+- **RESCHEDULE subject exclusion (cycle 4):** when the evaluation carries
+  `targetContext.subjectBookingId`, existing facts carrying that booking id are
+  skipped — the mover's own still-existing booking never conflicts with its own
+  proposed slot, while genuine overlaps with OTHER bookings still block.
+  Matching is conservative: facts without a `bookingId` can never match.
 - **Known v1 limitation:** start-bucket convention means a native overnight
   booking that starts the PREVIOUS day but overlaps the proposal is not
   caught. Consistent with the caps' bucket convention; revisit with real
   payload evidence at gate T-VP3.
+
+### Target-aware evaluation (cycle 4, RULES-C4-1)
+
+**Motivation (Integration audit `CYCLE_32792897988_INTEGRATION.md` §4–5,
+Observation A):** uniform rule evaluation (a) blocked cancelling the only
+booking on an at-capacity day because the cap counted the very booking being
+cancelled, and (b) flagged a RESCHEDULE overlapping the booker's own
+still-existing booking as `DUPLICATE_BOOKING`. Both probes were reproduced by
+the independent auditor and escalated to this lane under Director coordination.
+
+**Contract evolution (strictly additive, per the cycle-4
+`canonical_contracts_notice`):** `EvaluationDeps` gained one OPTIONAL field,
+
+```ts
+targetContext?: EvaluationTargetContext   // src/domain/ports.ts
+// EvaluationTargetContext = { target: 'CREATE' | 'CANCEL' | 'RESCHEDULE',
+//                             subjectBookingId?: string | null }
+```
+
+`EvaluationTarget` aliases the shared `TargetOperation` union (compile-time
+sync with `failureSemanticsFor`). The six platform targets collapse onto the
+three operations: `*_MULTI_SERVICE` shares its base operation's semantics
+(multi-service bookings are sequences of single-service bookings under one
+operation); the platform layer performs that mapping. **Safe default:** an
+absent context evaluates every family exactly as before cycle 4 — bit-for-bit,
+pinned by Part 1 of `tests/domain/targets/targetAware.spec.ts` (executed green
+against the unmodified tree BEFORE this change landed). Accepted platform and
+billing consumers compile and behave unchanged.
+
+**Per-target rule-family matrix** (binding semantics source: Technical
+Contract §5.3 — validation runs before the operation persists; CREATE/CANCEL
+fail-closed, RESCHEDULE fail-open):
+
+| Rule family | CREATE | CANCEL | RESCHEDULE |
+|---|---|---|---|
+| Fail-closed classification (`RULESET_INVALID`, `INVALID_SLOT`, `EVALUATION_ERROR`) | yes | **yes** | yes |
+| Entitlement coverage | yes | **no** | yes (proposed slot) |
+| Exceptions + weekly windows | yes | **no** | yes (proposed slot) |
+| Caps (day / service / location) | yes | **no** | yes (**PROPOSED slot**) |
+| Duplicate protection | yes | **no** | yes, excluding the subject booking |
+
+Cell rationale:
+
+- **Classification everywhere.** §5.3 keeps CANCEL fail-closed: an internally
+  invalid request or broken ruleset still yields an explicit block, never a
+  silent pass. Target-awareness changes WHICH availability families evaluate;
+  it never weakens failure semantics.
+- **CANCEL: availability families skipped.** The operation REMOVES occupancy:
+  - caps count what the cancellation reduces — "cancel-frees-capacity"; a
+    maximum count cannot be violated by removing a booking, so evaluating caps
+    against counts that include the cancelled booking can only block the
+    release of its own capacity (audit probe 1);
+  - windows/exceptions describe when a NEW slot may be claimed; the vacated
+    slot is not a new claim (a holiday closure must not strand an existing
+    reservation);
+  - duplicate protection stops double-HOLDING a slot; a cancellation unwinds
+    a hold (probe 1's `DUPLICATE_BOOKING` accumulation);
+  - entitlement coverage is plan posture governing where OUR rules apply for
+    new bookings (§7 over-limit posture: restrict coverage, never trap data);
+    it must never block cancelling an existing booking. No entitlement notice
+    is emitted for CANCEL either — the family is skipped, not merely satisfied.
+- **RESCHEDULE: proposed-slot semantics.** Windows/exceptions/caps evaluate
+  exactly as CREATE, against the PROPOSED slot (cap queries bucket the
+  proposed site-zone day → UTC bounds, §4.7). Duplicate detection excludes the
+  subject booking via `subjectBookingId` while same-service overlaps with OTHER
+  bookings (`DUPLICATE_BOOKING`) and cross-service same-key overlaps
+  (`IDENTITY_TIME_CONFLICT`) still block (audit probe 2 + controls).
+
+**Honest residuals (disclosed, never hidden — §11 C6 culture):**
+
+1. **RESCHEDULE same-day self-count in caps.** If the subject booking's OLD
+   slot falls inside the PROPOSED slot's site-zone day bucket, an authoritative
+   counter that includes it can block a same-day reschedule on an at-capacity
+   day even though total occupancy would be unchanged. Excluding it would
+   require subtracting the subject from authoritative numeric counts based on
+   snapshot assumptions the pure domain cannot verify — not done in v1. If
+   T-VP evidence shows merchant impact, this needs a Director-coordinated
+   platform-side count adjustment, not a domain guess.
+2. **`subjectBookingId` depends on unproven payload shape.** Whether RESCHEDULE
+   payloads carry the rescheduled booking's identifier is UNPROVEN until the
+   payload-probe gates run. Without a subject id the exclusion is inert and
+   RESCHEDULE duplicate detection degrades to pre-cycle-4 behavior (own-booking
+   overlap can flag). RESCHEDULE enforcement is fail-open best-effort forever
+   (§5.3); no enforcement claim is made or permitted (§10 #9, §12).
+3. Unknown runtime target values degrade to CREATE semantics (strict typing
+   prevents them; the default keeps any such call harmless).
+
+**Dev-site gate implications (Contract §15, T-VP1–T-VP5):**
+
+- **Per-day cap probe must include cancel-frees-capacity:** seed a day at cap,
+  cancel the counting booking through a real surface, assert the plugin does
+  NOT block the cancellation (optionally follow with a create proving capacity
+  was freed). Domain regression: `targetAware.spec.ts` probe 1.
+- **Payload-field probe first (T-VP3) extends to RESCHEDULE identity inputs:**
+  capture whether real RESCHEDULE payloads carry the rescheduled booking's id
+  (feeds `subjectBookingId`) alongside the existing `contactDetails` /
+  `metadata.identity` capture. If the id never arrives, residual 2 applies and
+  must stay documented — the layer must remain honest rather than ship false
+  self-overlap blocks or pretend exclusion.
+- **Reschedule surface coverage (widget / dashboard / API):** record that
+  domain-level RESCHEDULE evaluation is target-aware while enforcement remains
+  FAIL_OPEN best-effort forever; surface coverage claims stay banned until the
+  gates pass (§5.3, §10 #9, §12 banned claim 2).
+- **Timeout/failure injection:** unchanged binding split — fail-closed
+  CREATE/CANCEL vs fail-open RESCHEDULE. Target-awareness never alters failure
+  semantics, only family coverage.
+- **Out-of-hours create probe (T-VP1):** unchanged; the CREATE path is pinned
+  bit-for-bit by the default-contract corpus.
 
 ## Fail-closed classification
 

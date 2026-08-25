@@ -33,6 +33,7 @@ missing, invalid or expired tokens BEFORE any store/gateway is consulted
 | POST `/api/apply-plan` | `postApplyPlan` | exactly `{ confirmedDiffHash }` | `{ summary: MutationSummary, requestedBy }` | auth, INVALID_QUERY, NOT_FOUND (unknown hash), orchestrator codes |
 | GET `/api/mutation-status?planId=` | `getMutationStatus` | query `planId` | `{ status: MutationStatusProjection }` | auth, INVALID_QUERY, NOT_FOUND |
 | POST `/api/recover` | `postRecover` | `{ scope }` | `{ recovery: RecoverySummary \| null }` | auth, INVALID_QUERY |
+| GET `/api/meter` | `getEntitlementMeter` | — | pinned `{ meter: { count, degraded }, coverage: { allowedLocationIds, overLimit, degraded, warning } }` (INT-C4-1c; DASH-C4-1 fixture) | auth only — post-auth gate failures degrade IN-BODY (fail-open §7/C5), never 5xx |
 
 All response DTOs compose canonical `src/shared/types.ts` primitives
 (`RuleSetDTO`, `MutationRecordState`, `ScheduleScope`, `Instant`, ...);

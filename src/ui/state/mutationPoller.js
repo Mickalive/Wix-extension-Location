@@ -16,6 +16,9 @@
  *     no further getStatus() call happens afterwards.
  *   - STOPS ON ERROR: a rejected getStatus() returns an ERROR outcome after
  *     exactly that attempt; polling never resumes by itself.
+ *   - OBSERVER FAULTS ARE CONTAINED (audit N-C, CYCLE_32792897988_DASHBOARD):
+ *     an exception thrown by onObservation is wrapped into the same ERROR
+ *     outcome instead of propagating; polling stops permanently either way.
  *   - NO AUTO-RECOVERY: this controller only READS status. It never calls
  *     recover() and never re-applies anything (Contract §9.2 explicit-intent
  *     rule); recovery is a separate, click-only affordance in the page.
@@ -114,7 +117,17 @@ export async function pollMutationUntilTerminal(options) {
     if (projection !== null && typeof projection === 'object') {
       lastProjection = projection;
       lastState = typeof projection.state === 'string' ? projection.state : null;
-      if (onObservation) onObservation(projection);
+      if (onObservation) {
+        try {
+          onObservation(projection);
+        } catch (error) {
+          // Audit N-C (CYCLE_32792897988_DASHBOARD): an observer exception is
+          // a caller-side bug, but it must never escape as an unhandled
+          // rejection nor leave the loop half-alive. Wrap it into the same
+          // ERROR outcome used for probe failures and stop permanently.
+          return { kind: 'ERROR', error, attempts, lastState, lastProjection };
+        }
+      }
       if (isTerminalMutationState(projection.state)) {
         return {
           kind: classifyTerminalState(projection.state),

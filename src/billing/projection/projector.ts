@@ -27,8 +27,9 @@
  * markers (`originInstanceId`/`copiedFromTemplate`) never leak plan state
  * across instances; clones resolve only from their own signals.
  *
- * Purity: no I/O, no clock, no Wix imports. `receivedAt` and expiration dates
- * are structurally never consulted (Invariant C2).
+ * Purity: no I/O, no clock, no Wix imports. `receivedAt` is never consulted;
+ * expiration dates may ride along in snapshot/installation payloads but no
+ * transition or the resolver ever reads them (Invariant C2).
  */
 
 import type { AppInstanceBillingSnapshot } from '../types';

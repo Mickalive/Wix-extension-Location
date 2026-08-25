@@ -1,49 +1,49 @@
-# Next Cycle — Build Cycle 4
+# Next Cycle — Build Cycle 5
 
-Current phase: **BUILD**. Planning authority: `reports/director/CYCLE_32792897988.json` (Director pass over Product Factory run 32792897988, 2026-08-25). Machine-readable queue: `docs/NEXT_CYCLE.json`.
+Current phase: **BUILD**. Planning authority: `reports/director/CYCLE_32881643441.json` (Director pass over Product Factory run 32881643441, 2026-08-25). Machine-readable queue: `docs/NEXT_CYCLE.json`.
 
-## Outcome of cycle 3 (run 32792897988)
+## Outcome of cycle 4 (run 32881643441)
 
 | Lane | Task | Audit verdict | Disposition |
 |---|---|---|---|
-| integration | INT-C3-1 (booking-time enforcement wiring) | `VERDICT: ACCEPT` | **Integrated** — pure validation-plugin handlers consuming canonical `evaluateRules`; explicit per-item bulk results (maxItems 12, omitted-items hazard); fail-closed CREATE/CANCEL vs fail-open RESCHEDULE; identity-free-first (C1); cached counters; N3/N4/N5 repairs with regressions |
-| rules | RULES-C3-1 (validator parity contract) | `VERDICT: ACCEPT` | **Integrated** — dual-validator parity spec across six corpus families; four honest divergences (R1–R4) pinned and mutation-proven non-vacuous; ports.ts byte-identical |
-| dashboard | DASH-C3-1 (mutation-lifecycle surface) | `VERDICT: ACCEPT` | **Integrated** — bounded permanent-stopping polling, click-gated recovery, one-consent-one-apply, server-shaped mirror seam; DTO fidelity verified against accepted platform code |
-| billing | BILL-C3-1 (projection/reconciliation machine) | `VERDICT: ACCEPT` | **Integrated** — snapshot-beats-stale-events supremacy, 300-run chaos convergence proof, full §7 lifecycle both ways, per-source warning liveness, null-tier fail-open sentinel, `projectedSnapshotSource` handoff port |
+| integration | INT-C4-1 (composition root + GET /meter + compaction + obs-B guard) | `VERDICT: ACCEPT` | **Integrated** — billing→enforcement composition with zero webhook-type leakage; §7 reconciliation seam; bounded dedup retention with proven replay convergence; token-verified meter endpoint (pinned DTO, fail-open degradation) |
+| rules | RULES-C4-1 (target-aware evaluation) | `VERDICT: ACCEPT` | **Integrated** — additive `targetContext` (safe CREATE default); CANCEL frees capacity; RESCHEDULE excludes the mover's own booking; both Observation-A probes pinned as regressions; auditor re-proved bit-for-bit CREATE preservation |
+| dashboard | DASH-C4-1 (LocationsUsage meter page + N-A/N-B/N-C) | `VERDICT: ACCEPT` | **Integrated** — meter page on pinned DTO (allowance state, over-limit CTA new-tab, degraded banner, floor note); recovery-guidance honesty; poller observer containment |
+| billing | BILL-C4-1 (downgrade-through-gate + fidelity folds) | `VERDICT: ACCEPT` | **Integrated** — end-to-end downgrade regression through the public gate API; observations 1/3/4 folded with behavioral proof |
 
-No negative verdicts → **no repair lanes**. All audits preserved under `reports/audits/CYCLE_32792897988_*.md`.
+No negative verdicts → **no repair lanes**. All audits preserved under `reports/audits/CYCLE_32881643441_*.md`.
 
-Integrated-tree deterministic gates: strict typecheck clean · purity green · **392/392** vitest (181 platform + 123 domain + 88 billing) · offline rerun **392/392** · dashboard lane **143/143**.
+Integrated-tree deterministic gates: strict typecheck clean · purity green (**six roots** — Director added `src/platform/composition` per audit obs O2) · **465/465** vitest · offline rerun exit 0 · dashboard lane **186/186**. Arithmetic: 392 base + 34 INT + 31 RULES + 8 BILL = 465 ✓.
 
-Asynchronous simulated-Wix QA: **still not available** (`LATEST.json` absent, no `qa/wix-sim-latest` remote branch). It did not delay this cycle; the next Director pass must mount and disposition it when present.
+Asynchronous simulated-Wix QA: **still not available** (`LATEST.json` absent, no `qa/wix-sim-latest` remote branch). It did not delay this cycle. Noted escalation: the simulation has never completed for any run — release-readiness must treat QA recency as an open gate.
 
-## Key finding dispositions
+## Key dispositions
 
-- **Integration Observation A (escalated to Rules):** uniform rule evaluation blocks cancelling the only booking on an at-capacity day and flags self-overlapping reschedules as `DUPLICATE_BOOKING`. Root cause is canonical domain design → **RULES-C4-1**. CANCEL/RESCHEDULE enforcement stays production-disabled until it lands and T-VP gates confirm.
-- **Rules R1–R4:** Director decisions of record for the future mirror repoint (canonical floor ≥1 wins; overlap check stays UI-advisory; duplicate-date check stays UI simplification; catalog checks move to the seam). Recorded in the director JSON.
-- **Dashboard N-A/N-C** folded into DASH-C4-1; **N-B** optional. **Billing obs 1/3/4** folded into BILL-C4-1; **obs 2** (dedup retention) routed by the auditor to Integration → INT-C4-1(b).
+- **All prior-cycle findings are now closed by integrated code:** Observation A/B (integration), N-A/N-B/N-C (dashboard), Billing obs 1–4.
+- **Cycle-4 audit observations dispositioned:** O2 applied as Director purity-root amendment; Rules obs A → RULES-C5-1(c) drift guard, obs B → INT-C5-1(d); Dashboard N-1 consciously deferred (not contract-mandated), N-2 no-action, N-3 ledgered for T-VP0; Integration O1/O3 recorded.
+- **Canonical contracts:** `ports.ts` accepted at new SHA `d46e0743…18802` after the authorized additive RULES-C4-1 evolution; **frozen in cycle 5**. `shared/**`, `ruleDraftValidators.js` byte-identical.
 
-## Lane assignments for cycle 4
+## Lane assignments for cycle 5
 
 | Lane | Task | Summary | Status |
 |---|---|---|---|
-| integration | INT-C4-1 | Enforcement composition root on billing's `projectedSnapshotSource` (+ periodic-reconciliation seam), bounded dedup retention/compaction for serverless lifetimes, token-verified **GET /meter** endpoint (pinned DTO), obs-B clock guard. | active |
-| rules | RULES-C4-1 | Target-aware evaluation semantics: additive target context so CANCEL frees capacity and RESCHEDULE ignores the booker's own booking; both audit probes become regressions; strictly additive ports.ts evolution owned by this lane. | active |
-| dashboard | DASH-C4-1 | Blueprint's **LocationsUsage meter page** (count vs allowance, over-limit + upgrade CTA new-tab, degraded-warning banner, single-location floor note) on the pinned GET /meter DTO; N-A guidance honesty; N-C poller exception wrap. | active |
-| billing | BILL-C4-1 | Downgrade-through-gate end-to-end regression (coverage shrink, stable ordering, preserved configuration, restore-on-re-upgrade); projection fidelity folds obs 1/3/4. | active |
+| integration | INT-C5-1 | **Activate target-aware enforcement**: supply `targetContext` on every handler `evaluateRules` call (six targets → three operations), injectable subject-booking-facts seam (conservative default = today's behavior), platform-level Observation-A regressions through real handlers, self-count disposition. The cycle-4 domain fix is currently **dormant at runtime** — this closes it. | active |
+| rules | RULES-C5-1 | Target-matrix property hardening: determinism + explanation-completeness sweeps across CREATE/CANCEL/RESCHEDULE, CANCEL-tail drift guard (obs A), README-matrix-vs-code consistency pins. ports.ts frozen. | active |
+| dashboard | DASH-C5-1 | **§7 management-side entitlement restriction** in the RulesEditor using the shipped `getEntitlementMeter()`: restrict NEW rules on uncovered locations (stable-ordering note), never delete existing configuration, degraded warnings, upgrade CTA, graceful 404/null degradation. | active |
+| billing | — | Every §7 requirement implemented, tested, adversarially audited (cycles 2–4). No evidence-backed pre-scaffold task remains; marked **complete** with evidence in NEXT_CYCLE.json. | complete |
 
 ## Cross-lane rules
 
-- Canonical contracts `src/domain/ports.ts`, `src/shared/types.ts`, `src/shared/errors.ts` are accepted (`ports.ts` SHA-256 `af68e698…fbc`). **Only RULES-C4-1 may evolve `ports.ts` this cycle, strictly additively** (optional field, safe default preserving CREATE behavior); anything non-additive returns to Director coordination. `shared/**` remains Director-amendment-only.
-- **GET /meter DTO is pinned identically in INT-C4-1 and DASH-C4-1** (see NEXT_CYCLE.json `cross_lane_compatibility.pinned_dto_get_meter`); the dashboard fixture-tests it until the platform lane lands; the Director resolves drift at integration.
-- **Parity ledger rule:** `tests/domain/uiValidatorParity.spec.ts` fails loudly on validator drift; no lane weakens either side; `ruleDraftValidators.js` stays byte-for-byte unchanged this cycle; R1–R4 apply only at the future repoint, which must consciously update the ledger (Rules audit N1).
-- **Vitest glob rule:** all TS suites run through the platform-owned config glob `tests/**/*.spec.ts`; never narrowed.
-- Forbidden everywhere: production-capability claims before empirical gates pass; enabling CANCEL/RESCHEDULE enforcement claims before RULES-C4-1 lands; PREVIEW_GATED dependencies; UNSUPPORTED mechanisms; fabricated Wix identifiers; committed secrets.
+- **ports.ts FROZEN** at SHA `d46e0743…18802`; INT-C5-1 consumes the optional `targetContext` exactly as accepted; any further evolution needs fresh Director coordination + fresh Rules ACCEPT.
+- **GET /meter DTO stays pinned v1** — no reshaping this cycle; N-1 allowance display deferred.
+- Parity ledger rule unchanged (`ruleDraftValidators.js` byte-for-byte; R1–R4 + N-3 repoint obligations apply only at T-VP0).
+- Vitest glob rule unchanged; dashboard lane runs `node --test` from `tests/ui`.
+- Forbidden everywhere: production-capability claims before empirical gates; reschedule-enforcement promises beyond best-effort; fabricated payload fields (C1 discipline binds INT-C5-1's subject seam doubly); PREVIEW_GATED/UNSUPPORTED mechanisms; secrets.
 
 ## Pending external prerequisites (tracked, non-blocking)
 
 1. Human Wix account + CLI authorization; owner/co-owner API key stored as CI secret.
-2. One-time scaffold/bind producing real appId → executes `docs/runbooks/T_VP0_SCAFFOLD.md` (also resolves UQ1–UQ4 and extends the repo gate to dashboard JS/TS).
+2. One-time scaffold/bind producing real appId → executes `docs/runbooks/T_VP0_SCAFFOLD.md` (resolves UQ1–UQ4; extends repo gate to dashboard JS/TS; enables the parity-ledger/mirror repoints).
 3. One interactive dev-site install consent.
 4. Later: payout setup, release approvals, marketplace submission (never automated).
 

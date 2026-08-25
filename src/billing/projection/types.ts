@@ -14,10 +14,15 @@
  *   NO event — periodic Get App Instance reconciliation is mandatory.
  * - Auto-renewal cancellation fires immediately; the merchant stays paid
  *   until period end (no mid-cycle downgrade path exists).
- * - Webhook `expiresOn` is ADVISORY ONLY (Invariant C2): the payload types
- *   below deliberately carry NO expiration fields, so projection logic is
- *   structurally unable to consult dates. Dunning/expiry behavior is driven
- *   exclusively by snapshot `isFree` signals.
+ * - Webhook `expiresOn` is ADVISORY ONLY (Invariant C2). The purchase and
+ *   auto-renewal-cancellation payload types deliberately carry NO expiration
+ *   field, so those transitions are structurally unable to consult dates.
+ *   Installation payloads alias `AppInstanceBillingSnapshot` and therefore CAN
+ *   carry the optional `billingExpirationDate` — but NO transition ever reads
+ *   it: merges consume only `isFree`/`vendorProductId`/`packageName`, and the
+ *   rendered refinement omits advisory fields entirely (audit
+ *   CYCLE_32792897988_BILLING observation 1). Dunning/expiry behavior is
+ *   driven exclusively by snapshot `isFree` signals.
  */
 
 import type { Instant } from '../../shared/types';
@@ -47,6 +52,12 @@ export interface PaidPlanAutoRenewalCancelledPayload {
  * UQ6 (Contract §13): the exact payload field set is UNVERIFIED — every
  * field is optional and nothing about presence is asserted. Absent/null
  * fields mean "not reported", never "reported empty".
+ *
+ * Because this aliases `AppInstanceBillingSnapshot`, an installation payload
+ * CAN carry advisory fields (`billingExpirationDate`, `freeTrialStatus`) and
+ * clone markers (`originInstanceId`/`copiedFromTemplate`). They ride along
+ * harmlessly: transitions read only `isFree`/`vendorProductId`/`packageName`
+ * (Invariant C2) and the rendered refinement omits everything else.
  */
 export type InstallationBillingPayload = AppInstanceBillingSnapshot;
 
@@ -94,7 +105,19 @@ export interface EventDerivedPlanView {
   autoRenewCancelled: boolean;
 }
 
-/** Which layer currently supplies the projection's resolution. */
+/**
+ * Which layer currently supplies the projection's resolution.
+ *
+ * `'EVENT_DERIVED'` names the SUPPLYING LAYER, not "an event was seen": a
+ * never-reconciled projector with zero events also reports it, because the
+ * event layer's empty view folds to the conservative FREE default of the
+ * accepted decision table (audit CYCLE_32792897988_BILLING observation 4 —
+ * documented and intentional; the initial default under-serves rather than
+ * over-serves). The precise initial-state discriminators are the pair
+ * `reconciledAtLeastOnce === false && generationEventCount === 0`.
+ * `'SNAPSHOT_RECONCILED'` requires a reconciled snapshot with an empty
+ * pending generation.
+ */
 export type ProjectionSource = 'SNAPSHOT_RECONCILED' | 'EVENT_DERIVED';
 
 /**

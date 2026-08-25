@@ -114,8 +114,11 @@ degraded decisions never skip (fail-open coverage).
      (`InvalidReason.message` / `FieldViolation.description`);
    - `invalidReason.code` → programmatic code (`FieldViolation.code`);
    - forward `degradations[]` + `enforcementClaim` to the audit/explain sink.
-5. Wire `ValidationPluginDeps`: `RulesConfigStore`, `EntitlementGate`
-   (billing lane `createEntitlementGate`), `BookingCountGateway` (Count
+5. Wire `ValidationPluginDeps`: `RulesConfigStore`, `EntitlementGate` (built
+   ONCE by the composition root `../composition/entitlementComposition.ts` —
+   `composeValidationEntitlement` wires the billing projector via
+   `projectedSnapshotSource` + `createEntitlementGate` and owns the mandatory
+   §7 reconciliation poll; INT-C4-1a), `BookingCountGateway` (Count
    Extended Bookings adapter + TTL cache), `ExistingBookingsPort`, real clock,
    degradation sink. All scopes per Contract §5; no new permissions.
 6. Record T-VP0/T-VP3 probe evidence (payload fields incl. identity variants)

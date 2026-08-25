@@ -12,13 +12,15 @@ this cycle ships real, tested UI structure and behavior instead of a mockup.
 |---|---|
 | `dom/kit.js` | Tiny DOM abstraction standing in for the deferred React mount; product code receives its document via options, never reads globals. |
 | `pages/rulesEditorPage.js` | Page assembly: windows by location/service, split rows, exceptions, caps, issues, statuses, actions. |
+| `pages/locationsUsagePage.js` | Billable-location meter page (DASH-C4-1a): count vs plan allowance, over-limit state, persistent degraded banner, floor note, upgrade CTA. |
+| `upgrade/upgradeUrl.js` | Dashboard-lane mirror of the contracted Contract §7 upgrade URL builder (see decisions below). |
 | `modals/diffPreviewModal.js` | Contract §9.2 informed-consent dialog. |
 | `state/editorStore.js` | Deterministic state machine: draft, issues, hash-gated confirmation, save/apply states. |
 | `state/mutationPoller.js` | Bounded mutation-status poll controller: stops permanently on terminal state or bridge error; never auto-recovers. |
 | `diff/computeScheduleDiff.js` | Deterministic ops + FNV-1a hash + human descriptions. |
 | `validation/mirror.js` | Single seam between UI and rule-validation semantics (`setValidationSource`). |
 | `validation/ruleDraftValidators.js` | Provisional bundled validators (see below). |
-| `services/bridge.js` | Typed bridge to platform HTTP endpoints; the ONLY module permitted to reference Wix runtime modules (enforced by test). Exposes the rule-set endpoints plus the mutation-lifecycle pair `getMutationStatus(planId)` / `recover(scope)` matching the accepted platform DTOs in `src/platform/http/mutationEndpoints.ts`. |
+| `services/bridge.js` | Typed bridge to platform HTTP endpoints; the ONLY module permitted to reference Wix runtime modules (enforced by test). Exposes the rule-set endpoints, the mutation-lifecycle pair `getMutationStatus(planId)` / `recover(scope)`, and the entitlement meter `getEntitlementMeter()` — each matching the accepted/pinned platform DTOs. |
 | `explain/explainPanel.js` | Renders typed domain `Explanation[]` outcomes verbatim; never re-implements evaluation. |
 
 ## Decisions of record
@@ -61,6 +63,42 @@ this cycle ships real, tested UI structure and behavior instead of a mockup.
    journal — nothing auto-retries or auto-applies anything destructive
    (Contract §9.2). Recovery outcomes render mismatches/notes verbatim rather
    than pretending success.
+6. **Entitlement transparency (DASH-C4-1a, Blueprint §1 pages/LocationsUsage,
+   §4 flow 5, Contract §7).** The meter page renders the PINNED cross-lane
+   `GET /meter` DTO (`{meter:{count,degraded}, coverage:{allowedLocationIds,
+   overLimit,degraded,warning}}`, identically pinned in INT-C4-1c and
+   `docs/NEXT_CYCLE.json`) through `bridge.getEntitlementMeter()`. Bridge-side
+   strict shape validation means a drifted payload surfaces as typed
+   BAD_RESPONSE instead of invented entitlement state; 404 maps to an honest
+   n/a state. UI obligations: count vs plan allowance (the allowance is exactly
+   the covered-ids length when over limit), over-limit notice with the stable-
+   ordering note (default location first, then alphabetical) and a "nothing is
+   deleted" reassurance, single-location floor note at count 0, a PERSISTENT
+   degraded-warning banner whenever any degraded flag or warning is present
+   (fail-open posture must never render as silently healthy — the positive
+   "within your plan" note is suppressed on any degraded signal), and an
+   upgrade CTA implementing the buildUpgradeUrl contract opened in a NEW tab,
+   shown when `overLimit` or tier-restricted. Identifiers arrive injected from
+   the dashboard host at scaffold time and are never fabricated: without them
+   the restriction notices still render but no link can.
+7. **Upgrade URL mirror (DASH-C4-1a).** `upgrade/upgradeUrl.js` mirrors the
+   accepted billing builder `src/billing/upgrade/upgradeUrl.ts` byte-for-byte
+   in behavior because this lane's Node runner cannot import TypeScript. The
+   T-VP0 React/TS port must replace it with a direct import of the billing
+   module (same conscious-repoint pattern as the validation mirror).
+8. **Recovery-guidance honesty + poller containment (DASH-C4-1b/c/d; audit
+   findings N-A/N-B/N-C of CYCLE_32792897988_DASHBOARD).**
+   - N-A: failed-state guidance mentions "Recover interrupted apply" ONLY when
+     `state.lastMutation?.scope` is known — the affordance cannot render
+     without a ScheduleScope, so mentioning it otherwise was unfollowable.
+   - N-B: a trivial synchronous in-flight guard collapses same-tick multi-
+     clicks on the recover control into one bridge call.
+   - N-C: `pollMutationUntilTerminal` wraps `onObservation` exceptions into
+     the standard ERROR outcome instead of propagating; polling still stops
+     permanently.
+   The parity ledger constraint is respected: `ruleDraftValidators.js` is
+   byte-for-byte unchanged; R1–R4 decisions of record apply only at the future
+   mirror repoint.
 
 ## Repair provenance (cycle 2, DASH-C2-1-REPAIR)
 

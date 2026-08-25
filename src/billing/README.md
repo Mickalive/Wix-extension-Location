@@ -2,9 +2,11 @@
 
 Owner: billing-builder (`directives/BILLING.md`). Binding truth:
 `docs/WIX_TECHNICAL_CONTRACT.md` §5.1/§7/§11 (C2/C3/C5), `docs/BUILD_BLUEPRINT.md`
-§1/§2/§6. Current state: **BILL-C3-1** — plan-state projection & reconciliation
-machine (Contract §7 lifecycle; Blueprint §4 flow 5), folding accepted-audit
-observations 1–2 of `reports/audits/CYCLE_32787032785_BILLING.md`.
+§1/§2/§6. Current state: **BILL-C4-1** — downgrade-through-gate regression plus
+projection-fidelity folds (accepted-audit observations 1, 3, 4 of
+`reports/audits/CYCLE_32792897988_BILLING.md`) on top of the BILL-C3-1
+plan-state projection & reconciliation machine (Contract §7 lifecycle;
+Blueprint §4 flow 5).
 
 ## Module map
 
@@ -32,8 +34,11 @@ observations 1–2 of `reports/audits/CYCLE_32787032785_BILLING.md`.
   `PAID_PLAN_AUTO_RENEWAL_CANCELLED`, `APP_INSTALLATION_CREATED/UPDATED`).
   Envelope semantics ONLY: dedup on envelope `id`, ordering on
   `entityEventSequence` (Contract §6); transport/signature/retry stay in the
-  platform pipeline. Payload types carry NO expiration fields — webhook dates
-  are structurally unreadable (Invariant C2).
+  platform pipeline. Purchase/cancellation payload types carry NO expiration
+  field; installation payloads alias `AppInstanceBillingSnapshot` and CAN
+  carry the optional `billingExpirationDate`, but no transition ever reads it
+  and the rendered refinement omits it — webhook dates are never consulted
+  (Invariant C2).
 - **SNAPSHOTS** — periodic Get App Instance results (`null` = genuinely absent
   billing ⇒ FREE per accepted semantics).
 
@@ -81,6 +86,49 @@ type: the only surface crossing the port is the accepted
 `AppInstanceBillingSnapshot` shape. The port serves the latest reconciled
 snapshot verbatim while no post-snapshot events are pending, otherwise the
 refined view rendered into snapshot shape, else `null`.
+
+## Downgrade-through-gate lifecycle (BILL-C4-1a)
+
+`tests/billing/downgradeThroughGate.spec.ts` proves END-TO-END through the
+public gate API (`createEntitlementGate` + `projectedSnapshotSource`) that §7's
+"downgrade only at period end via confirming snapshot" is ENFORCED, not merely
+projected:
+
+1. an auto-renewal-cancellation event alone never shrinks coverage;
+2. a confirming period-end snapshot downgrading the tier shrinks
+   `allowedLocationIds` exactly to the new allowance in stable order (default
+   location first, then alphabetical by id; archived locations stay excluded);
+3. user configuration and the management inventory are never deleted — they
+   survive byte-identical across every step, and repeated reconciliations keep
+   the same restricted set (no progressive loss);
+4. the over-limit upgrade state surfaces (`overLimit: true`, reliable
+   restriction, no incident warning);
+5. a confirming re-upgrade snapshot restores full coverage from the preserved
+   configuration.
+
+## Projection fidelity folds (BILL-C4-1 b/c/d)
+
+`tests/billing/projectionFidelity.spec.ts` folds accepted-audit observations
+1, 3 and 4 of `reports/audits/CYCLE_32792897988_BILLING.md`:
+
+- **Observation 1 (C2 docstring truth):** installation payloads CAN carry the
+  optional `billingExpirationDate` alias (they reuse
+  `AppInstanceBillingSnapshot`); transitions never read it and the rendered
+  refinement omits it. Proven behaviorally both ways (past date cannot lapse a
+  paid plan; future date cannot grant coverage) plus a render-shape test.
+- **Observation 3 (packageName fidelity):** preservation through post-snapshot
+  refinement already holds (merge discipline never clobbers known values), so
+  the fold documents+tests why the only two drop cases are correct-by-design:
+  fields the resolver never reads are omitted from the rendered shape, and a
+  newer confirming snapshot supersedes an older name (reconciliation
+  supremacy). Unknown-plan warning-text fidelity is proven through the public
+  gate API.
+- **Observation 4 (initial source label):** `'EVENT_DERIVED'` names the
+  SUPPLYING LAYER — a never-reconciled zero-event projector reports it because
+  the event layer's empty view folds to the conservative FREE default. The
+  precise initial-state discriminators are
+  `reconciledAtLeastOnce === false && generationEventCount === 0`; pinned by
+  test together with the transition to `'SNAPSHOT_RECONCILED'`.
 
 ## Billable-location definition (ratified, Contract §7)
 
@@ -165,9 +213,9 @@ posture and returns `{count: null, degraded: true}` instead of throwing.
 
 Run from the repo root:
 
-- `npx vitest run tests/billing` → exactly **88 tests, 0 skipped**
-  (51 regression baseline from BILL-C2-1-REPAIR + 37 new for BILL-C3-1:
-  projection machine, narrow port, folded observations).
+- `npx vitest run tests/billing` → exactly **96 tests, 0 skipped**
+  (88 baseline after BILL-C3-1 + 8 new for BILL-C4-1: downgrade-through-gate
+  lifecycle regression + projection-fidelity folds for observations 1, 3, 4).
 - `npm run check` → strict typecheck + purity gate + full unit suite
   (platform + domain + billing) — the Blueprint §6 CI gate.
 
@@ -191,3 +239,9 @@ inside `fetchPage`), F4 (`BillingPagingAdapter` type import restored), F5
 BILL-C3-1 provenance: accepted-audit observations 1 (per-source warning
 liveness) and 2 (explicit null fail-open tier) folded with dedicated
 regression tests in `entitlementGate.spec.ts`.
+BILL-C4-1 provenance: downgrade-through-gate lifecycle regression
+(`downgradeThroughGate.spec.ts`) and accepted-audit observations 1 (C2
+docstring truth + alias behavior tests), 3 (packageName fidelity: preserved
+through refinement, drops correct-by-design, warning-text fidelity through the
+gate) and 4 (initial `'EVENT_DERIVED'` label documented with precise
+initial-state discriminators) folded in `projectionFidelity.spec.ts`.

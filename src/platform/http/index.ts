@@ -46,3 +46,11 @@ export {
   postApplyPlan,
   postRecover,
 } from './mutationEndpoints';
+export type {
+  EntitlementCoverageDTO,
+  EntitlementMeterDTO,
+  EntitlementMeterResponse,
+  GetMeterEndpointDeps,
+  MeterSourceGate,
+} from './meterEndpoint';
+export { getEntitlementMeter } from './meterEndpoint';

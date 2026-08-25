@@ -62,6 +62,15 @@ export interface DuplicateProposal {
   slotEndMs: number;
   targetDate: string;
   identityKey?: string | null;
+  /**
+   * ADDITIVE cycle-4 (RULES-C4-1): booking id of the subject booking on
+   * RESCHEDULE — the booking being rescheduled. Any existing fact carrying
+   * this id is skipped so the mover's own still-existing booking never flags
+   * a conflict against its own proposed slot. Conservative matching: facts
+   * without a bookingId can never match the exclusion. Undefined/null (and
+   * every CREATE/CANCEL evaluation) keeps the previous scan verbatim.
+   */
+  excludeBookingId?: string | null;
 }
 
 /**
@@ -78,6 +87,19 @@ export function findDuplicateConflict(
     if (
       existing.status !== undefined &&
       !DUPLICATE_COUNTED_STATUSES.includes(existing.status)
+    ) {
+      continue;
+    }
+    // Subject exclusion (RESCHEDULE, RULES-C4-1): the booking being
+    // rescheduled is still present in any existing-bookings snapshot until
+    // Wix moves it; it must never conflict with its own proposed slot. Only
+    // an EXACT id match on a fact that carries an id is excluded — facts
+    // without ids stay in the scan (cannot prove they are the subject).
+    if (
+      proposal.excludeBookingId !== undefined &&
+      proposal.excludeBookingId !== null &&
+      existing.bookingId !== undefined &&
+      existing.bookingId === proposal.excludeBookingId
     ) {
       continue;
     }

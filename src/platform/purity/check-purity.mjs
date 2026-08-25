@@ -15,10 +15,15 @@
 //                                  evaluator through injected ports; the real
 //                                  bookingsValidation.provideHandlers() SDK
 //                                  adapter is owned by the T-VP0 thin adapter)
+//     src/platform/composition/** (billing→enforcement composition root —
+//                                  cycle 4, INT-C4-1; Director-added root per
+//                                  audit CYCLE_32881643441_INTEGRATION.md obs O2:
+//                                  defense-in-depth over accepted code that is
+//                                  already @wix/-import-free)
 //
 // Zero-dependency ESM script. Runnable standalone:
 //     node src/platform/purity/check-purity.mjs [rootDir ...]
-// (defaults to the five protected roots above; missing directories are skipped
+// (defaults to the six protected roots above; missing directories are skipped
 // so the gate stays green before a lane creates its directory).
 //
 // Limitation note: comment/string stripping below is a pragmatic scanner, not a
@@ -35,6 +40,7 @@ export const DEFAULT_PROTECTED_ROOTS = [
   'src/platform/http',
   'src/platform/webhooks',
   'src/platform/validation-plugin',
+  'src/platform/composition',
 ];
 
 const SCANNED_EXTENSIONS = new Set([

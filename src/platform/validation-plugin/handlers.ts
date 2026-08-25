@@ -213,6 +213,29 @@ function messageOf(error: unknown): string {
 }
 
 /**
+ * Deterministic attribution instant used ONLY when the injected clock itself
+ * throws inside the failure guard. Incident timestamps are observability
+ * metadata — never rule inputs — so a fixed epoch instant is safe here.
+ */
+export const CLOCK_FAILURE_FALLBACK_INSTANT: Instant = '1970-01-01T00:00:00.000Z';
+
+/**
+ * Obs-B hardening (audit CYCLE_32792897988_INTEGRATION §5 observation B):
+ * {@link targetFailureResult} used to call `clock.now()` unguarded, so a
+ * THROWING injected clock escaped the target-semantics guard and propagated
+ * out of the handler instead of producing guarded per-item results. The
+ * failure path must never depend on the very port that may have misbehaved:
+ * a clock failure degrades to the fixed fallback instant above.
+ */
+function guardedNow(clock: Clock): Instant {
+  try {
+    return clock.now();
+  } catch {
+    return CLOCK_FAILURE_FALLBACK_INSTANT;
+  }
+}
+
+/**
  * Maps ONLY documented payload fields into canonical BookingFacts
  * (Invariant C1). location.id becomes a locationId exclusively for
  * OWNER_BUSINESS locations; metadata.identity becomes an identityKey only
@@ -525,7 +548,7 @@ async function targetFailureResult(
   if (semanticsOf(target) === 'FAIL_OPEN') {
     emission.emit({
       kind: 'ENFORCEMENT_FAIL_OPEN',
-      at: deps.clock.now(),
+      at: guardedNow(deps.clock),
       target,
       detail: `${target} validation failed internally — failing OPEN, rules NOT enforced (best-effort forever): ${detail}`,
     });
@@ -540,7 +563,7 @@ async function targetFailureResult(
 
   emission.emit({
     kind: 'ENFORCEMENT_FAIL_CLOSED',
-    at: deps.clock.now(),
+    at: guardedNow(deps.clock),
     target,
     detail: `${target} validation failed internally — failing CLOSED with retry hint: ${detail}`,
   });

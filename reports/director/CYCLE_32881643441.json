@@ -1,0 +1,158 @@
+{
+  "run_id": 32881643441,
+  "role": "wix-build-director",
+  "date": "2026-08-25",
+  "decision": "continue",
+  "accepted_branch": "lab/wix-rules",
+  "accepted_head_at_pass": "adb0b23",
+  "accepted_lanes": ["integration", "rules", "dashboard", "billing"],
+  "rejected_lanes": [],
+  "repair_lanes": [],
+  "lane_audit_verdicts": {
+    "integration": {
+      "verdict": "ACCEPT",
+      "audit_path": "reports/audits/CYCLE_32881643441_INTEGRATION.md",
+      "immutable_source": "cycle/wix-build/32881643441/audit-integration",
+      "candidate_commit": "a167048",
+      "disposition": "integrated"
+    },
+    "rules": {
+      "verdict": "ACCEPT",
+      "audit_path": "reports/audits/CYCLE_32881643441_RULES.md",
+      "immutable_source": "cycle/wix-build/32881643441/audit-rules",
+      "candidate_commit": "9117d15",
+      "disposition": "integrated"
+    },
+    "dashboard": {
+      "verdict": "ACCEPT",
+      "audit_path": "reports/audits/CYCLE_32881643441_DASHBOARD.md",
+      "immutable_source": "cycle/wix-build/32881643441/audit-dashboard",
+      "candidate_commit": "a388837",
+      "disposition": "integrated"
+    },
+    "billing": {
+      "verdict": "ACCEPT",
+      "audit_path": "reports/audits/CYCLE_32881643441_BILLING.md",
+      "immutable_source": "cycle/wix-build/32881643441/audit-billing",
+      "candidate_commit": "b1e3dcf",
+      "disposition": "integrated"
+    }
+  },
+  "integration_record": {
+    "method": "git apply of each candidate's full diff (adb0b23..candidate per mounted worktree) into the accepted checkout; lane path sets are disjoint (platform composition/http/validation-plugin + tests/platform; domain + tests/domain; ui + extensions/dashboard + tests/ui; billing docstrings + tests/billing) and applied with zero conflicts; no commits made by the Director (trusted shell persists).",
+    "base_note": "All four candidates share parent adb0b23 (current HEAD), verified identical before apply.",
+    "director_pre_integration_verification": [
+      "Read all four lane audits in full; each ends with the exact required verdict line.",
+      "Independently inspected the real diffs: path scopes match audits exactly; no immutable governance paths touched.",
+      "Spot-checked load-bearing surfaces personally: rules ports.ts diff is strictly additive (+43/-0) with safe CREATE default; integration handlers.ts obs-B guardedNow change matches audit; GET /meter pinned DTO byte-equivalent on both producer (meterEndpoint.ts) and consumer (bridge.js isEntitlementMeterDto) sides.",
+      "Confirmed billing clone isolation (originInstanceId/copiedFromTemplate never leak plan state) already implemented — no gap."
+    ],
+    "canonical_contract_integrity": "src/domain/ports.ts evolved THIS CYCLE by the authorized RULES-C4-1 additive evolution (optional EvaluationDeps.targetContext with safe CREATE default; +43/-0 lines): new SHA-256 d46e0743fa825315a80456962d0f4412c02cbd437f0acabce909356f43c18802 (prior accepted af68e698…fbc). src/shared/types.ts (af03134c…) and src/shared/errors.ts (8b12ec16…) byte-for-byte unchanged. Zero diffs under MAIN_PROMPT.md, .github/**, .opencode/**, AGENTS.md, opencode.json, directives/**.",
+    "director_gate_amendments": [
+      {
+        "change": "Added 'src/platform/composition' to DEFAULT_PROTECTED_ROOTS in src/platform/purity/check-purity.mjs (five → six protected roots).",
+        "evidence": "reports/audits/CYCLE_32881643441_INTEGRATION.md section 5 observation O2 (Director-owned defense-in-depth over accepted code already grep-proven @wix/-free).",
+        "verification": "Standalone gate run green over all six roots; full npm run check exit 0 after the edit."
+      }
+    ],
+    "director_contract_amendments": []
+  },
+  "finding_dispositions": {
+    "integration_audit_cycle4": {
+      "O1_createDefaultProjector_overrides_forwarding": {
+        "classification": "recorded_only",
+        "disposition": "Functionally harmless (gate-side overrides resolution proven end-to-end by audit probe P6); symmetry forwarding deferred until the file is next touched for other reasons. Not scheduled as its own task.",
+        "evidence": "reports/audits/CYCLE_32881643441_INTEGRATION.md section 5 O1"
+      },
+      "O2_purity_root_for_composition": {
+        "classification": "gate_hardening_applied",
+        "disposition": "APPLIED BY DIRECTOR at integration: src/platform/composition added to purity roots; gate re-run green; full check green.",
+        "evidence": "reports/audits/CYCLE_32881643441_INTEGRATION.md section 5 O2"
+      },
+      "O3_watermark_equal_rank_suppression": {
+        "classification": "documented_tradeoff",
+        "disposition": "No action: documented in module README, self-healing at mandatory reconciliation, consistent with Contract §6 ordering semantics.",
+        "evidence": "reports/audits/CYCLE_32881643441_INTEGRATION.md section 5 O3"
+      }
+    },
+    "rules_audit_cycle4": {
+      "A_cancel_fall_through_tail": {
+        "classification": "drift_guard_scheduled",
+        "disposition": "Routed into RULES-C5-1(c): a target-matrix property test will pin that CANCEL outcomes carry ONLY classification-family explanations, making any future notice-emitting family that forgets the CANCEL branch fail loudly instead of silently.",
+        "evidence": "reports/audits/CYCLE_32881643441_RULES.md section 6 observation A"
+      },
+      "B_reschedule_same_day_self_count": {
+        "classification": "routed_to_integration",
+        "disposition": "Platform-side disposition folded into INT-C5-1(d): subject-booking facts seam enables the count adjustment when facts are supplyable; where payload evidence remains unproven (T-VP3/T-VP5), behavior degrades exactly as today with the residual documented — never a domain guess.",
+        "evidence": "reports/audits/CYCLE_32881643441_RULES.md section 6 observation B"
+      },
+      "C_keep_target_aliasing_shared_union": {
+        "classification": "decision_of_record",
+        "disposition": "EvaluationTarget stays an alias of shared TargetOperation; compile-time drift detection retained.",
+        "evidence": "reports/audits/CYCLE_32881643441_RULES.md section 6 observation C"
+      }
+    },
+    "dashboard_audit_cycle4": {
+      "N1_allowance_number_hidden_when_healthy": {
+        "classification": "deferred_polish",
+        "disposition": "Not contract-mandated (§7 requires restriction visibility + CTA + floor note, all shipped). Surfacing the allowance number requires an additive DTO evolution across three lanes; deferred until a consumer need justifies it. Re-evaluated and consciously NOT scheduled this cycle to avoid feature sprawl.",
+        "evidence": "reports/audits/CYCLE_32881643441_DASHBOARD.md section 6 N-1"
+      },
+      "N2_floor_note_degraded_co_render": {
+        "classification": "cosmetic_no_action",
+        "disposition": "Both statements are individually truthful and concurrently warned; nothing silently misrepresented.",
+        "evidence": "reports/audits/CYCLE_32881643441_DASHBOARD.md section 6 N-2"
+      },
+      "N3_upgrade_url_mirror_repoint": {
+        "classification": "ledgered_obligation_blocked_on_tvp0",
+        "disposition": "Behavioral parity independently proven (9/9 differential cases); repoint to direct billing-module import happens at the T-VP0 TypeScript port together with the R1–R4 ledger update.",
+        "evidence": "reports/audits/CYCLE_32881643441_DASHBOARD.md sections 4.1 and 6 N-3"
+      }
+    },
+    "billing_audit_cycle4": {
+      "obs1_preservation_assertion_port_bounded": {
+        "classification": "no_action_now",
+        "disposition": "Assertion scope is correct while no mutating entitlement port exists; revisit only if such a port is ever introduced.",
+        "evidence": "reports/audits/CYCLE_32881643441_BILLING.md section 6 observation 1"
+      },
+      "obs2_package_name_supremacy_nuance": {
+        "classification": "decision_of_record",
+        "disposition": "Reconciliation supremacy (fresher snapshot stopping packageName reporting removes the stale name) is conscious, documented, tested behavior — not data loss.",
+        "evidence": "reports/audits/CYCLE_32881643441_BILLING.md section 6 observation 2"
+      },
+      "obs3_suite_arithmetic": {
+        "classification": "verified",
+        "disposition": "400 = 392 integrated base + 8 candidate tests confirmed at integration (see tests record).",
+        "evidence": "reports/audits/CYCLE_32881643441_BILLING.md section 6 observation 3"
+      }
+    },
+    "carried_prior_cycles": {
+      "rules_parity_ledger_R1_R4_N1_N3": "Unchanged decisions of record; applied only at the future T-VP0 mirror repoint, which must consciously update tests/domain/uiValidatorParity.spec.ts.",
+      "root_tsc_does_not_cover_ui_js": "Carried; extend repo gate to dashboard paths at the T-VP0 React/TS scaffold."
+    }
+  },
+  "simulation_source_run": null,
+  "simulation_verdict": null,
+  "simulation_dispositions": [],
+  "simulation_note": "Asynchronous simulated-Wix QA not available this pass: /tmp/wix_simulation_latest/reports/simulation/LATEST.json absent AND remote branch qa/wix-sim-latest does not exist (git ls-remote origin checked, read-only). Per policy its absence did not delay this cycle. NOTE: the simulation has now never completed for ANY run; release-readiness must treat simulated-QA recency as an open gate alongside the live-Wix T-VP*/T-WH*/T-BK*/T-RB* gates.",
+  "tests": [
+    {"name": "npm ci", "result": "PASS", "detail": "lockfile-faithful, credential-free"},
+    {"name": "npm run check (tsc --noEmit strict incl. noUncheckedIndexedAccess + purity gate (now six roots) + vitest)", "result": "PASS", "detail": "465/465 tests, 45 files, zero skipped; PURITY GATE FAILED stdout lines are the asserted negative-control fixture inside purity-gate.spec.ts, expected"},
+    {"name": "npm run check:offline (proxies pinned to dead port)", "result": "PASS", "detail": "exit 0 — zero network egress proven on the integrated tree"},
+    {"name": "tests/ui lane suite (node --test from tests/ui)", "result": "PASS", "detail": "186/186 (143 baseline untouched + 43 new locationsUsage/meterBridge/pollerObserverSafety/recoveryGuidanceHonesty)"},
+    {"name": "Cross-lane arithmetic check", "result": "PASS", "detail": "392 base + 34 integration + 31 rules + 8 billing = 465 matches all four lane audits' per-suite deltas exactly; no test lost or duplicated in merge"},
+    {"name": "Canonical-contract integrity", "result": "PASS", "detail": "ports.ts additive evolution verified mechanically (+43/-0) and by strict tsc across all consumers; shared/** byte-identical; immutable governance paths untouched"}
+  ],
+  "residual_risks": [
+    "DORMANT SEMANTICS: platform handlers still call evaluateRules WITHOUT targetContext, so CANCEL/RESCHEDULE enforcement currently runs CREATE-uniform semantics at runtime (the cycle-4 domain fix is canonical but unwired). INT-C5-1 is mandatory before any production enablement of CANCEL/RESCHEDULE targets and before T-VP claims.",
+    "RESCHEDULE same-day self-count residual (Rules audit obs B): authoritative caps may include the subject booking's own contribution; INT-C5-1(d) owns the seam-based disposition.",
+    "No empirical Wix evidence yet: gates T-VP0–T-VP5, T-WH1–T-WH6, T-BK1–T-BK4, T-RB1–T-RB2 require human-owned credentials (Contract §16); no production-capability claims exist in accepted code.",
+    "Simulated-Wix QA has never completed for any run (qa/wix-sim-latest still absent); when it lands every blocker needs an explicit repair/resolved/superseded disposition.",
+    "Dashboard N-1 allowance-number display deferred (not contract-mandated); N-3 upgradeUrl mirror repoint owed at T-VP0 with parity-ledger update.",
+    "Integration O1 projector overrides-forwarding symmetry recorded for next touch of that file.",
+    "Root tsc does not type-check plain-JS UI sources; extend repo gate at T-VP0 scaffold.",
+    "TOCTOU residual risk on count caps and best-effort-only reschedule enforcement remain disclosed-in-product requirements (Contract C6); copy bans re-verified clean this cycle."
+  ],
+  "external_blocker": null,
+  "next_cycle_summary": "Cycle 5 activates what cycle 4 built: Integration wires the accepted target-aware domain semantics into the enforcement handlers (six targets → three operations, subject-booking-facts seam, platform-level Observation-A regressions, self-count disposition) so CANCEL frees capacity and RESCHEDULE ignores the mover's own booking AT RUNTIME; Rules extends determinism/explanation-completeness properties across the new target matrix and pins the CANCEL tail against silent drift; Dashboard implements the §7-mandated management-side entitlement restriction in the RulesEditor (uncovered locations restricted for NEW rules, never deleting configuration, stable-ordering note, upgrade CTA, fail-open degraded warnings). Billing is marked complete with evidence: every §7 lifecycle/counting/tier/upgrade/downgrade/clone requirement is implemented and adversarially audited; no evidence-backed billing task remains pre-scaffold."
+}

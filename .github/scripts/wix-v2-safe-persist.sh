@@ -6,7 +6,8 @@ decision="$PLAN_DECISION"
 [[ "$STALLED" == true ]] && decision=stalled
 if [[ "$GATE" == failed ]]; then
   rm -rf /tmp/wix-cycle-evidence && mkdir -p /tmp/wix-cycle-evidence
-  for path in docs/NEXT_CYCLE.json docs/NEXT_CYCLE.md docs/PRODUCT_GATES.json docs/LOOP_HEALTH.json .opencode/agents/wix-build-director.md .opencode/job-descriptions/wix-build-director.md; do
+  cp docs/PRODUCT_GATES.json /tmp/current-product-gates.json 2>/dev/null || true
+  for path in docs/NEXT_CYCLE.json docs/NEXT_CYCLE.md docs/LOOP_HEALTH.json .opencode/agents/wix-build-director.md .opencode/job-descriptions/wix-build-director.md; do
     if [[ -f "$path" ]]; then mkdir -p "/tmp/wix-cycle-evidence/$(dirname "$path")"; cp "$path" "/tmp/wix-cycle-evidence/$path"; fi
   done
   for dir in reports/director reports/audits reports/integration; do
@@ -15,6 +16,10 @@ if [[ "$GATE" == failed ]]; then
   git reset --hard "$BASE_SHA"
   git clean -fd
   cp -a /tmp/wix-cycle-evidence/. .
+  if [[ ! -f docs/PRODUCT_GATES.json && -f /tmp/current-product-gates.json ]]; then
+    mkdir -p docs
+    jq '.gates |= with_entries(.value.status="OPEN" | .value.evidence=[])' /tmp/current-product-gates.json > docs/PRODUCT_GATES.json
+  fi
 fi
 jq --argjson c "$CYCLE_INDEX" --arg r "$GITHUB_RUN_ID" --arg d "$decision" '.cycle=$c|.last_accepted_run=$r|.release_candidate=($d=="release_candidate")' docs/state.json > /tmp/state.json
 mv /tmp/state.json docs/state.json

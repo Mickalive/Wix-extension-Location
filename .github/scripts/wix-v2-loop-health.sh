@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
-: "${CYCLE_INDEX:?}" "${ACCEPTED_CHANGES:?}" "${ADOPTED:?}"
+: "${CYCLE_INDEX:?}" "${ACCEPTED_CHANGES:?}" "${ADOPTED:?}" "${FINAL_GATE:?}"
 file=docs/LOOP_HEALTH.json
 [[ -f "$file" ]] || printf '%s\n' '{"schema_version":1,"last_cycle":0,"last_task_fingerprint":"","stagnant_cycles":0,"same_task_cycles":0,"last_accepted_product_changes":0,"stalled":false,"reason":null}' > "$file"
 prev_fp=$(jq -r '.last_task_fingerprint // ""' "$file")
@@ -8,7 +8,7 @@ prev_stagnant=$(jq -r '.stagnant_cycles // 0' "$file")
 prev_same=$(jq -r '.same_task_cycles // 0' "$file")
 next_fp=$(jq -c '[.lanes|to_entries[]|{role:.key,status:.value.status,task_id:(.value.task_id//null),blocker:(.value.blocker//null)}]|sort_by(.role)' docs/NEXT_CYCLE.json | sha256sum | awk '{print $1}')
 product_changes=0
-[[ "$ADOPTED" == true ]] && product_changes="$ACCEPTED_CHANGES"
+[[ "$ADOPTED" == true && "$FINAL_GATE" == passed ]] && product_changes="$ACCEPTED_CHANGES"
 if (( product_changes == 0 )); then stagnant=$((prev_stagnant + 1)); else stagnant=0; fi
 if [[ "$next_fp" == "$prev_fp" ]]; then same=$((prev_same + 1)); else same=0; fi
 stalled=false

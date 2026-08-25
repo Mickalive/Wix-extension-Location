@@ -62,9 +62,6 @@ while IFS= read -r encoded_job; do
 
   if ! gh run view "$run_id" --repo "$repository" --job "$job_id" --log >"$log_file" 2>&1; then
     if (( step_count == 0 )); then
-      # A GitHub job that concluded failure before emitting any step or downloadable
-      # log never reached our code. Treat this as runner/job-bootstrap infrastructure
-      # failure, not as a product/code verdict, and replay the failed job set.
       infra_jobs+=("$job_name (runner/bootstrap failure)")
     else
       unsafe_jobs+=("$job_name (logs unavailable after steps started)")
@@ -72,10 +69,16 @@ while IFS= read -r encoded_job; do
     continue
   fi
 
-  if grep -Fq 'WIX_OPENCODE_FAILURE_KIND=permanent' "$log_file"; then
-    unsafe_jobs+=("$job_name")
-  elif grep -Fq 'WIX_OPENCODE_FAILURE_KIND=transient' "$log_file"; then
+  if grep -Fq 'WIX_OPENCODE_FAILURE_KIND=transient' "$log_file"; then
     transient_jobs+=("$job_name")
+  elif grep -Eqi \
+       'endpoint is unavailable|upstream request failed|service unavailable|provider unavailable' \
+       "$log_file"; then
+    # Older attempts may have incorrectly emitted the permanent marker for these
+    # provider-side failures. The concrete upstream-unavailability signature wins.
+    transient_jobs+=("$job_name (provider unavailable)")
+  elif grep -Fq 'WIX_OPENCODE_FAILURE_KIND=permanent' "$log_file"; then
+    unsafe_jobs+=("$job_name")
   elif grep -Eqi \
        'network_error|network error|temporarily unavailable|connection (reset|closed)|ECONNRESET|ETIMEDOUT|timed out|timeout|rate[_ -]?limit|HTTP[^0-9]*(429|500|502|503|504)' \
        "$log_file" &&
@@ -139,8 +142,6 @@ dependent_list=$(IFS=', '; echo "${dependent_jobs[*]:-}")
   echo "- downstream jobs replayed: ${dependent_list:-none}"
 } >>"$summary_file"
 
-# Intentionally do not post issue comments or notifications. The Actions run itself
-# remains the durable evidence, while the user requested no workflow-status mail noise.
 printf 'Automatic recovery: workflow=%s run=%s attempt=%s->%s OX=%s infra=%s dependent=%s\n' \
   "$workflow" "$run_id" "$old_attempt" "$new_attempt" \
   "${transient_list:-none}" "${infra_list:-none}" "${dependent_list:-none}"

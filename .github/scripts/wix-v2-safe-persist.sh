@@ -7,7 +7,7 @@ decision="$PLAN_DECISION"
 if [[ "$GATE" == failed ]]; then
   rm -rf /tmp/wix-cycle-evidence && mkdir -p /tmp/wix-cycle-evidence
   cp docs/PRODUCT_GATES.json /tmp/current-product-gates.json 2>/dev/null || true
-  for path in docs/NEXT_CYCLE.json docs/NEXT_CYCLE.md docs/LOOP_HEALTH.json .opencode/agents/wix-build-director.md .opencode/job-descriptions/wix-build-director.md; do
+  for path in docs/NEXT_CYCLE.json docs/NEXT_CYCLE.md docs/LOOP_HEALTH.json .opencode/agents/wix-build-director.md .opencode/job-descriptions/wix-build-director.md .opencode/job-descriptions/MANIFEST.sha256 AGENTS.md; do
     if [[ -f "$path" ]]; then mkdir -p "/tmp/wix-cycle-evidence/$(dirname "$path")"; cp "$path" "/tmp/wix-cycle-evidence/$path"; fi
   done
   for dir in reports/director reports/audits reports/integration; do
@@ -21,11 +21,12 @@ if [[ "$GATE" == failed ]]; then
     jq '.gates |= with_entries(.value.status="OPEN" | .value.evidence=[])' /tmp/current-product-gates.json > docs/PRODUCT_GATES.json
   fi
 fi
+sha256sum --check .opencode/job-descriptions/MANIFEST.sha256
 jq --argjson c "$CYCLE_INDEX" --arg r "$GITHUB_RUN_ID" --arg d "$decision" '.cycle=$c|.last_accepted_run=$r|.release_candidate=($d=="release_candidate")' docs/state.json > /tmp/state.json
 mv /tmp/state.json docs/state.json
 git config user.name wix-deterministic-director
 git config user.email wix-deterministic-director@users.noreply.github.com
-git add docs/NEXT_CYCLE.json docs/NEXT_CYCLE.md docs/PRODUCT_GATES.json docs/LOOP_HEALTH.json docs/state.json reports/director reports/audits reports/integration .opencode/agents/wix-build-director.md .opencode/job-descriptions/wix-build-director.md
+git add docs/NEXT_CYCLE.json docs/NEXT_CYCLE.md docs/PRODUCT_GATES.json docs/LOOP_HEALTH.json docs/state.json reports/director reports/audits reports/integration .opencode/agents/wix-build-director.md .opencode/job-descriptions/wix-build-director.md .opencode/job-descriptions/MANIFEST.sha256 AGENTS.md
 if [[ "$GATE" == passed ]]; then msg="accept audited cycle state"; else msg="preserve rejected cycle evidence"; fi
 git commit --allow-empty -m "Wix build $GITHUB_RUN_ID: $msg"
 auth=$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)

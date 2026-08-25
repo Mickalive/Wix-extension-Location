@@ -28,7 +28,7 @@ for ((attempt = 1; attempt <= max_attempts; attempt++)); do
   fi
 
   if ! grep -Eqi \
-    'network_error|network error|temporarily unavailable|connection (reset|closed)|ECONNRESET|ETIMEDOUT|timed out|timeout|rate[_ -]?limit|HTTP[^0-9]*(429|500|502|503|504)' \
+    'network_error|network error|temporarily unavailable|endpoint is unavailable|upstream request failed|service unavailable|provider unavailable|connection (reset|closed)|ECONNRESET|ETIMEDOUT|timed out|timeout|rate[_ -]?limit|HTTP[^0-9]*(429|500|502|503|504)' \
     "$log_file"; then
     echo "WIX_OPENCODE_FAILURE_KIND=permanent label=${label} status=${command_status}" >&2
     echo "::error::OpenCode ${label} failed for a non-transient cause; no automatic provider retry." >&2

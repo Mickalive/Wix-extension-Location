@@ -10,10 +10,15 @@
 //                                  src/pages/api adapters own all SDK usage)
 //     src/platform/webhooks/**    (webhook ingestion pipeline — cycle 2; same
 //                                  injected-ports rule for signature/store)
+//     src/platform/validation-plugin/** (booking-time enforcement wiring —
+//                                  cycle 3, INT-C3-1; consumes the pure domain
+//                                  evaluator through injected ports; the real
+//                                  bookingsValidation.provideHandlers() SDK
+//                                  adapter is owned by the T-VP0 thin adapter)
 //
 // Zero-dependency ESM script. Runnable standalone:
 //     node src/platform/purity/check-purity.mjs [rootDir ...]
-// (defaults to the four protected roots above; missing directories are skipped
+// (defaults to the five protected roots above; missing directories are skipped
 // so the gate stays green before a lane creates its directory).
 //
 // Limitation note: comment/string stripping below is a pragmatic scanner, not a
@@ -29,6 +34,7 @@ export const DEFAULT_PROTECTED_ROOTS = [
   'src/billing/pure',
   'src/platform/http',
   'src/platform/webhooks',
+  'src/platform/validation-plugin',
 ];
 
 const SCANNED_EXTENSIONS = new Set([

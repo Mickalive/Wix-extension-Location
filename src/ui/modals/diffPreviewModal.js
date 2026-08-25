@@ -17,6 +17,15 @@
  *   - Focus moves into the dialog on open and is restored to the previously
  *     focused element on close (implemented; see controller.close()).
  *   - Escape closes via the onCancel path (never confirms).
+ *
+ * KNOWN COUPLING (audit CYCLE_32787032785_DASHBOARD N-3, documented not
+ * refactored): close()'s dead-trigger fallback calls the kit-internal
+ * `doc._adoptFocus(null)` on the lane DOM document. This works and is tested,
+ * but it couples this product module to a kit-internal API (`_`-prefixed).
+ * Left as-is deliberately: the kit is lane-owned with no public
+ * focus-clearing primitive yet, and swapping in one now would churn focus
+ * behavior for zero user-visible gain. Revisit at the T-VP0 React port when
+ * the real design-system dialog replaces this controller.
  */
 
 import { el } from '../dom/kit.js';
@@ -170,6 +179,8 @@ export function openDiffPreviewModal(options) {
     if (stillAttached && !previouslyFocused.disabled) {
       previouslyFocused.focus();
     } else if (doc.activeElement === dialog) {
+      // N-3 (documented coupling): kit-internal focus-clearing primitive.
+      // See the header note before changing either side.
       doc._adoptFocus(null);
     }
   }

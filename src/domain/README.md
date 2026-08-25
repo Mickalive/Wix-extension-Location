@@ -93,3 +93,14 @@ customer-safe messages that never embed internal identifiers.
 Engine explanation families `weekly-windows`, `entitlement`, `ruleset`,
 `limits` are reserved; user-supplied limit/exception ids must not collide with
 them (validated against the single constant in `model/primitives.ts`).
+
+## Test-suite ownership note (shared vitest glob)
+
+Domain suites (`tests/domain/**`) execute through the platform-owned vitest
+config (`src/platform/vitest.config.ts`), whose include glob is
+`tests/**/*.spec.ts` (Rules-lane audit CYCLE_32787032785, observation N3).
+That glob is shared infrastructure this lane depends on: it must stay intact,
+because narrowing it would silently drop the entire domain suite from the repo
+runner. The integration lane must never narrow it, and any packaging/config
+change must keep all lanes' specs collected (see `docs/NEXT_CYCLE.json`,
+"vitest_glob_rule").

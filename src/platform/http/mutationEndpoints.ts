@@ -197,6 +197,19 @@ export async function postRecover(
   if (typeof scope.ownerId !== 'string' || scope.ownerId === '') {
     throw new PlatformError('INVALID_QUERY', 'scope.ownerId (non-empty string) is required');
   }
+  // Strict-shape consistency (audit CYCLE_32787032785 observation 4): a
+  // non-string locationId is rejected INVALID_QUERY instead of being silently
+  // dropped. Omit the key entirely for scopes without a location; `null` and
+  // other non-string values are shape violations.
+  if (
+    scope.locationId !== undefined &&
+    (typeof scope.locationId !== 'string' || scope.locationId === '')
+  ) {
+    throw new PlatformError(
+      'INVALID_QUERY',
+      'scope.locationId must be a non-empty string when present (omit the key for no location)',
+    );
+  }
 
   const recovery = await deps.orchestrator.recoverInterruptedApply({
     scheduleId: scope.scheduleId,

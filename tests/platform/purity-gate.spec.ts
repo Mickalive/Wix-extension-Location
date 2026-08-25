@@ -131,6 +131,8 @@ describe('purity gate (no @wix/ imports under protected paths)', () => {
     const violations = findWixImports([
       join(repoRoot, 'src/domain'),
       join(repoRoot, 'src/billing/pure'),
+      // INT-C3-1: the booking-time enforcement wiring joined the protected roots.
+      join(repoRoot, 'src/platform/validation-plugin'),
     ]);
     expect(violations).toEqual([]);
   });

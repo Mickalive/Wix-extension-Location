@@ -91,8 +91,11 @@ export class WebhookIngestionPipeline {
   /**
    * Ingest one delivery: verify signature → dedup claim → order/dispatch →
    * complete. Signature rejections happen BEFORE any store interaction
-   * (fail closed, zero mutation). `envelope` may be pre-parsed by the adapter
-   * or raw JSON (parsed + structurally validated here).
+   * (fail closed, zero mutation). `envelopeInput` may be pre-parsed by the
+   * adapter or raw JSON — BOTH pass through full `parseWebhookEnvelope`
+   * structural validation (audit CYCLE_32787032785 observation 3 hardening:
+   * no duck-typing bypass; a malformed pre-parsed envelope can never skip
+   * validation).
    */
   async ingest(
     delivery: UnverifiedWebhookDelivery,
@@ -108,9 +111,7 @@ export class WebhookIngestionPipeline {
       };
     }
 
-    const envelope = isWebhookEnvelope(envelopeInput)
-      ? envelopeInput
-      : parseWebhookEnvelope(envelopeInput);
+    const envelope = parseWebhookEnvelope(envelopeInput);
 
     const claim = await this.store.claimEnvelope(envelope.id);
     if (claim === 'ALREADY_COMPLETED') {
@@ -324,13 +325,4 @@ export class WebhookIngestionPipeline {
       expected += 1;
     }
   }
-}
-
-function isWebhookEnvelope(value: unknown): value is WebhookEnvelope {
-  return (
-    typeof value === 'object' &&
-    value !== null &&
-    typeof (value as { id?: unknown }).id === 'string' &&
-    'data' in value
-  );
 }

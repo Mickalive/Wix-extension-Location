@@ -2,8 +2,9 @@
 
 Owner: billing-builder (`directives/BILLING.md`). Binding truth:
 `docs/WIX_TECHNICAL_CONTRACT.md` §5.1/§7/§11 (C2/C3/C5), `docs/BUILD_BLUEPRINT.md`
-§1/§2/§6. Current state: **BILL-C2-1-REPAIR** — repair of the cycle-1 candidate
-(`BILL-C1-1`) per `reports/audits/CYCLE_32692407760_BILLING.md`.
+§1/§2/§6. Current state: **BILL-C3-1** — plan-state projection & reconciliation
+machine (Contract §7 lifecycle; Blueprint §4 flow 5), folding accepted-audit
+observations 1–2 of `reports/audits/CYCLE_32787032785_BILLING.md`.
 
 ## Module map
 
@@ -16,8 +17,70 @@ Owner: billing-builder (`directives/BILLING.md`). Binding truth:
 | `pure/tiers.ts` | The four contract plans + free state, prices, location allowances |
 | `pure/entitlement.ts` | Pure plan recognition decision table |
 | `pure/coverage.ts` | Stable over-limit coverage ordering (default first, then alphabetical) |
+| `projection/types.ts` | Webhook envelope/event types (semantics only), projection output |
+| `projection/fold.ts` | Deterministic event-layer fold (dedup/order-safe transitions) |
+| `projection/projector.ts` | The §7 entitlement state machine: events + snapshots → projection |
+| `projection/snapshotSource.ts` | Narrow port: projector → gate's `BillingInstancePort` |
 | `enforcement/entitlementGate.ts` | Canonical `EntitlementGate` implementation + dashboard meter + warning ledger |
 | `upgrade/upgradeUrl.ts` | Byte-exact contracted upgrade URL builder |
+
+## Plan-state projection & reconciliation (BILL-C3-1, Blueprint §4 flow 5)
+
+`createBillingPlanProjector({ instanceId?, overrides? })` ingests:
+
+- **EVENTS** — app-billing webhook envelopes (`PAID_PLAN_PURCHASED`,
+  `PAID_PLAN_AUTO_RENEWAL_CANCELLED`, `APP_INSTALLATION_CREATED/UPDATED`).
+  Envelope semantics ONLY: dedup on envelope `id`, ordering on
+  `entityEventSequence` (Contract §6); transport/signature/retry stay in the
+  platform pipeline. Payload types carry NO expiration fields — webhook dates
+  are structurally unreadable (Invariant C2).
+- **SNAPSHOTS** — periodic Get App Instance results (`null` = genuinely absent
+  billing ⇒ FREE per accepted semantics).
+
+Binding behaviors (all proven in `tests/billing/projection.spec.ts`):
+
+1. **Reconciliation supremacy** — ingesting a snapshot re-seeds the event
+   layer and discards all pre-snapshot event effects. Trial→paid conversion
+   fires NO event (§7), so periodic reconciliation is MANDATORY: without a
+   snapshot no amount of webhook traffic can discover a conversion.
+2. **Snapshot beats stale events** — the envelope-id dedup memory survives
+   reconciliation, so replayed/duplicated pre-snapshot deliveries can never
+   resurrect old state on top of a fresher snapshot.
+3. **Idempotent convergence** — within one generation, unique events fold in
+   `(entityEventSequence, id)` order with idempotent transitions; missing or
+   unparseable sequences rank oldest and the envelope id tiebreaks.
+   Out-of-order, duplicated and replayed deliveries converge to identical
+   projections (50-seeded-shuffle determinism test).
+4. **Post-snapshot refinement** — unique events delivered after a snapshot
+   legitimately refine the projection until the next reconciliation (a
+   purchase webhook grants paid coverage immediately; no mid-cycle downgrade
+   event exists, so events can only upgrade or mark cancellation).
+5. **Lifecycle branches (both ways)** — cancelled-until-expiry KEEPS paid
+   identifiers; auto-renewal cancellation downgrades ONLY at period end given
+   a confirming snapshot; dunning window (expired advisory date +
+   `isFree:false`) stays PAID while `isFree:true` stays FREE regardless of
+   dates; clone markers never leak across instances (foreign-`instanceId`
+   events are ignored; markers never alter an instance's own resolution);
+   UNKNOWN_PLAN_IDENTIFIER persists across refinements until the operator
+   maps the identifier.
+6. **Durable marker** — `autoRenewCancelled` survives reconciliations until a
+   NEW purchase re-enables renewal; it never changes the tier by itself.
+
+### Narrow port for the enforcement path (INT-C3-1)
+
+```ts
+const projector = createBillingPlanProjector({ instanceId });
+const gate = createEntitlementGate({
+  instance: projectedSnapshotSource(projector), // IS a BillingInstancePort
+  ...
+});
+```
+
+The enforcement path consumes RECONCILED state without importing any webhook
+type: the only surface crossing the port is the accepted
+`AppInstanceBillingSnapshot` shape. The port serves the latest reconciled
+snapshot verbatim while no post-snapshot events are pending, otherwise the
+refined view rendered into snapshot shape, else `null`.
 
 ## Billable-location definition (ratified, Contract §7)
 
@@ -41,7 +104,8 @@ The dashboard documents the floor to merchants.
 
 1. Adapters **MUST THROW on infrastructure failure** (network, timeout, 5xx,
    auth/token, malformed payload). Throwing means "state UNKNOWN"; the gate
-   converts that into the contracted fail-open + persistent-warning posture.
+   converts that into the contracted fail-open + persistent-warning posture;
+   it never converts it into data.
 2. Adapters may return `null` **only when Wix genuinely reports no (more)
    billing data** — a definitive end-of-list. `null` asserts a trustworthy
    empty snapshot.
@@ -88,19 +152,24 @@ upgrade CTA), not an error.
 
 Entitlement/counting/listing infrastructure errors degrade gracefully:
 decisions carry `degraded: true`, warnings persist in the injected ledger, and
-consumers must not block bookings while degraded. Transient warnings clear on
-recovery; `UNKNOWN_PLAN_IDENTIFIER` persists until mapped. The meter
-(`gate.meter()`) follows the same posture and returns `{count: null,
-degraded: true}` instead of throwing.
+consumers must not block bookings while degraded. Warning liveness is
+PER-SOURCE (audit observation 1, folded at BILL-C3-1): each transient code
+clears as soon as its OWN source is healthy again — a failing listing no
+longer keeps a healed billing failure alive. UNKNOWN_PLAN_IDENTIFIER persists
+until mapped. The fail-open sentinel carries an EXPLICIT null tier
+(`FAIL_OPEN_RESOLUTION.tier === null`, audit observation 2): billing being
+unreadable claims no tier at all. The meter (`gate.meter()`) follows the same
+posture and returns `{count: null, degraded: true}` instead of throwing.
 
 ## Tests
 
 Run from the repo root:
 
-- `npx vitest run tests/billing` → exactly **51 tests, 0 skipped** (regression
-  proof for the repair brief).
+- `npx vitest run tests/billing` → exactly **88 tests, 0 skipped**
+  (51 regression baseline from BILL-C2-1-REPAIR + 37 new for BILL-C3-1:
+  projection machine, narrow port, folded observations).
 - `npm run check` → strict typecheck + purity gate + full unit suite
-  (platform + billing) — the Blueprint §6 CI gate.
+  (platform + domain + billing) — the Blueprint §6 CI gate.
 
 Note on file names: the cycle-1 audit refers to these suites as
 `*.test.ts` (the unmounted candidate had no repo tooling); they are persisted
@@ -110,7 +179,8 @@ here as `*.spec.ts` so the accepted repository vitest config
 `entitlement.test.ts→entitlement.spec.ts`, `tiers.test.ts→tiers.spec.ts`,
 `coverage.test.ts→coverage.spec.ts`,
 `entitlementGate.test.ts→entitlementGate.spec.ts`,
-`upgradeUrl.test.ts→upgradeUrl.spec.ts`, purity suite → `purity.spec.ts`.
+`upgradeUrl.test.ts→upgradeUrl.spec.ts`, purity suite → `purity.spec.ts`;
+BILL-C3-1 adds `projection.spec.ts` and `projectionSnapshotSource.spec.ts`.
 
 Repair provenance: F1 (`countFromAdapters` passes `.pages`), F2 (modulo
 fixture pinned to its provable 123 distinct ids with full inclusion–exclusion
@@ -118,3 +188,6 @@ derivation in `counterAdapters.spec.ts`), F3 (runaway fixture counts calls
 inside `fetchPage`), F4 (`BillingPagingAdapter` type import restored), F5
 (double-step cast removed in favor of typed key iteration in
 `coverage.spec.ts`), plus the throw-vs-null docstring handoff above.
+BILL-C3-1 provenance: accepted-audit observations 1 (per-source warning
+liveness) and 2 (explicit null fail-open tier) folded with dedicated
+regression tests in `entitlementGate.spec.ts`.

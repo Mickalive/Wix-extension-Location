@@ -11,6 +11,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   createEntitlementGate,
+  FAIL_OPEN_RESOLUTION,
   TRANSIENT_WARNING_CODES,
 } from '../../src/billing/enforcement/entitlementGate';
 import type {
@@ -302,5 +303,71 @@ describe('createEntitlementGate (canonical EntitlementGate port)', () => {
       warning: null, // over-limit is a normal upgrade-CTA state, not an incident
     });
     expect(await ledger.load()).toEqual([]);
+  });
+});
+
+describe('accepted-audit observations folded at BILL-C3-1 (CYCLE_32787032785_BILLING)', () => {
+  it('observation 1 — BILLING_API_FAILURE clears on billing recovery even while listing still fails', async () => {
+    const ledger = new InMemoryWarningLedger();
+    const instanceState: { failWith?: Error } = { failWith: new Error('instance API unreachable') };
+    const listingState: { failWith?: Error } = { failWith: new Error('listLocations down') };
+    const gate = createEntitlementGate({
+      instance: instancePort({ isFree: false, vendorProductId: 'prod-test-tier-2-3' }, instanceState),
+      listings: listingPort([rec('loc-a')], listingState),
+      billableCount: countPort(),
+      warnings: ledger,
+      overrides: TEST_OVERRIDES,
+    });
+
+    // Step 1: billing fails while the listing is healthy ⇒ billing warning recorded.
+    delete listingState.failWith;
+    await gate.allowedLocationIds();
+    expect((await ledger.load()).map((w) => w.code)).toEqual(['BILLING_API_FAILURE']);
+
+    // Step 2: billing recovers but the listing now fails. Warning liveness is
+    // PER-SOURCE: the healed billing failure must clear even though the
+    // decision itself degrades on the listing path.
+    delete instanceState.failWith;
+    listingState.failWith = new Error('listLocations down again');
+
+    const decision = await gate.allowedLocationIds();
+    expect(decision.degraded).toBe(true); // listing degraded as expected
+    expect((await ledger.load()).map((w) => w.code)).toEqual(['LOCATION_LISTING_FAILURE']);
+
+    // Step 3: full recovery clears the remaining transient code.
+    delete listingState.failWith;
+    await gate.allowedLocationIds();
+    expect(await ledger.load()).toEqual([]);
+  });
+
+  it('observation 2 — FAIL_OPEN_RESOLUTION carries an explicit null tier, never a tier placeholder', () => {
+    // The former 'TIER_11_PLUS' placeholder implied a plan identification
+    // that never happened; the sentinel now claims NO tier.
+    expect(FAIL_OPEN_RESOLUTION.tier).toBeNull();
+    expect(FAIL_OPEN_RESOLUTION.tier).not.toBe('TIER_11_PLUS');
+    expect(Object.isFrozen(FAIL_OPEN_RESOLUTION)).toBe(true);
+    expect(FAIL_OPEN_RESOLUTION.maxLocations).toBe(Number.POSITIVE_INFINITY);
+    expect(FAIL_OPEN_RESOLUTION.isPaid).toBe(false);
+    expect(FAIL_OPEN_RESOLUTION.restrictionReliable).toBe(false);
+    expect(FAIL_OPEN_RESOLUTION.warnings).toEqual([]);
+  });
+
+  it('observation 2 — the billing-failed branch serves unlimited coverage from the sentinel without consuming a tier', async () => {
+    const ledger = new InMemoryWarningLedger();
+    const gate = createEntitlementGate({
+      instance: instancePort(null, { failWith: new Error('instance API unreachable') }),
+      listings: listingPort([rec('loc-b'), rec('loc-a'), rec('loc-m', true)]),
+      billableCount: countPort(),
+      warnings: ledger,
+      overrides: TEST_OVERRIDES,
+    });
+
+    const decision = await gate.allowedLocationIds();
+
+    // Behavior unchanged by the observation-2 retype: fail-open coverage.
+    expect(decision.degraded).toBe(true);
+    expect(decision.overLimit).toBe(false);
+    expect(decision.allowedLocationIds).toEqual(['loc-m', 'loc-a', 'loc-b']);
+    expect((await ledger.load())[0]?.code).toBe('BILLING_API_FAILURE');
   });
 });

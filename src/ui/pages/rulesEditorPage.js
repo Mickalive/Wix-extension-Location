@@ -14,6 +14,17 @@
  *
  * Save/Apply are never silent: both drive a visible status region
  * (role="status") with pending/unavailable/saved/applied feedback.
+ *
+ * Mutation lifecycle (DASH-C3-1; Blueprint §4 flow 3): a confirmed apply
+ * polls bridge.getMutationStatus(planId) via the bounded controller in
+ * state/mutationPoller.js until the journal reaches a TERMINAL state
+ * (APPLY_COMPLETED / ROLLED_BACK / RECOVERED / any other non-allowlisted
+ * state) and renders that outcome in the role="status" region. Polling stops
+ * permanently on the first terminal state or bridge error and is hard-bounded
+ * (no infinite loop). Crash-mid-apply recovery is offered ONLY as an explicit
+ * button ("Recover interrupted apply") that calls bridge.recover(scope) on
+ * click; nothing on this page ever auto-retries or auto-applies a destructive
+ * operation (Contract §9.2).
  */
 
 import { el } from '../dom/kit.js';
@@ -21,6 +32,7 @@ import { computeScheduleDiff } from '../diff/computeScheduleDiff.js';
 import { openDiffPreviewModal } from '../modals/diffPreviewModal.js';
 import { renderExplainPanel } from '../explain/explainPanel.js';
 import { describeBridgeFailure } from '../state/editorStore.js';
+import { pollMutationUntilTerminal } from '../state/mutationPoller.js';
 
 const WEEKDAYS = ['MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT', 'SUN'];
 
@@ -41,11 +53,16 @@ function scopeLabel(scopeType) {
  * @param {import('../services/bridge.js').createServicesBridge} [options.bridge]
  * @param {UiDocument} [options.document]
  * @param {Array<{decision:string,ruleId:string,code:string,customerMessage:string}>} [options.explanations]
+ * @param {{maxAttempts?: number, delayMs?: number, delayFn?: (ms: number) => Promise<void>}} [options.pollOptions]
+ *   Bounded mutation-status polling controls; tests inject an immediate
+ *   delayFn and a small maxAttempts for deterministic offline runs.
  */
 export function renderRulesEditorPage(options) {
   const doc = options.document;
   const store = options.store;
   const bridge = options.bridge ?? null;
+  const pollOptions = options.pollOptions ?? {};
+  let destroyed = false;
 
   const root = el('div', { class: 'rules-editor-page', 'data-testid': 'rules-editor-page' });
   const dynamic = el('div', { class: 'dynamic' });
@@ -69,11 +86,58 @@ export function renderRulesEditorPage(options) {
     if (state.saveStatus === 'unavailable') messages.push(state.lastSaveMessage ?? 'Save is unavailable right now.');
     if (state.applyStatus === 'pending') messages.push('Applying schedule changes…');
     if (state.applyStatus === 'applied') messages.push(state.lastApplyMessage ?? 'Schedule changes applied.');
+    if (state.applyStatus === 'rolled_back') messages.push(state.lastApplyMessage ?? 'The change set did not apply cleanly; schedules were rolled back.');
+    if (state.applyStatus === 'recovered') messages.push(state.lastApplyMessage ?? 'An interrupted apply was recovered; schedules were restored.');
+    if (state.applyStatus === 'failed') messages.push(state.lastApplyMessage ?? 'The apply ended in an unresolved state.');
     if (state.applyStatus === 'unavailable') messages.push(state.lastApplyMessage ?? 'Apply is unavailable right now.');
+    if (state.recoverStatus === 'pending') messages.push('Checking the interrupted change set for recovery…');
+    if (state.recoverStatus === 'unavailable') messages.push(state.lastRecoverMessage ?? 'Recovery is unavailable right now.');
+    if (state.recoverStatus === 'done') {
+      const summary = state.lastRecoverySummary;
+      if (!summary) {
+        messages.push(state.lastRecoverMessage ?? 'Nothing was pending for this schedule; nothing needed recovery.');
+      } else if (summary.complete === true) {
+        messages.push(`Recovery completed: schedules restored to their pre-apply state (change set ${summary.planId}).`);
+      } else {
+        messages.push('Recovery finished with unresolved items — see the details below.');
+      }
+    }
     return el(
       'div',
       { role: 'status', 'data-testid': 'action-status', 'aria-live': 'polite' },
       ...messages.map((message) => el('p', { text: message })),
+    );
+  }
+
+  /**
+   * Structured RecoverySummary details (rendered only after an explicit,
+   * user-initiated recover). Mismatches and notes are shown verbatim so the
+   * outcome is never prettified into a false "all good".
+   */
+  function recoveryRegion(state) {
+    if (state.recoverStatus !== 'done' || !state.lastRecoverySummary) {
+      return el('div', { 'data-testid': 'recovery-region' });
+    }
+    const summary = state.lastRecoverySummary;
+    const items = [
+      ...(Array.isArray(summary.mismatches) ? summary.mismatches : []).map((entry) =>
+        el('li', { 'data-testid': 'recovery-mismatch', text: String(entry) }),
+      ),
+      ...(Array.isArray(summary.notes) ? summary.notes : []).map((entry) =>
+        el('li', { 'data-testid': 'recovery-note', text: String(entry) }),
+      ),
+    ];
+    return el(
+      'div',
+      { 'data-testid': 'recovery-region', role: 'status', 'aria-live': 'polite' },
+      el('p', {
+        'data-testid': 'recovery-summary',
+        text:
+          summary.complete === true
+            ? `Recovery reference ${summary.auditEntryId ?? '(no audit reference)'}: schedules match their pre-apply snapshot.`
+            : `Recovery reference ${summary.auditEntryId ?? '(no audit reference)'}: unresolved items remain.`,
+      }),
+      items.length > 0 ? el('ul', { 'data-testid': 'recovery-details' }, ...items) : null,
     );
   }
 
@@ -486,12 +550,47 @@ export function renderRulesEditorPage(options) {
       },
       state.saveStatus === 'pending' ? 'Saving…' : 'Save draft',
     );
+    const controls = [saveButton, reviewButton, applyButton];
+    const recoverControl = buildRecoverControl(state);
+    if (recoverControl) controls.push(recoverControl);
     return el(
       'div',
       { class: 'actions', 'data-testid': 'page-actions' },
-      saveButton,
-      reviewButton,
-      applyButton,
+      ...controls,
+    );
+  }
+
+  /**
+   * Explicit crash-mid-apply recovery affordance (T-RB1 UX counterpart).
+   *
+   * Rendered ONLY when this editor actually tracked an interrupted or
+   * unresolved change set (a journal observation with a known scope) and the
+   * outcome is not already a clean terminal state. The bridge call happens
+   * exclusively inside the click handler — nothing renders, polls or times
+   * its way into a destructive recovery without explicit user intent
+   * (Contract §9.2). Returns null when there is nothing to recover.
+   */
+  function buildRecoverControl(state) {
+    if (!state.lastMutation || !state.lastMutation.scope) return null;
+    // Clean terminals need no recovery.
+    if (state.applyStatus === 'applied' || state.applyStatus === 'rolled_back' || state.applyStatus === 'recovered') {
+      return null;
+    }
+    // An apply still being polled must never be disturbed by a concurrent
+    // recovery: hide the affordance until the attempt reaches a resolution.
+    if (state.applyStatus === 'pending') return null;
+    const pending = state.recoverStatus === 'pending';
+    return el(
+      'button',
+      {
+        type: 'button',
+        'data-testid': 'recover-interrupted',
+        disabled: pending,
+        title:
+          'Checks the interrupted change set for this schedule and restores your schedules to their pre-apply state. Runs only when you click it.',
+        onClick: () => void handleRecover(),
+      },
+      pending ? 'Recovering…' : 'Recover interrupted apply',
     );
   }
 
@@ -531,15 +630,123 @@ export function renderRulesEditorPage(options) {
       });
       return;
     }
+    const draftAtApply = JSON.parse(JSON.stringify(state.draft));
     store.dispatch({ type: 'APPLY_START' });
     try {
-      const { ops, hash } = computeScheduleDiff(state.savedRuleSet, state.draft);
-      await bridge.requestApply(ops, state.confirmedHash);
-      store.dispatch({ type: 'APPLY_SUCCESS', savedRuleSet: state.draft });
+      const { ops } = computeScheduleDiff(state.savedRuleSet, state.draft);
+      const response = await bridge.requestApply(ops, state.confirmedHash);
+      // The accepted apply-plan response carries `{ summary: MutationSummary }`;
+      // its planId is the journal key the status endpoint polls.
+      const planId = response?.summary?.planId;
+      if (typeof planId !== 'string' || planId === '') {
+        // Never claim success without a confirmable outcome reference.
+        store.dispatch({
+          type: 'APPLY_FAILED',
+          message:
+            'The apply result could not be confirmed: the server response did not include a change-set reference. Nothing will change on its own; check your schedules before trying again.',
+        });
+        return;
+      }
+      const outcome = await pollMutationUntilTerminal({
+        getStatus: () => bridge.getMutationStatus(planId),
+        onObservation: (projection) => {
+          if (destroyed) return;
+          store.dispatch({
+            type: 'MUTATION_TRACKED',
+            planId: typeof projection.planId === 'string' ? projection.planId : planId,
+            scope: projection.scope ?? null,
+            state: typeof projection.state === 'string' ? projection.state : null,
+          });
+        },
+        isCancelled: () => destroyed,
+        maxAttempts: pollOptions.maxAttempts,
+        delayMs: pollOptions.delayMs,
+        delayFn: pollOptions.delayFn,
+      });
+      dispatchApplyOutcome(outcome, draftAtApply);
     } catch (error) {
       store.dispatch({
         type: 'APPLY_UNAVAILABLE',
         message: describeBridgeFailure(error, 'Apply'),
+      });
+    }
+  }
+
+  /** Maps one bounded-poll outcome to the visible terminal apply state. */
+  function dispatchApplyOutcome(outcome, draftAtApply) {
+    switch (outcome.kind) {
+      case 'APPLIED':
+        store.dispatch({
+          type: 'APPLY_SUCCESS',
+          savedRuleSet: draftAtApply,
+          message: 'Schedule changes applied.',
+        });
+        return;
+      case 'ROLLED_BACK':
+        store.dispatch({
+          type: 'APPLY_ROLLED_BACK',
+          message:
+            'The change set did not apply completely: your schedules were rolled back to their previous state. Nothing was changed. You can adjust the draft, then review and try again.',
+        });
+        return;
+      case 'RECOVERED':
+        store.dispatch({
+          type: 'APPLY_RECOVERED',
+          message:
+            'An interrupted apply was recovered on the server: your schedules were restored to their previous state.',
+        });
+        return;
+      case 'FAILED_TERMINAL':
+        store.dispatch({
+          type: 'APPLY_FAILED',
+          message: `The apply ended in an unresolved state (${outcome.state}). It will not progress on its own. Use “Recover interrupted apply” to restore your schedules.`,
+        });
+        return;
+      case 'EXHAUSTED':
+        store.dispatch({
+          type: 'APPLY_FAILED',
+          message: `The apply result could not be confirmed after ${outcome.attempts} checks. Use “Recover interrupted apply” if your schedules seem stuck, or check back later.`,
+        });
+        return;
+      case 'ERROR':
+        store.dispatch({
+          type: 'APPLY_FAILED',
+          message: `${describeBridgeFailure(outcome.error, 'Apply')} It is not known whether the change set completed. Use “Recover interrupted apply” if your schedules seem stuck.`,
+        });
+        return;
+      default:
+        // CANCELLED (page torn down): no UI left to update; deliberately silent.
+        return;
+    }
+  }
+
+  /**
+   * Explicit user-initiated recovery (T-RB1 UX counterpart). Reached ONLY
+   * from the recover button's click handler — never from rendering, polling
+   * or timers.
+   */
+  async function handleRecover() {
+    const state = store.getState();
+    const scope = state.lastMutation?.scope ?? null;
+    if (!bridge || !scope) {
+      store.dispatch({
+        type: 'RECOVER_UNAVAILABLE',
+        message: 'Recovery is unavailable: this editor has not tracked an interrupted change set with a known schedule.',
+      });
+      return;
+    }
+    store.dispatch({ type: 'RECOVER_START' });
+    try {
+      const recovery = await bridge.recover(scope);
+      store.dispatch({
+        type: 'RECOVER_RESULT',
+        summary: recovery ?? null,
+        message: recovery ? null : 'Nothing was pending for this schedule; nothing needed recovery.',
+      });
+    } catch (error) {
+      store.dispatch({
+        type: 'RECOVER_UNAVAILABLE',
+        message: describeBridgeFailure(error, 'Recovery'),
       });
     }
   }
@@ -582,6 +789,7 @@ export function renderRulesEditorPage(options) {
       capsSection(draft),
       renderExplainPanel(options.explanations ?? [], { document: doc }),
       statusRegion(state),
+      recoveryRegion(state),
       actionButtons(state),
     );
     maybeRenderModal(state);
@@ -593,6 +801,7 @@ export function renderRulesEditorPage(options) {
   return {
     root,
     destroy() {
+      destroyed = true;
       unsubscribe();
       if (modalController) {
         modalController.close();

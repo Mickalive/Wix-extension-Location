@@ -31,6 +31,23 @@
 6. mixed chaos (duplicates + reorder + crash interleaved) converges to the
    golden sequential result.
 
+## Bounded buffer-residue window (audit CYCLE_32787032785 observation 5)
+
+An envelope that completes inside the `markCompleted` → `removeBuffered` crash
+window can linger in its scope's reorder buffer until a resume-path cleanup or
+an explicit `drainBuffered` removes it. This residue is BOUNDED and harmless by
+construction:
+
+- it can NEVER double-dispatch — completion is already recorded, so any later
+  encounter takes the `ALREADY_COMPLETED` fast path and the entry is dropped
+  (`SUPERSEDED_SKIPPED`), proven deterministically by the chaos suite;
+- memory impact is bounded to buffered-but-completed entries for one scope
+  until the next resume/drain pass, both of which run during normal
+  redelivery handling.
+
+No operator action is required; this note documents the window rather than
+hiding it.
+
 ## Scope discipline
 
 No counter policy, no booking semantics, no billing logic lives here: handlers

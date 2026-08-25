@@ -1,0 +1,162 @@
+{
+  "run_id": 32792897988,
+  "role": "wix-build-director",
+  "date": "2026-08-25",
+  "decision": "continue",
+  "accepted_branch": "lab/wix-rules",
+  "accepted_head_at_pass": "108b9ae",
+  "accepted_lanes": ["integration", "rules", "dashboard", "billing"],
+  "rejected_lanes": [],
+  "repair_lanes": [],
+  "lane_audit_verdicts": {
+    "integration": {
+      "verdict": "ACCEPT",
+      "audit_path": "reports/audits/CYCLE_32792897988_INTEGRATION.md",
+      "immutable_source": "cycle/wix-build/32792897988/audit-integration",
+      "candidate_commit": "00a37a0",
+      "disposition": "integrated"
+    },
+    "rules": {
+      "verdict": "ACCEPT",
+      "audit_path": "reports/audits/CYCLE_32792897988_RULES.md",
+      "immutable_source": "cycle/wix-build/32792897988/audit-rules",
+      "candidate_commit": "b8be582",
+      "disposition": "integrated"
+    },
+    "dashboard": {
+      "verdict": "ACCEPT",
+      "audit_path": "reports/audits/CYCLE_32792897988_DASHBOARD.md",
+      "immutable_source": "cycle/wix-build/32792897988/audit-dashboard",
+      "candidate_commit": "d2c6106",
+      "disposition": "integrated"
+    },
+    "billing": {
+      "verdict": "ACCEPT",
+      "audit_path": "reports/audits/CYCLE_32792897988_BILLING.md",
+      "immutable_source": "cycle/wix-build/32792897988/audit-billing",
+      "candidate_commit": "4e57e8a",
+      "disposition": "integrated"
+    }
+  },
+  "integration_record": {
+    "method": "git apply of each candidate's full diff (parent..HEAD per mounted worktree) into the accepted checkout; lane path sets are disjoint (platform+tests/platform, domain README+tests/domain, ui+extensions/dashboard+tests/ui, billing+tests/billing) and applied with zero conflicts; no commits made by the Director (trusted shell persists).",
+    "base_note": "Integration and dashboard candidates were based on 3c42295; rules and billing on 108b9ae (current HEAD). The two intervening commits (aeae190, 108b9ae) touch only .github/scripts/**, so all four diffs applied cleanly onto HEAD.",
+    "canonical_contract_integrity": "src/domain/ports.ts byte-for-byte unchanged (SHA-256 af68e698ae57a5f15ff02eae10141de9dfb3230002a530c52e93f3f7eb637fbc verified post-integration, matching the Rules audit record); zero diffs under src/shared/**, MAIN_PROMPT.md, .github/**, .opencode/**, AGENTS.md, opencode.json, directives/**.",
+    "director_contract_amendments": []
+  },
+  "finding_dispositions": {
+    "integration_audit": {
+      "A_target_uniform_evaluation_vs_cancel_reschedule": {
+        "classification": "cross_lane_escalation_to_rules",
+        "disposition": "Root cause lives in canonical domain semantics (evaluateRules has no target parameter), not in the accepted wiring. Routed to the Rules lane as RULES-C4-1 (next-cycle task). CANCEL/RESCHEDULE enforcement must NOT be enabled in production before this lands and T-VP gates confirm; the accepted wiring itself ships nothing harmful pre-credentials.",
+        "evidence": "reports/audits/CYCLE_32792897988_INTEGRATION.md sections 4 and 5 observation A"
+      },
+      "B_throwing_injected_clock_escapes_guard": {
+        "classification": "non_blocking_hardening",
+        "disposition": "Folded as optional defensive hardening into INT-C4-1 (guard clock.now() inside targetFailureResult). Injected-port misconfiguration only; T-VP0 thin adapter owns the final platform error surface.",
+        "evidence": "reports/audits/CYCLE_32792897988_INTEGRATION.md section 5 observation B"
+      },
+      "C_matrix_verbatim_comparisons_limit_free": {
+        "classification": "recorded_only",
+        "disposition": "Noted for future suite depth; limit-path verbatimness is currently evidenced by exact domain codes. No scheduled work; revisit if a limit-path regression ever escapes.",
+        "evidence": "reports/audits/CYCLE_32792897988_INTEGRATION.md section 5 observation C"
+      }
+    },
+    "rules_audit": {
+      "R1_zero_cap_divergence": {
+        "classification": "decision_of_record",
+        "disposition": "Canonical floor wins: maxCount >= 1. At any future mirror repoint the seam MUST translate a UI-accepted 0 into the canonical INVALID_VALUE issue (or the editor forbids 0 before submit). UI acceptance of 0 is provisional-only until then.",
+        "evidence": "reports/audits/CYCLE_32792897988_RULES.md section 6 R1"
+      },
+      "R2_window_overlap_divergence": {
+        "classification": "decision_of_record",
+        "disposition": "WINDOW_OVERLAP survives any repoint as a UI-only advisory check; canonical evaluation unions windows by design. It must not silently disappear.",
+        "evidence": "reports/audits/CYCLE_32792897988_RULES.md section 6 R2"
+      },
+      "R3_duplicate_exception_dates_divergence": {
+        "classification": "decision_of_record",
+        "disposition": "EXCEPTION_DUPLICATE_DATE retained as a documented UI simplification; canonical unique-id validation unchanged.",
+        "evidence": "reports/audits/CYCLE_32792897988_RULES.md section 6 R3"
+      },
+      "R4_unknown_scopes_divergence": {
+        "classification": "decision_of_record",
+        "disposition": "Catalog-existence checks move OUTSIDE the canonical validator into seam/dashboard responsibility at repoint time; validateRuleSet stays catalog-free.",
+        "evidence": "reports/audits/CYCLE_32792897988_RULES.md section 6 R4"
+      },
+      "N1_parity_ledger_repoint_update": {
+        "classification": "recorded_obligation",
+        "disposition": "The parity ledger must be consciously updated when the mirror repoint executes (it fails loudly by design). Recorded as mandatory evidence for any future repoint task.",
+        "evidence": "reports/audits/CYCLE_32792897988_RULES.md section 7 N1"
+      },
+      "N2_no_dst_in_parity_corpus": {
+        "classification": "no_action",
+        "disposition": "DST remains covered by existing domain time suites; out of the parity corpus's six mandated families.",
+        "evidence": "reports/audits/CYCLE_32792897988_RULES.md section 7 N2"
+      }
+    },
+    "dashboard_audit": {
+      "NA_unfollowable_recovery_guidance": {
+        "classification": "non_blocking_ux_honesty",
+        "disposition": "Folded into DASH-C4-1: make the recovery sentence conditional on state.lastMutation?.scope so the instruction is never unfollowable.",
+        "evidence": "reports/audits/CYCLE_32792897988_DASHBOARD.md section 6 N-A"
+      },
+      "NB_same_tick_multi_click": {
+        "classification": "cosmetic",
+        "disposition": "Optional debounce folded into DASH-C4-1 only if trivial; server-side idempotent recovery already makes it harmless.",
+        "evidence": "reports/audits/CYCLE_32792897988_DASHBOARD.md section 6 N-B"
+      },
+      "NC_observer_exception_propagation": {
+        "classification": "theoretical_hardening",
+        "disposition": "Folded into DASH-C4-1: pollMutationUntilTerminal wraps onObservation exceptions into an ERROR outcome.",
+        "evidence": "reports/audits/CYCLE_32792897988_DASHBOARD.md section 6 N-C"
+      }
+    },
+    "billing_audit": {
+      "obs1_docstring_overstatement": {
+        "classification": "non_blocking_docs",
+        "disposition": "Folded into BILL-C4-1: correct projection/types.ts wording (installation payloads can carry the optional expiration alias; transitions never read it).",
+        "evidence": "reports/audits/CYCLE_32792897988_BILLING.md section 6 observation 1"
+      },
+      "obs2_unbounded_dedup_memory": {
+        "classification": "routed_to_integration",
+        "disposition": "Auditor explicitly routes retention/compaction of seenEventIds to the Integration lane when wiring long-lived serverless processes. Folded into INT-C4-1(b).",
+        "evidence": "reports/audits/CYCLE_32792897988_BILLING.md section 6 observation 2"
+      },
+      "obs3_rendered_shape_fidelity": {
+        "classification": "cosmetic_fidelity",
+        "disposition": "Folded into BILL-C4-1: preserve or explicitly document/test the packageName drop on post-snapshot refinement.",
+        "evidence": "reports/audits/CYCLE_32792897988_BILLING.md section 6 observation 3"
+      },
+      "obs4_initial_source_labeling": {
+        "classification": "cosmetic_labeling",
+        "disposition": "Folded into BILL-C4-1: fix or document-with-test the 'EVENT_DERIVED' label on a never-reconciled zero-event projector.",
+        "evidence": "reports/audits/CYCLE_32792897988_BILLING.md section 6 observation 4"
+      }
+    }
+  },
+  "simulation_source_run": null,
+  "simulation_verdict": null,
+  "simulation_dispositions": [],
+  "simulation_note": "Asynchronous simulated-Wix QA not available this pass: /tmp/wix_simulation_latest/reports/simulation/LATEST.json absent AND remote branch qa/wix-sim-latest does not exist (git ls-remote origin checked). Per policy its absence did not delay this cycle. The next Director pass must mount and disposition it when present; release-readiness must check QA recency and unresolved live-Wix gates.",
+  "tests": [
+    {"name": "npm ci", "result": "PASS", "detail": "lockfile-faithful, credential-free (node_modules refreshed from lockfile)"},
+    {"name": "npm run check (tsc --noEmit strict incl. noUncheckedIndexedAccess + purity gate + vitest)", "result": "PASS", "detail": "392/392 tests, 38 files, zero skipped (181 platform + 123 domain + 88 billing); PURITY GATE FAILED stdout lines are the asserted negative-control fixture inside purity-gate.spec.ts, expected"},
+    {"name": "npm run check:offline (all proxies pinned to 127.0.0.1:9)", "result": "PASS", "detail": "392/392 — zero network egress proven on the integrated tree"},
+    {"name": "tests/ui lane suite (node --test)", "result": "PASS", "detail": "143/143 (98 baseline untouched + 45 new mutation-lifecycle/mirror tests)"},
+    {"name": "Cross-lane arithmetic check", "result": "PASS", "detail": "256 baseline + 69 integration + 30 rules + 37 billing = 392 matches all four lane audits' per-suite deltas exactly; no test lost or duplicated in merge"},
+    {"name": "Canonical-contract integrity", "result": "PASS", "detail": "ports.ts SHA-256 af68e698…fbc identical post-integration; empty diff over src/shared/** and all immutable governance paths"}
+  ],
+  "residual_risks": [
+    "CANCEL/RESCHEDULE enforcement semantics (Integration audit Observation A): uniform rule evaluation can block cancelling the very booking a cap counts, and flag a reschedule onto the booker's own slot as DUPLICATE_BOOKING. Root cause is canonical domain design; RULES-C4-1 is mandatory before any production enablement of those targets and before T-VP1–T-VP5 claims.",
+    "No empirical Wix evidence yet: gates T-VP0–T-VP5, T-WH1–T-WH6, T-BK1–T-BK4, T-RB1–T-RB2 require human-owned credentials (Contract §16); no production-capability claims exist in accepted code.",
+    "Simulated-Wix QA has never completed for any run (qa/wix-sim-latest still absent); when it lands every blocker needs an explicit repair/resolved/superseded disposition.",
+    "Projector dedup memory is unbounded until INT-C4-1(b) defines retention/compaction for long-lived serverless processes (Billing audit obs 2).",
+    "Dashboard failed-state guidance is unfollowable in the narrow first-probe-failure state until DASH-C4-1(b) lands (Dashboard audit N-A).",
+    "Downgrade-through-gate (tier drop ⇒ coverage shrink with preserved configuration) lacks a dedicated end-to-end regression until BILL-C4-1(a) lands.",
+    "Rules audit N1 obligation: the uiValidatorParity ledger fails loudly at any UI-validator drift; the future mirror repoint must consciously update it under the recorded R1–R4 decisions.",
+    "Dashboard audit N-2 (carried): root tsc does not type-check plain-JS UI sources; extend the repo gate to dashboard paths at the T-VP0 React/TS scaffold.",
+    "TOCTOU residual risk on count caps and best-effort-only reschedule enforcement remain disclosed-in-product requirements (Contract C6); copy bans re-verified clean this cycle."
+  ],
+  "external_blocker": null,
+  "next_cycle_summary": "Cycle 4 closes the last known enforcement-correctness gap and completes user-facing entitlement transparency: Rules adds additive target-aware evaluation so CANCEL frees capacity and RESCHEDULE ignores the booker's own booking (audit Observation A); Integration builds the enforcement composition root on billing's projectedSnapshotSource, defines dedup retention, and exposes the token-verified GET /meter endpoint; Dashboard ships the Blueprint's LocationsUsage meter page (allowance, over-limit, upgrade CTA, degraded warnings) plus recovery-guidance honesty fixes; Billing adds the downgrade-through-gate regression and folds projection fidelity findings."
+}

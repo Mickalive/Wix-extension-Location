@@ -13,6 +13,15 @@
  *
  * Every draft mutation invalidates any prior confirmation (stale-hash replay
  * is rejected by construction).
+ *
+ * Mutation lifecycle (DASH-C3-1; Blueprint §4 flow 3): after APPLY_START the
+ * store tracks the server-side journal via MUTATION_TRACKED observations
+ * ({planId, scope, state}) and records the polled TERMINAL outcome through
+ * APPLY_SUCCESS / APPLY_ROLLED_BACK / APPLY_RECOVERED / APPLY_FAILED. One
+ * confirmed consent covers exactly one apply attempt: every terminal outcome
+ * clears the confirmation so a retry always requires fresh review + confirm.
+ * Recovery is a separate explicit user action (RECOVER_* actions); nothing in
+ * the store ever schedules or auto-triggers a destructive operation.
  */
 
 import { computeScheduleDiff } from '../diff/computeScheduleDiff.js';
@@ -63,9 +72,15 @@ export function createEditorStore(input = {}) {
       confirmedHash: null,
       notice: null,
       saveStatus: 'idle', // idle | pending | unavailable | saved
-      applyStatus: 'idle', // idle | pending | unavailable | applied
+      applyStatus: 'idle', // idle | pending | unavailable | applied | rolled_back | recovered | failed
       lastSaveMessage: null,
       lastApplyMessage: null,
+      // Mutation-lifecycle tracking (flow 3): the journal record this editor
+      // is following, plus the explicit recovery session state.
+      lastMutation: null, // { planId, scope, state } | null
+      recoverStatus: 'idle', // idle | pending | unavailable | done
+      lastRecoverySummary: null, // RecoverySummary | null (null + done => nothing was pending)
+      lastRecoverMessage: null,
     },
     { type: '_INIT' },
   );
@@ -130,6 +145,22 @@ export function createEditorStore(input = {}) {
 
   function invalidateConfirmation(base) {
     return { ...base, confirmedHash: null };
+  }
+
+  /**
+   * Terminal apply outcome shared shape: consent is consumed (one confirmed
+   * diff = one apply attempt), the diff session closes, and the visible
+   * outcome message is recorded. The saved baseline and draft are left for
+   * each specific action to decide.
+   */
+  function terminalApply(base, applyStatus, lastApplyMessage) {
+    return {
+      ...base,
+      applyStatus,
+      lastApplyMessage,
+      confirmedHash: null,
+      diffPreview: { open: false, renderedHash: null },
+    };
   }
 
   function reduce(current, action) {
@@ -297,23 +328,81 @@ export function createEditorStore(input = {}) {
         };
 
       case 'APPLY_START':
-        return { ...current, applyStatus: 'pending', lastApplyMessage: null };
+        return {
+          ...current,
+          applyStatus: 'pending',
+          lastApplyMessage: null,
+          // A fresh apply supersedes any previously tracked mutation and any
+          // finished recovery session; consent is consumed by THIS attempt.
+          lastMutation: null,
+          recoverStatus: 'idle',
+          lastRecoverySummary: null,
+          lastRecoverMessage: null,
+        };
 
       case 'APPLY_SUCCESS':
         return revalidate({
-          ...current,
+          ...terminalApply(current, 'applied', action.message ?? 'Schedule changes applied.'),
           savedRuleSet: cloneDraft(action.savedRuleSet ?? current.draft),
-          confirmedHash: null,
-          diffPreview: { open: false, renderedHash: null },
-          applyStatus: 'applied',
-          lastApplyMessage: 'Schedule changes applied.',
+          draft: cloneDraft(action.savedRuleSet ?? current.draft),
         });
+
+      case 'APPLY_ROLLED_BACK':
+        // Schedules were restored server-side: saved baseline stays as-is,
+        // the draft is preserved so the user can adjust and re-review.
+        return terminalApply(current, 'rolled_back', action.message ?? 'The change set did not apply cleanly; schedules were rolled back.');
+
+      case 'APPLY_RECOVERED':
+        return terminalApply(current, 'recovered', action.message ?? 'An interrupted apply was recovered; schedules were restored.');
+
+      case 'APPLY_FAILED':
+        return terminalApply(current, 'failed', action.message ?? 'The apply ended in an unresolved state.');
 
       case 'APPLY_UNAVAILABLE':
         return {
           ...current,
           applyStatus: 'unavailable',
           lastApplyMessage: action.message,
+        };
+
+      case 'MUTATION_TRACKED': {
+        // Observation from the status poller. The scope may arrive only on
+        // some observations; keep the last known one (never fabricate one).
+        const previous = current.lastMutation;
+        const planId = typeof action.planId === 'string' ? action.planId : previous?.planId ?? null;
+        if (!planId) return current;
+        return {
+          ...current,
+          lastMutation: {
+            planId,
+            scope:
+              action.scope && typeof action.scope === 'object'
+                ? action.scope
+                : previous?.scope ?? null,
+            state: typeof action.state === 'string' ? action.state : previous?.state ?? null,
+          },
+        };
+      }
+
+      // ------------------------------------------------- explicit recovery
+
+      case 'RECOVER_START':
+        return { ...current, recoverStatus: 'pending', lastRecoverMessage: null };
+
+      case 'RECOVER_RESULT':
+        return {
+          ...current,
+          recoverStatus: 'done',
+          lastRecoverySummary: action.summary && typeof action.summary === 'object' ? action.summary : null,
+          lastRecoverMessage:
+            action.summary && typeof action.summary === 'object' ? null : action.message ?? null,
+        };
+
+      case 'RECOVER_UNAVAILABLE':
+        return {
+          ...current,
+          recoverStatus: 'unavailable',
+          lastRecoverMessage: action.message,
         };
 
       case 'DISMISS_NOTICE':

@@ -288,4 +288,52 @@ describe('POST recover delegates crash recovery to the orchestrator', () => {
     }
     expect(calls).toBe(0);
   });
+
+  // N4 REGRESSION (audit CYCLE_32787032785_INTEGRATION observation 4, repaired
+  // by INT-C3-1 item g): a non-string locationId must be rejected INVALID_QUERY
+  // instead of being silently dropped from the scope.
+  it('rejects non-string locationId values with INVALID_QUERY (N4 regression)', async () => {
+    let calls = 0;
+    const deps = {
+      tokenVerifier: new FakeTokenVerifier(),
+      orchestrator: {
+        recoverInterruptedApply: async () => {
+          calls += 1;
+          return null;
+        },
+      },
+    };
+    for (const locationId of [42, null, { id: 'loc-1' }, ['loc-1'], '']) {
+      const body = {
+        scope: { scheduleId: 's', ownerType: 'BUSINESS', ownerId: 'o', locationId },
+      };
+      await expect(postRecover(deps, { authToken: VALID_TOKEN, body })).rejects.toMatchObject({
+        code: 'INVALID_QUERY',
+      });
+    }
+    expect(calls).toBe(0); // strict shape validation precedes the orchestrator
+  });
+
+  it('passes a string locationId through to the orchestrator scope unchanged', async () => {
+    const requestedScopes: ScheduleScope[] = [];
+    const response = (await postRecover(
+      {
+        tokenVerifier: new FakeTokenVerifier(),
+        orchestrator: {
+          recoverInterruptedApply: async (scope) => {
+            requestedScopes.push(scope);
+            return null;
+          },
+        },
+      },
+      {
+        authToken: VALID_TOKEN,
+        body: {
+          scope: { scheduleId: 'sched-l', ownerType: 'STAFF', ownerId: 'staff-1', locationId: 'loc-9' },
+        },
+      },
+    )) as { status: number };
+    expect(response.status).toBe(200);
+    expect(requestedScopes[0]?.locationId).toBe('loc-9');
+  });
 });

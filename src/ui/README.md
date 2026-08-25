@@ -14,10 +14,11 @@ this cycle ships real, tested UI structure and behavior instead of a mockup.
 | `pages/rulesEditorPage.js` | Page assembly: windows by location/service, split rows, exceptions, caps, issues, statuses, actions. |
 | `modals/diffPreviewModal.js` | Contract §9.2 informed-consent dialog. |
 | `state/editorStore.js` | Deterministic state machine: draft, issues, hash-gated confirmation, save/apply states. |
+| `state/mutationPoller.js` | Bounded mutation-status poll controller: stops permanently on terminal state or bridge error; never auto-recovers. |
 | `diff/computeScheduleDiff.js` | Deterministic ops + FNV-1a hash + human descriptions. |
 | `validation/mirror.js` | Single seam between UI and rule-validation semantics (`setValidationSource`). |
 | `validation/ruleDraftValidators.js` | Provisional bundled validators (see below). |
-| `services/bridge.js` | Typed bridge to platform HTTP endpoints; the ONLY module permitted to reference Wix runtime modules (enforced by test). |
+| `services/bridge.js` | Typed bridge to platform HTTP endpoints; the ONLY module permitted to reference Wix runtime modules (enforced by test). Exposes the rule-set endpoints plus the mutation-lifecycle pair `getMutationStatus(planId)` / `recover(scope)` matching the accepted platform DTOs in `src/platform/http/mutationEndpoints.ts`. |
 | `explain/explainPanel.js` | Renders typed domain `Explanation[]` outcomes verbatim; never re-implements evaluation. |
 
 ## Decisions of record
@@ -29,6 +30,13 @@ this cycle ships real, tested UI structure and behavior instead of a mockup.
    `mirror.setValidationSource()`. When the Rules lane reaches VERDICT: ACCEPT,
    the Director's tracked obligation is to repoint that seam at the canonical
    validators and add a cross-lane parity contract test. No other file changes.
+   **DASH-C3-1 extension (F-N1 repoint, UI half):** the seam now also accepts a
+   server-shaped `ValidationResult` (`{valid, issues}` — the exact PUT /ruleset
+   domain-side validation response shape from canonical
+   `src/domain/validate.ts`) injected verbatim; the mirror adapts it into a
+   source function returning its issues unchanged. The bundled provisional
+   validators remain the offline fallback, behavior is unchanged when
+   unconfigured, and non-conforming sources are rejected fail-closed.
 2. **React/design-system mount deferred** to T-VP0 dependency pinning; not
    faked. `dom/kit.js` mirrors the small browser surface used here so the port
    is mechanical.
@@ -40,6 +48,19 @@ this cycle ships real, tested UI structure and behavior instead of a mockup.
 4. **No silent controls.** Save/Apply always drive a visible `role="status"`
    region: pending, saved/applied, or explicit unavailable messaging when the
    backend is not connected.
+5. **Mutation lifecycle surfaced honestly (DASH-C3-1, Blueprint §4 flow 3).**
+   A confirmed apply polls `getMutationStatus(planId)` through
+   `state/mutationPoller.js` until the journal reaches a TERMINAL state
+   (everything outside the orchestrator's `{SNAPSHOT_PERSISTED,
+   APPLY_IN_PROGRESS}` allowlist) and renders that outcome in the status
+   region. Polling is hard-bounded and stops permanently on terminal state or
+   bridge error. One confirmed consent covers exactly one apply attempt: every
+   terminal outcome clears the confirmation so retries require fresh review +
+   confirm. Crash-mid-apply recovery exists ONLY as an explicit button that
+   calls `bridge.recover(scope)` on click with the scope observed from the
+   journal — nothing auto-retries or auto-applies anything destructive
+   (Contract §9.2). Recovery outcomes render mismatches/notes verbatim rather
+   than pretending success.
 
 ## Repair provenance (cycle 2, DASH-C2-1-REPAIR)
 

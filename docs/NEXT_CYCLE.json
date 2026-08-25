@@ -1,9 +1,9 @@
 {
-  "cycle": 3,
+  "cycle": 4,
   "phase": "build",
   "generated_by": "wix-build-director",
   "date": "2026-08-25",
-  "decision_record": "reports/director/CYCLE_32787032785.json",
+  "decision_record": "reports/director/CYCLE_32792897988.json",
   "authority": {
     "contract": "docs/WIX_TECHNICAL_CONTRACT.md",
     "blueprint": "docs/BUILD_BLUEPRINT.md"
@@ -11,108 +11,107 @@
   "repair_priority_rule": "If a lane's latest persisted audit is FIX_BEFORE_INTEGRATION or REJECT, repairing those findings takes priority over any scheduled feature work. A repaired candidate requires a fresh independent audit before integration.",
   "decision": "continue",
   "repair_lanes": [],
-  "objective": "Wire the two binding flows unblocked by cycle-2 ACCEPTs — booking-time enforcement (Blueprint §4 flow 1: validation-plugin handler consuming pure evaluateRules plus the billing EntitlementGate) and the dashboard mutation-lifecycle surface (flow 3: status polling, recover, server-validation-backed seam) — while billing delivers the Contract §7 plan-state/reconciliation machine and rules discharges the Director-tracked cross-lane validator parity obligation.",
-  "canonical_contracts_notice": "src/domain/ports.ts, src/shared/types.ts, src/shared/errors.ts are accepted canonical contracts. The additive 'UNAUTHORIZED' ErrorCode member was executed by the Director at integration of run 32787032785 exactly as staged by the accepted candidate (see reports/director/CYCLE_32787032785.json); consume it, never fork it. Further semantic changes to ports.ts belong to the Rules lane and require a fresh VERDICT: ACCEPT before integration; further shared/** changes go through Director amendment only.",
+  "objective": "Close the last known enforcement-correctness gap — target-aware evaluation so CANCEL frees capacity and RESCHEDULE ignores the booker's own booking (Integration audit Observation A) — and complete user-facing entitlement transparency: the Blueprint's LocationsUsage meter page fed by a new token-verified GET /meter endpoint, the billing→enforcement composition root on projectedSnapshotSource with bounded dedup retention, and downgrade-through-gate regression coverage.",
+  "canonical_contracts_notice": "src/domain/ports.ts, src/shared/types.ts, src/shared/errors.ts are accepted canonical contracts (ports.ts SHA-256 af68e698…fbc verified at run-32792897988 integration). RULES-C4-1 is authorized to evolve ports.ts SEMANTICALLY but ONLY additively (new optional input with safe default preserving current CREATE behavior); any non-additive change must go back through Director coordination before integration. All other lanes consume canonical shapes unforked; shared/** changes remain Director-amendment-only.",
   "lanes": {
     "integration": {
       "status": "active",
-      "task_id": "INT-C3-1",
-      "task": "Booking-time enforcement wiring (Blueprint §4 flow 1) inside src/platform/validation-plugin/** (+ tests/platform/**), as pure Wix-import-free modules with an injected adapter seam for bookingsValidation.provideHandlers() from @wix/bookings/service-plugins (real SDK adapter deferred to T-VP0; document the wiring protocol in a README header like the cycle-2 http staging): (a) handler factory consuming canonical pure evaluateRules from src/domain with pre-resolved EvaluationDeps (entitlement PolicyDecision, countForQuery, existingBookings) built from injected ports; (b) explicit per-item results for EVERY bulk index (Contract §5.3: omitted items default valid — prove the hazard and return explicit results for all indices; respect maxItems 12); (c) target semantics per Contract §5.3/Blueprint §5: CREATE and CANCEL (+*_MULTI_SERVICE) fail CLOSED (block-with-retry-hint on internal error/timeout), RESCHEDULE (+multi) fails OPEN with a logged/alerted degradation record and never claims enforcement; (d) identity-free-first duplicate inputs (Invariant C1): map only documented payload fields (bookedEntity.slot.{serviceId, scheduleId, startDate, endDate, timezone, location.id OWNER_BUSINESS-only, location.locationType}); gate any metadata.identity consumption behind an explicit UNPROVEN-payload flag defaulting off; (e) EntitlementGate consumption using the accepted billing shapes (createEntitlementGate / PolicyDecision): locations outside allowedLocationIds are uncovered (rule evaluation skipped for them per ratified over-limit posture), degraded entitlement ⇒ fail-open coverage + persisted warning signal, never blocks a paying merchant on billing errors (§7/C5); (f) fast-response design: cached counters via BookingCountGateway port with short TTL; counter failure degrades caps per rule configuration with logged+surfaced incident (Blueprint flow 4), never silent; (g) hardening nits from the accepted integration audit: N3 make pre-parsed webhook envelopes pass full parseWebhookEnvelope structural validation (remove the duck-typing bypass), N4 postRecover rejects non-string locationId with INVALID_QUERY, N5 document the bounded buffer-residue window in webhooks README. Purity gate must cover the new root (extend DEFAULT_PROTECTED_ROOTS).",
-      "why_needed": "Flow 1 is the product's core enforcement path and has no platform implementation yet; it was explicitly sequenced behind Rules ACCEPT (achieved this cycle) and its EntitlementGate consumption behind Billing ACCEPT (achieved this cycle). Audit observations N3/N4/N5 are concrete accepted-audit findings on integrated code.",
+      "task_id": "INT-C4-1",
+      "task": "Enforcement composition root + entitlement meter endpoint inside src/platform/** + tests/platform/**: (a) composition-root module wiring the accepted billing export projectedSnapshotSource(projector) (src/billing/projection/snapshotSource.ts, documented handoff in src/billing/README.md) into ValidationPluginDeps' entitlementGate via createEntitlementGate, so enforcement consumes reconciled plan state WITHOUT importing webhook types (BILL-C3-1 sub-item e handoff); include a periodic-reconciliation seam (injectable poll trigger) since trial→paid conversion fires no event (Contract §7); (b) bounded retention/compaction policy for the projector's seenEventIds dedup memory suitable for long-lived serverless processes (Billing audit obs 2 routed here): define eviction semantics, prove convergence is preserved after compaction (replayed already-compacted events must stay idempotent or be safely re-detectable), document the tradeoff; (c) token-verified GET /meter endpoint through the accepted transport/auth stack exposing EXACTLY this pinned DTO: { \"meter\": {\"count\": number|null, \"degraded\": boolean}, \"coverage\": {\"allowedLocationIds\": string[], \"overLimit\": boolean, \"degraded\": boolean, \"warning\": string|null} } composed from gate.meter() + gate.allowedLocationIds(); unauthenticated => 401 UNAUTHORIZED; gate failure => fail-open degraded body per Contract §7/C5 posture, never a 500 that blocks the dashboard; (d) optional hardening per Integration audit obs B: guard clock.now() inside targetFailureResult so a throwing injected clock still yields guarded per-item results.",
+      "why_needed": "BILL-C3-1 explicitly prepared this handoff ('README documents the exact INT-C3-1 wiring') and its auditor routed dedup retention to this lane; without the composition root the enforcement path cannot consume reconciled billing state, and without GET /meter the Blueprint's LocationsUsage page has no data source. Observation B is a concrete accepted-audit hardening item.",
       "source_evidence": [
-        "docs/BUILD_BLUEPRINT.md section 4 flow 1 and section 9 cycle-2/3 sequencing ('wire validation-plugin handler shape to domain', 'billing enforcement hook consumption')",
-        "docs/WIX_TECHNICAL_CONTRACT.md section 5.3 (payload contract, fail-closed/fail-open semantics, bulk maxItems 12, omitted-items hazard, PII redaction), section 11 C1/C5, section 7 (fail-open entitlement posture)",
-        "reports/audits/CYCLE_32787032785_INTEGRATION.md non-blocking observations 3, 4, 5",
-        "docs/NEXT_CYCLE.json cycle-2 cross_lane_compatibility.sequencing (both prerequisites now satisfied)"
+        "reports/audits/CYCLE_32792897988_BILLING.md section 3 sub-item (e) handoff and section 6 observation 2",
+        "reports/audits/CYCLE_32792897988_INTEGRATION.md section 5 observation B",
+        "docs/BUILD_BLUEPRINT.md section 1 module map (services/ = typed bridge to platform/http endpoints ONLY; pages/LocationsUsage/) and section 4 flows 1 and 5",
+        "docs/WIX_TECHNICAL_CONTRACT.md section 7 (periodic reconciliation mandatory; fail-open entitlement posture; upgrade entry point)"
       ],
       "acceptance_criteria": [
-        "'npm ci && npm run check' passes offline (proxy-blocked rerun green) with zero credentials",
-        "handler matrix tests prove: valid facts => pure evaluateRules outcome returned verbatim with explanations; internal error/timeout on CREATE/CANCEL => fail-closed block with retry hint; RESCHEDULE failure => fail-open pass-through plus degradation record; zero rule logic outside src/domain",
-        "bulk test proves explicit results for every index including the omitted-item repro (maxItems 12 boundary)",
-        "entitlement tests prove: uncovered location skips rule evaluation per ratified posture; degraded gate => fail-open + warning surfaced; billing API failure never blocks booking",
-        "counter-failure test proves caps degrade per configured policy with logged+surfaced incident (never silent, never throw)",
-        "purity gate extended to src/platform/validation-plugin and green; no production-capability claims; scope limited to src/platform/** + tests/platform/**",
-        "N3/N4 regression tests committed (structural validation on pre-parsed envelopes; INVALID_QUERY for non-string locationId)"
+        "'npm ci && npm run check' passes offline with zero credentials; purity gate roots unchanged and green",
+        "composition-root tests prove: projector state flows into handler entitlement decisions end-to-end (purchase webhook between polls changes coverage) with zero webhook-type imports in the validation-plugin consumer modules",
+        "compaction tests prove: bounded memory growth under sustained unique-event load AND post-compaction replay convergence (no resurrected paid state, no duplicate dispatch)",
+        "GET /meter tests prove: pinned DTO shape verbatim, 401 on missing/invalid token, fail-open degraded body on gate/listing/count failures, 200 healthy path",
+        "obs-B regression test proves a throwing injected clock still produces guarded per-item results on every target",
+        "scope limited to src/platform/** + tests/platform/**; canonical domain/billing/shared shapes consumed unforked; no production-capability claims"
       ],
-      "out_of_scope": "real scaffold/wix release, dashboard UI, pricing policy, any live Wix call, semantic changes to shared/domain contracts",
+      "out_of_scope": "dashboard UI, real Wix transport/scaffold (T-VP0), semantic changes to billing projection logic, ports.ts edits",
       "blocker": null,
       "completion_evidence": null
     },
     "rules": {
       "status": "active",
-      "task_id": "RULES-C3-1",
-      "task": "Discharge the Director-tracked cross-lane validator parity obligation (dashboard audit F-N1, deferred until Rules achieved ACCEPT — it now has): add tests/domain/uiValidatorParity.spec.ts importing BOTH the canonical domain validator (validateRuleSet from src/domain) AND the dashboard lane's plain-JS provisional validators (src/ui/validation/ruleDraftValidators.js via its documented entry points) and assert issue-code equivalence on a shared draft corpus covering at least: (1) a fully valid draft converts with zero issues on both sides; (2) incomplete/invalid time rows; (3) unknown weekday keys; (4) non-integer/negative cap values; (5) overlapping duplicate windows for the same scope+weekday; (6) exception kind transitions (CLOSED->OVERRIDE with hours, removal of an OVERRIDE). Vitest compiles the TS side and imports the JS side directly, so this is executable today without the T-VP0 scaffold. Any parity mismatch is a concrete finding: document it in the spec as a skipped NOTHING — either fix the corpus if the UI fixture misuses the API or file the mismatch in the task report as evidence for DASH repair; never weaken either side to force agreement. Also add a short ownership note to src/domain/README.md recording that domain suites execute through the platform vitest config glob (tests/**/*.spec.ts) which must stay intact (audit N3).",
-      "why_needed": "The dashboard mirror seam was explicitly preserved until the Rules lane reached ACCEPT so that UI validation semantics can be proven equivalent to the canonical validator; that ACCEPT now exists, making the parity contract test executable and the last open obligation from reports/audits/CYCLE_32692407760_DASHBOARD.md dischargeable with real evidence.",
+      "task_id": "RULES-C4-1",
+      "task": "Target-aware evaluation semantics (Integration audit Observation A) inside src/domain/** + tests/domain/**: extend the canonical evaluation with an ADDITIVE target context so enforcement can distinguish CREATE from CANCEL and RESCHEDULE: (a) CANCEL evaluations must not be blocked by day/service/location caps whose counts include the booking being cancelled (cancel-frees-capacity), nor by duplicate-protection keyed to that same booking; window/exception checks apply only insofar as they are meaningful for cancellation per Contract §5.3 semantics — document exactly which rule families are evaluated per target; (b) RESCHEDULE duplicate detection must exclude the booker's own booking being rescheduled while still blocking genuine overlaps with OTHER bookings; caps evaluate against the PROPOSED slot; (c) implement as an additive optional field on EvaluationDeps (or equivalent port shape) with a safe default reproducing current behavior bit-for-bit so accepted platform/billing consumers compile and behave unchanged; ports.ts may change — this lane owns it and its own fresh ACCEPT covers it; record the evolution in src/domain/README.md; (d) regression tests reproducing BOTH adversarial probes from reports/audits/CYCLE_32792897988_INTEGRATION.md section 4 (cancel of the only booking on an at-capacity day => allow; reschedule overlapping own still-existing booking => not DUPLICATE_BOOKING unless a second conflicting booking exists); (e) document implications for dev-site gates T-VP1–T-VP5 (cancel-frees-capacity probe, reschedule surface coverage).",
+      "why_needed": "The integration lane's ACCEPTed wiring exposed a genuine canonical-semantics defect: uniform rule evaluation blocks cancelling the very booking a cap counts and flags self-overlapping reschedules as duplicates. The integration auditor escalated it to Rules under Director coordination; it must be resolved before CANCEL/RESCHEDULE validation is ever enabled in production and before T-VP claims.",
       "source_evidence": [
-        "reports/audits/CYCLE_32692407760_DASHBOARD.md finding F-N1 and recorded deferral decision",
-        "reports/audits/CYCLE_32787032785_DASHBOARD.md section 5 ('Recorded obligation correctly NOT executed ... until the Rules lane achieves ACCEPT')",
-        "src/ui/README.md 'Decisions of record' item 1 (repoint seam contract)",
-        "docs/BUILD_BLUEPRINT.md section 9 ('contract tests between lanes') and section 6 (validation-mirror tests importing pure domain validators)"
+        "reports/audits/CYCLE_32792897988_INTEGRATION.md sections 4–5 observation A (both probes reproduced by the independent auditor)",
+        "docs/WIX_TECHNICAL_CONTRACT.md section 5.3 (per-target validation semantics; cancel/reschedule targets exist and are called)",
+        "docs/BUILD_BLUEPRINT.md section 5 error model and section 6 rules test strategy",
+        "docs/NEXT_CYCLE.json cycle-4 canonical_contracts_notice (additive ports.ts evolution authorized for this lane)"
       ],
       "acceptance_criteria": [
-        "parity spec runs under the repo vitest config and is green with the six corpus families asserted on both sides",
-        "no .skip/.todo/.only; zero weakening of existing suites; strict tsc clean; purity gate green",
-        "any discovered mismatch is reported as a concrete finding with exact inputs and both outcomes (never silently reconciled)",
-        "scope limited to tests/domain/** + src/domain/README.md note; ports.ts byte-for-byte unchanged",
+        "both Observation-A probes now pass as regression tests, plus a control proving a genuine third-party overlap on RESCHEDULE still blocks",
+        "CREATE behavior proven unchanged: entire existing domain suite green unmodified; default-dep evaluation identical to pre-change outcomes on a sampled corpus",
+        "ports.ts evolution strictly additive (optional field, safe default); tsc strict clean across repo proving platform/billing consumers compile untouched",
+        "per-target rule-family matrix documented in README (which families evaluate for CREATE/CANCEL/RESCHEDULE and why, citing §5.3)",
+        "no Wix imports, no I/O, purity gate green, no .skip/.todo/.only",
         "fresh independent lane audit ends VERDICT: ACCEPT"
       ],
-      "out_of_scope": "changes to src/ui/** (dashboard-owned), new rule features, ports.ts semantic changes, I/O of any kind",
+      "out_of_scope": "platform wiring changes (Director coordinates any follow-up), UI validators, new rule features beyond target context, non-additive signature rewrites",
       "blocker": null,
       "completion_evidence": null
     },
     "dashboard": {
       "status": "active",
-      "task_id": "DASH-C3-1",
-      "task": "Mutation-lifecycle surface (Blueprint §4 flow 3 'progress/result surfaced in dashboard') inside src/ui/** + src/extensions/dashboard/** + tests/ui/**: (a) extend services/bridge.js with typed client methods matching the accepted platform DTOs: getMutationStatus(planId) (GET) and recover(scope) (POST) — same typed BridgeError taxonomy, 404=>null semantics, BAD_RESPONSE wrapping; (b) wire the apply flow: after requestApply(ops, confirmedHash) the page polls getMutationStatus until a terminal state (APPLY_COMPLETED / ROLLED_BACK / RECOVERED / failed-terminal) with a bounded poll count and renders the terminal outcome in the existing role=\"status\" region (applied / rolled back / failed with guidance); polling stops permanently on terminal state or bridge error (prove no infinite loop, no polling after terminal); (c) explicit user-initiated recover affordance for crash-mid-apply states (T-RB1 UX counterpart): a visible control that calls bridge.recover(scope) only on explicit click, rendering the RecoverySummary outcome; never auto-retries or auto-applies anything destructive without user intent (Contract §9.2); (d) prepare the F-N1 repoint seam: extend validation/mirror.js setValidationSource contract documentation and shape so a server-side ValidationResult-shaped source (the PUT /ruleset domain-side validation response) can be injected verbatim, keeping the provisional local validators as the offline fallback and current behavior unchanged when unconfigured; (e) address audit N-3 cosmetically only if trivial (document the _adoptFocus coupling in diffPreviewModal header); do not touch kit internals.",
-      "why_needed": "The platform mutation endpoints (status/recover) and orchestrator terminal states were accepted this cycle but no dashboard surface consumes them; without flow-3 surfacing, users cannot see apply progress, failure, rollback, or recovery — an informed-consent and supportability gap for irreversible schedule mutations. The mirror seam extension is the sanctioned first half of the F-N1 repoint whose parity proof RULES-C3-1 delivers from the domain side.",
+      "task_id": "DASH-C4-1",
+      "task": "LocationsUsage meter page (Blueprint section 1 pages/LocationsUsage) + recovery-guidance honesty inside src/ui/** + src/extensions/dashboard/** + tests/ui/**: (a) new LocationsUsage page rendering the billable-location meter from the INT-C4-1 pinned DTO { meter:{count,degraded}, coverage:{allowedLocationIds,overLimit,degraded,warning} } via a typed bridge method getEntitlementMeter() (GET /meter, same BridgeError taxonomy, 404=>null n/a — treat non-2xx as typed errors): show count vs plan allowance, over-limit state with stable-ordering note, persistent degraded-warning banner per the ratified fail-open posture (never silently healthy), single-location floor note (computed 0 => treated as 1, Contract §7), and an upgrade CTA implementing the buildUpgradeUrl contract (https://www.wix.com/apps/upgrade/<APP_ID>?appInstanceId=<INSTANCE_ID>, opened in a NEW TAB) shown when overLimit or tier-restricted; fixture-test against the pinned DTO until INT-C4-1 lands (same cross-lane DTO-pinning pattern as cycle 3); accessible markup (labels, roles, keyboard) consistent with the existing page kit; (b) N-A fix: make the failed-state recovery sentence conditional on state.lastMutation?.scope so guidance is never unfollowable; (c) N-C fix: pollMutationUntilTerminal wraps onObservation exceptions into an ERROR outcome instead of propagating; (d) N-B debounce only if trivial. Do NOT change ruleDraftValidators.js semantics — the parity ledger (tests/domain/uiValidatorParity.spec.ts) fails loudly by design and R1–R4 decisions of record apply only at the future mirror repoint.",
+      "why_needed": "pages/LocationsUsage is an unbuilt Blueprint module map entry; Contract §7 requires the meter, over-limit restriction visibility, persistent degraded warnings, and upgrade CTA to make entitlement transparent and review-tested. N-A/N-C are concrete accepted-audit findings on integrated dashboard code.",
       "source_evidence": [
-        "docs/BUILD_BLUEPRINT.md section 4 flows 2 and 3, section 1 module map (services/ = typed bridge to platform/http endpoints ONLY)",
-        "reports/audits/CYCLE_32787032785_INTEGRATION.md (accepted GET mutation-status and POST recover endpoint DTOs in src/platform/http/mutationEndpoints.ts)",
-        "reports/audits/CYCLE_32787032785_DASHBOARD.md findings N-1 (discharged at port), N-3, and the recorded F-N1 repoint obligation",
-        "docs/WIX_TECHNICAL_CONTRACT.md sections 9.2 (diff-and-confirm, explicit intent) and 15 T-RB1"
+        "docs/BUILD_BLUEPRINT.md section 1 module map (pages/LocationsUsage/: billable-location meter, plan allowance, upgrade CTA) and section 4 flow 5 (gate feeds dashboard meter)",
+        "docs/WIX_TECHNICAL_CONTRACT.md section 7 (billable-location definition, single-location floor documented in UI, over-limit behavior, fail-open warning posture, upgrade URL new-tab)",
+        "reports/audits/CYCLE_32792897988_DASHBOARD.md section 6 findings N-A, N-B, N-C",
+        "reports/director/CYCLE_32792897988.json finding_dispositions.rules_audit R1-R4 (do-not-touch ledger constraint)"
       ],
       "acceptance_criteria": [
-        "node runner suite green (98 baseline + new tests), credential-free, offline",
-        "bridge tests prove getMutationStatus/recover map transport failures, non-2xx, empty bodies, and malformed JSON to typed BridgeErrors with 404=>null",
-        "UI tests prove: terminal outcome rendered once; polling bounded and stopped after terminal/error; recover fires only on explicit click and renders summary; no path auto-applies or auto-retries a destructive operation",
-        "mirror accepts an injected server-shaped source without behavior change when unconfigured (existing 98 tests untouched and green)",
-        "scope discipline: only src/ui/**, src/extensions/dashboard/**, tests/ui/**; no direct Wix SDK calls outside the bridge's injected transport",
-        "fresh independent lane audit ends VERDICT: ACCEPT"
+        "node runner suite green (143 baseline + new tests), credential-free, offline",
+        "meter page tests prove: pinned-DTO rendering incl. count:null degraded state, over-limit + CTA visibility rules, floor note, warning banner persistence, new-tab upgrade link with exact URL contract",
+        "bridge tests prove getEntitlementMeter maps transport failures/non-2xx/malformed JSON to typed BridgeErrors",
+        "N-A regression: guidance mentions Recover only when scope is known; N-C regression: throwing observer yields ERROR outcome with polling stopped",
+        "no direct Wix SDK calls outside the bridge's injected transport; scope limited to src/ui/**, src/extensions/dashboard/**, tests/ui/**; ruleDraftValidators.js byte-for-byte unchanged",
+        "honest copy only (no banned claims per Contract §12); fresh independent lane audit ends VERDICT: ACCEPT"
       ],
-      "out_of_scope": "live Wix fetching, React/design-system mount (T-VP0 pin), validator implementation changes (parity owned by RULES-C3-1), platform code",
+      "out_of_scope": "platform/billing/domain code, validator semantics, live Wix fetching, React/design-system mount (T-VP0 pin)",
       "blocker": null,
       "completion_evidence": null
     },
     "billing": {
       "status": "active",
-      "task_id": "BILL-C3-1",
-      "task": "Plan-state projection and reconciliation machine (Contract §7 lifecycle; Blueprint §4 flow 5) inside src/billing/** + tests/billing/**, pure and Wix-import-free: (a) a deterministic projection module that ingests app-billing webhook EVENTS (Paid Plan Purchased, Paid Plan Auto Renewal Cancelled, App Installation Created/Updated — envelope semantics only, transport stays in the platform pipeline) plus periodic Get App Instance SNAPSHOTS and outputs the current EntitlementSignal; (b) reconciliation supremacy: a snapshot always overrides event-derived state (trial→paid conversion fires NO event — Contract §7 — so periodic reconciliation is mandatory, not optional); out-of-order, duplicated, and replayed events converge idempotently to the same projected state; (c) lifecycle branches tested both ways: cancelled-until-expiry keeps paid identifiers; dunning window (expired date but isFree:false) stays PAID; auto-renewal cancellation downgrades only at period end given a confirming snapshot; clone markers never leak across instances; UNKNOWN_PLAN_IDENTIFIER persists per accepted semantics; (d) fold accepted-audit observation 1: when the billing snapshot path is healthy but listing is still failing, clear('BILLING_API_FAILURE') must not be skipped — restructure the early-return so warning liveness is per-source (or document with a test why single-source clearing is correct); observation 2: make FAIL_OPEN_RESOLUTION carry an explicit null tier instead of the misleading 'TIER_11_PLUS' placeholder unless a consumer proves otherwise; (e) expose the projection as the snapshot source for createEntitlementGate via a narrow port so INT-C3-1's enforcement path can consume reconciled state without importing webhook types.",
-      "why_needed": "Contract §7 makes periodic reconciliation mandatory because trial→paid conversion fires no webhook; the accepted entitlement resolver is snapshot-pull only and has no event-ingestion/reconciliation model, leaving Blueprint flow 5 unimplemented. Observations 1–2 are concrete accepted-audit findings on integrated billing code.",
+      "task_id": "BILL-C4-1",
+      "task": "Downgrade-through-gate regression + projection fidelity folds inside src/billing/** + tests/billing/**: (a) end-to-end regression test through createEntitlementGate: a confirming snapshot downgrades the tier between reconciliations => allowedLocationIds shrinks to the new allowance with stable ordering preserved (default location first, then alphabetical by id), user configuration never deleted, over-limit upgrade state surfaces, and a subsequent confirming re-upgrade snapshot restores coverage — proving the §7 'downgrade only at period end via confirming snapshot' lifecycle is enforced, not just projected; (b) fold observation 1: correct projection/types.ts docstring so it truthfully states installation payloads CAN carry the optional expiration alias via AppInstanceBillingSnapshot while transitions never read it (C2); (c) fold observation 3: preserve packageName through post-snapshot refinement OR document+test why dropping it is correct (unknown-plan warning text fidelity); (d) fold observation 4: fix or document-with-test the initial source label on a never-reconciled zero-event projector (EVENT_DERIVED before anything derived).",
+      "why_needed": "Observations 1, 3, 4 are concrete accepted-audit findings on integrated billing code; the downgrade-through-gate path (projection tier drop => enforcement coverage shrink) is the one §7 lifecycle transition lacking dedicated gate-level regression, and it is exactly the transition that must never delete user data or silently over-serve.",
       "source_evidence": [
-        "docs/WIX_TECHNICAL_CONTRACT.md section 7 (lifecycle: trial conversion fires NO event, cancellation timing, dunning, C2 advisory expiration) and section 11 C2",
-        "docs/BUILD_BLUEPRINT.md section 4 flow 5 (plan webhooks + periodic reconciliation -> entitlement state machine)",
-        "reports/audits/CYCLE_32787032785_BILLING.md non-blocking observations 1 and 2",
-        "docs/NEXT_CYCLE.json cycle-2 sequencing note ('billing enforcement-hook consumption waits for a Billing ACCEPT audit' — satisfied)"
+        "reports/audits/CYCLE_32792897988_BILLING.md section 6 observations 1, 3, 4",
+        "docs/WIX_TECHNICAL_CONTRACT.md section 7 (lifecycle: no mid-cycle downgrade path; downgrades via confirming snapshots; over-limit ordering; never delete user data) and section 11 C2",
+        "docs/BUILD_BLUEPRINT.md section 6 billing test strategy (entitlement decision table, over-limit ordering stability)"
       ],
       "acceptance_criteria": [
-        "projection tests prove: snapshot-beats-stale-events; duplicate/out-of-order/replayed events converge idempotently; every §7 lifecycle branch asserted both ways",
-        "warning-liveness test proves BILLING_API_FAILURE clears on billing recovery even while listing still fails (or a documented single-source rationale with test)",
-        "FAIL_OPEN_RESOLUTION tier placeholder resolved per finding (explicit null tier or consumer-justified keep with test)",
-        "npx vitest run green (51 baseline + new), tsc --noEmit strict clean, purity gate green (zero '@wix/' imports under src/billing/**)",
-        "scope limited to src/billing/** + tests/billing/**; canonical shared/domain shapes consumed unforked",
+        "downgrade-through-gate regression proves coverage shrink + stable ordering + preserved configuration + upgrade-state surfacing + restore-on-re-upgrade, all through the public gate API",
+        "observation folds each land with either a behavior fix + test or a documented rationale + test (no silent doc-only skips)",
+        "npx vitest run green (88 billing baseline + new), tsc --noEmit strict clean, purity gate green (zero '@wix/' imports under src/billing/**)",
+        "scope limited to src/billing/** + tests/billing/**; canonical shared/domain shapes consumed unforked; no production-capability claims",
         "fresh independent lane audit ends VERDICT: ACCEPT"
       ],
-      "out_of_scope": "real Wix API/webhook transport (platform lane), pricing-page UI, tier feature differences beyond location count, trial numeric specifics (UQ5)",
+      "out_of_scope": "real Wix transport/webhook delivery, pricing-page UI, tier feature differences beyond location count, trial numeric specifics (UQ5), ports.ts edits",
       "blocker": null,
       "completion_evidence": null
     }
   },
   "cross_lane_compatibility": {
-    "shared_contracts": "Canonical src/domain/ports.ts + src/shared/{types,errors}.ts are accepted; the additive 'UNAUTHORIZED' ErrorCode member was executed by the Director at run-32787032785 integration and is now canonical. All lanes compile against it (256/256 verified post-amendment).",
-    "sequencing": "INT-C3-1 consumes Rules evaluateRules + Billing createEntitlementGate shapes (both ACCEPTed). RULES-C3-1 proves UI-validator parity from the domain side; DASH-C3-1 prepares the injection seam from the UI side — together they close F-N1 without either lane editing the other's paths. Billing exposes its projection via a narrow port so the enforcement path needs no webhook types.",
-    "collective_effect": "Cycle 3 completes the last two unwired binding flows (1 and 3/5) achievable without credentials, closing the gap between accepted platform/domain/billing machinery and an end-to-end enforceable, configurable, reconcilable product core.",
-    "vitest_glob_rule": "Domain and billing suites execute through the platform-owned vitest config glob tests/**/*.spec.ts (Rules audit N3). The integration lane must never narrow that glob; any packaging change must keep all lanes' specs collected.",
-    "forbidden_everywhere": "product source claiming production capability before gates T-VP*/T-WH*/T-BK*/T-RB* pass; PREVIEW_GATED dependencies; UNSUPPORTED mechanisms; fabricated Wix identifiers; secrets in repo."
+    "shared_contracts": "Canonical src/domain/ports.ts + src/shared/{types,errors}.ts accepted (ports.ts SHA af68e698…fbc verified at run-32792897988 integration). RULES-C4-1 holds the ONLY authorized ports.ts evolution this cycle, strictly additive with safe default; all other lanes compile against the current shapes unchanged.",
+    "pinned_dto_get_meter": "GET /meter response body is pinned EXACTLY as {\"meter\":{\"count\":number|null,\"degraded\":boolean},\"coverage\":{\"allowedLocationIds\":string[],\"overLimit\":boolean,\"degraded\":boolean,\"warning\":string|null}} in both INT-C4-1(c) and DASH-C4-1(a). Dashboard fixture-tests against the pinned shape; Director resolves any drift at integration before accepting either lane.",
+    "sequencing": "INT-C4-1 consumes billing's accepted projectedSnapshotSource/createEntitlementGate exports (ACCEPTed run 32792897988). DASH-C4-1 consumes the pinned GET /meter DTO (fixture-first). RULES-C4-1's additive deps field must keep accepted platform handlers compiling unchanged; if the integration lane later needs to pass target context through ValidationPluginDeps, that is a Director-coordinated follow-up, not license to edit domain files.",
+    "parity_ledger_rule": "tests/domain/uiValidatorParity.spec.ts pins both validators and fails loudly on drift. No lane may weaken either side; ruleDraftValidators.js stays byte-for-byte unchanged this cycle; R1–R4 decisions of record (reports/director/CYCLE_32792897988.json) govern only at the future mirror repoint, whose task MUST cite the parity spec and update the ledger consciously (Rules audit N1).",
+    "vitest_glob_rule": "Domain and billing suites execute through the platform-owned vitest config glob tests/**/*.spec.ts; it must never be narrowed; any packaging change must keep all lanes' specs collected.",
+    "forbidden_everywhere": "product source claiming production capability before gates T-VP*/T-WH*/T-BK*/T-RB* pass; enabling CANCEL/RESCHEDULE enforcement claims before RULES-C4-1 lands and empirical gates confirm; PREVIEW_GATED dependencies; UNSUPPORTED mechanisms; fabricated Wix identifiers; secrets in repo."
   },
   "critical_external_blocker": null
 }

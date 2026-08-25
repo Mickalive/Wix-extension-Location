@@ -11,8 +11,27 @@
  *   BRIDGE_NOT_CONFIGURED - no transport available (offline / pre-scaffold)
  *   TRANSPORT_FAILURE     - network-level failure of the injected transport
  *   HTTP_<status>         - non-2xx response (404 maps to `null`, not an error)
- *   BAD_RESPONSE          - 2xx body that is not valid JSON (never leak a raw
- *                           SyntaxError to callers)
+ *   BAD_RESPONSE          - 2xx body that is not valid JSON, or a 2xx body
+ *                           missing the endpoint's mandatory DTO envelope
+ *                           (never leak a raw SyntaxError to callers)
+ *
+ * Mutation-lifecycle endpoints (DASH-C3-1; Blueprint §4 flow 3). The DTOs
+ * mirror the accepted platform handlers in
+ * `src/platform/http/mutationEndpoints.ts` verbatim:
+ *   getMutationStatus(planId) -> GET  <base>/mutation-status?planId=…
+ *       success body `{ status: MutationStatusProjection }`; the projection is
+ *       returned unwrapped. 404 (platform NOT_FOUND: no journal record yet)
+ *       maps to `null`. An empty or envelope-less 2xx body is a protocol
+ *       violation and surfaces as BAD_RESPONSE — unlike GET /ruleset, "no
+ *       body" must never be mistaken for "no record" while polling.
+ *   recover(scope)            -> POST <base>/recover  body `{ scope }`
+ *       success body `{ recovery: RecoverySummary | null }`; the summary is
+ *       returned unwrapped, including a legit `null` ("nothing pending for
+ *       this scope"). Same strict envelope rule as above.
+ *
+ * Path prefix note: paths here are relative to `baseUrl` exactly like the
+ * existing `/ruleset` and `/apply-plan` methods; final URL reconciliation is
+ * a scaffold-time concern documented in src/platform/http/README.md.
  */
 
 export class BridgeError extends Error {
@@ -77,6 +96,15 @@ export function createServicesBridge(options = {}) {
     return cachedTransport;
   }
 
+  /** Status of a transport response; missing/non-numeric status means 0 (non-2xx path). */
+  function extractStatus(raw) {
+    return typeof raw?.status === 'number' ? raw.status : 0;
+  }
+
+  async function readBodyText(raw) {
+    return typeof raw?.text === 'function' ? await raw.text() : (raw?.bodyText ?? '');
+  }
+
   /**
    * Core request. Returns parsed JSON for 2xx responses, `null` for 404,
    * throws typed BridgeError otherwise.
@@ -100,7 +128,7 @@ export function createServicesBridge(options = {}) {
       });
     }
 
-    const status = typeof raw?.status === 'number' ? raw.status : 0;
+    const status = extractStatus(raw);
     if (status === 404) return null;
     if (status < 200 || status >= 300) {
       throw new BridgeError(`HTTP_${status}`, `${method} ${path} responded with status ${status}.`, {
@@ -108,7 +136,7 @@ export function createServicesBridge(options = {}) {
       });
     }
 
-    const text = typeof raw?.text === 'function' ? await raw.text() : (raw?.bodyText ?? '');
+    const text = await readBodyText(raw);
     if (text.trim() === '') return null;
     try {
       return JSON.parse(text);
@@ -119,6 +147,66 @@ export function createServicesBridge(options = {}) {
         { status, cause: error },
       );
     }
+  }
+
+  /**
+   * Strict envelope request for the mutation-lifecycle endpoints. Identical
+   * error taxonomy to `request`, but a 2xx response MUST carry a non-empty
+   * JSON object body with the expected envelope key — an empty or shapeless
+   * success body is a protocol violation (BAD_RESPONSE), never silently
+   * interpreted as "absent". The envelope value is returned unwrapped and may
+   * legitimately be `null` when the endpoint documents that (recover).
+   */
+  async function requestEnvelope(path, { method, body, envelopeKey }) {
+    const transport = await getTransport();
+    let raw;
+    try {
+      raw = await transport(`${baseUrl}${path}`, {
+        method,
+        headers: body !== undefined ? { 'content-type': 'application/json' } : {},
+        body: body !== undefined ? JSON.stringify(body) : undefined,
+        timeoutMs,
+      });
+    } catch (error) {
+      throw new BridgeError('TRANSPORT_FAILURE', `Request to ${method} ${path} failed before a response arrived.`, {
+        cause: error,
+      });
+    }
+
+    const status = extractStatus(raw);
+    if (status === 404) return null;
+    if (status < 200 || status >= 300) {
+      throw new BridgeError(`HTTP_${status}`, `${method} ${path} responded with status ${status}.`, {
+        status,
+      });
+    }
+
+    const text = await readBodyText(raw);
+    if (text.trim() === '') {
+      throw new BridgeError(
+        'BAD_RESPONSE',
+        `${method} ${path} returned an empty 2xx body where a "${envelopeKey}" envelope was required.`,
+        { status },
+      );
+    }
+    let parsed;
+    try {
+      parsed = JSON.parse(text);
+    } catch (error) {
+      throw new BridgeError(
+        'BAD_RESPONSE',
+        `${method} ${path} returned a 2xx body that is not valid JSON.`,
+        { status, cause: error },
+      );
+    }
+    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed) || !(envelopeKey in parsed)) {
+      throw new BridgeError(
+        'BAD_RESPONSE',
+        `${method} ${path} returned a 2xx body without the expected "${envelopeKey}" envelope.`,
+        { status },
+      );
+    }
+    return parsed[envelopeKey];
   }
 
   return {
@@ -140,6 +228,26 @@ export function createServicesBridge(options = {}) {
         method: 'POST',
         body: { ops, confirmedDiffHash },
       });
+    },
+    /**
+     * Mutation journal projection for one plan (Blueprint §4 flow 3). Returns
+     * the `{planId, state, scope, confirmedChangeIds, totalChanges, updatedAt,
+     * snapshotId}` projection unwrapped, or null when no journal record exists
+     * (platform NOT_FOUND -> 404 semantics).
+     */
+    getMutationStatus(planId) {
+      const path = `/mutation-status?planId=${encodeURIComponent(String(planId))}`;
+      return requestEnvelope(path, { method: 'GET', envelopeKey: 'status' });
+    },
+    /**
+     * User-initiated crash-mid-apply recovery for one schedule scope (gate
+     * T-RB1 counterpart). The dashboard calls this ONLY from an explicit user
+     * click (Contract §9.2); this method performs no policy of its own.
+     * Returns the RecoverySummary unwrapped, or null when nothing is pending
+     * for the scope (documented platform response `{ recovery: null }`).
+     */
+    recover(scope) {
+      return requestEnvelope('/recover', { method: 'POST', body: { scope }, envelopeKey: 'recovery' });
     },
   };
 }

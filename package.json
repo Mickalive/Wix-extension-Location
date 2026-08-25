@@ -14,6 +14,7 @@
     "check:purity": "node src/platform/purity/check-purity.mjs",
     "typecheck": "tsc --noEmit",
     "check": "npm run typecheck && npm run check:purity && vitest run --config src/platform/vitest.config.ts",
+    "check:offline": "HTTP_PROXY=http://127.0.0.1:9 HTTPS_PROXY=http://127.0.0.1:9 http_proxy=http://127.0.0.1:9 https_proxy=http://127.0.0.1:9 npm run check",
     "build": "npm run check"
   },
   "devDependencies": {

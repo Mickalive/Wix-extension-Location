@@ -1,0 +1,76 @@
+{
+  "run_id": 32787032785,
+  "role": "wix-build-director",
+  "date": "2026-08-25",
+  "decision": "continue",
+  "accepted_branch": "lab/wix-rules",
+  "accepted_head_at_pass": "53f51d9",
+  "accepted_lanes": ["integration", "rules", "dashboard", "billing"],
+  "rejected_lanes": [],
+  "repair_lanes": [],
+  "lane_audit_verdicts": {
+    "integration": {
+      "verdict": "ACCEPT",
+      "audit_path": "reports/audits/CYCLE_32787032785_INTEGRATION.md",
+      "immutable_source": "cycle/wix-build/32787032785/audit-integration",
+      "candidate_commit": "3d59276",
+      "disposition": "integrated"
+    },
+    "rules": {
+      "verdict": "ACCEPT",
+      "audit_path": "reports/audits/CYCLE_32787032785_RULES.md",
+      "immutable_source": "cycle/wix-build/32787032785/audit-rules",
+      "candidate_commit": "8663cf2",
+      "disposition": "integrated"
+    },
+    "dashboard": {
+      "verdict": "ACCEPT",
+      "audit_path": "reports/audits/CYCLE_32787032785_DASHBOARD.md",
+      "immutable_source": "cycle/wix-build/32787032785/audit-dashboard",
+      "candidate_commit": "0fab299",
+      "disposition": "integrated_with_mandatory_port_time_deletion"
+    },
+    "billing": {
+      "verdict": "ACCEPT",
+      "audit_path": "reports/audits/CYCLE_32787032785_BILLING.md",
+      "immutable_source": "cycle/wix-build/32787032785/audit-billing",
+      "candidate_commit": "5cb33f9",
+      "disposition": "integrated"
+    }
+  },
+  "integration_record": {
+    "method": "git apply of each candidate's full diff (53f51d9..HEAD) into the accepted checkout; zero overlaps between lane path sets verified before apply; no commits made by the Director (trusted shell persists).",
+    "port_time_actions": [
+      "DELETED tests/ui/zzscratch.test.js — mandatory Director action per audit CYCLE_32787032785_DASHBOARD finding N-1 (comment-only empty remnant; suite count 99 -> 98 real tests, re-verified green). src/ui/README.md persistence note updated to record the completed deletion.",
+      "RENAMED tests/platform/zz-debug.spec.ts -> tests/platform/webhooks-pipeline-contract.spec.ts — content-neutral rename sanctioned by audit CYCLE_32787032785_INTEGRATION observation 2 and by the file's own header; header note updated to record completion."
+    ],
+    "director_contract_amendment": {
+      "what": "Executed the staged additive 'UNAUTHORIZED' amendment exactly as documented by the ACCEPTed candidate in src/platform/http/README.md section 4: added '| UNAUTHORIZED' to ErrorCode in src/shared/errors.ts; UnauthorizedRequestError now uses super('UNAUTHORIZED', ...); STATUS_BY_CODE gains UNAUTHORIZED: 401; tests/platform/helpers/httpTestDoubles.ts expectUnauthorized asserts the new code.",
+      "authority": "Blueprint section 2 reserves src/shared/** edits to the Director; the amendment was staged verbatim by an independently ACCEPTed candidate and its audit; it is additive and mechanical like the ratified cycle-1 contract relocations. It could not be deferred because Record<ErrorCode, number> makes the errors.ts line and its transport consumer compile-inseparable, and the integration lane cannot edit src/shared/** (workflow path allowlist).",
+      "verification": "Full gate re-run green after amendment: typecheck strict clean, purity green, 256/256 vitest, offline rerun 256/256. Next-cycle independent audits cover all consumer code."
+    }
+  },
+  "simulation_source_run": null,
+  "simulation_verdict": null,
+  "simulation_dispositions": [],
+  "simulation_note": "Asynchronous simulated-Wix QA not available this pass: /tmp/wix_simulation_latest/reports/simulation/LATEST.json absent AND remote branch qa/wix-sim-latest does not exist (git ls-remote --heads origin checked). Per policy its absence did not delay this cycle. The next Director pass must mount and disposition it when present; release-readiness must check QA recency.",
+  "tests": [
+    {"name": "npm ci", "result": "PASS", "detail": "lockfile-faithful, credential-free"},
+    {"name": "npm run check (tsc --noEmit strict + noUncheckedIndexedAccess, purity gate, vitest)", "result": "PASS", "detail": "256/256 tests, 28 files, zero skipped (112 platform incl. 79 new + 93 domain + 51 billing); PURITY GATE FAILED stderr lines are the asserted negative-control fixture, expected"},
+    {"name": "npm run check:offline (all proxies pinned to 127.0.0.1:9)", "result": "PASS", "detail": "256/256 — zero network egress proven on the integrated tree"},
+    {"name": "tests/ui lane suite (node --test)", "result": "PASS", "detail": "98/98 after mandatory zzscratch.test.js deletion (99 minus the empty wrapper, exactly as the audit predicted)"},
+    {"name": "Cross-lane arithmetic check", "result": "PASS", "detail": "112 + 93 + 51 = 256 matches the three lane audits' per-suite counts exactly; no test lost or duplicated in merge"},
+    {"name": "Canonical-contract integrity", "result": "PASS", "detail": "src/domain/ports.ts byte-for-byte unchanged across all four candidates (verified per-audit SHA-256 and by empty diff); only intentional shared change is the staged 'UNAUTHORIZED' amendment"}
+  ],
+  "residual_risks": [
+    "No empirical Wix evidence yet: gates T-VP0–T-VP5, T-WH1–T-WH6, T-BK1–T-BK4, T-RB1–T-RB2 all require human-owned credentials (Contract §16); no production-capability claims exist in accepted code.",
+    "Simulated-Wix QA for this run has not completed; when it lands, every blocker needs an explicit repair/resolved/superseded disposition.",
+    "Rules audit N1: duplicate matching buckets by existing booking's START day (documented v1 limitation A2); must be revisited at T-VP3 before any duplicate-protection marketing claim.",
+    "Rules audit N3: domain suites execute through the platform-owned vitest config glob tests/**/*.spec.ts; the integration lane must never narrow that glob or rules coverage silently disappears (recorded as a cross-lane rule in docs/NEXT_CYCLE.md).",
+    "Dashboard audit N-2: root tsc does not type-check plain-JS UI sources; repo gate must extend to dashboard paths at the T-VP0 scaffold (React/TS pin).",
+    "Billing audit observations 1 (stale-warning liveness nuance) and 3 (listManagedLocations vs countBillableLocations consistency — integration-adapter responsibility) carried into cycle-3 tasks.",
+    "Integration audit observations N3/N5 (isWebhookEnvelope duck-typing hardening; bounded buffer-residue memory) routed into INT-C3-1; N1 resolved by the executed amendment; N4 routed into INT-C3-1."
+  ],
+  "external_blocker": null,
+  "next_cycle_summary": "Cycle 3 wires the two remaining binding flows that became unblocked by this cycle's ACCEPTs: booking-time enforcement (validation-plugin handler consuming pure evaluateRules + billing EntitlementGate) and the dashboard mutation-lifecycle surface (status polling, recover, server-validation-backed seam), plus the Director-tracked cross-lane validator parity obligation and the billing plan-state projection/reconciliation machine required by Contract §7."
+}

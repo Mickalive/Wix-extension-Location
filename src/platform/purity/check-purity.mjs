@@ -3,13 +3,18 @@
 //
 // Fails (exit code 1) when any `@wix/` module specifier is imported from the
 // protected pure paths:
-//     src/domain/**        (rules-engine lane core)
-//     src/billing/pure/**  (billing pure core)
+//     src/domain/**               (rules-engine lane core)
+//     src/billing/pure/**         (billing pure core)
+//     src/platform/http/**        (token-verified endpoint handlers — cycle 2;
+//                                  Wix access only via injected ports, thin
+//                                  src/pages/api adapters own all SDK usage)
+//     src/platform/webhooks/**    (webhook ingestion pipeline — cycle 2; same
+//                                  injected-ports rule for signature/store)
 //
 // Zero-dependency ESM script. Runnable standalone:
 //     node src/platform/purity/check-purity.mjs [rootDir ...]
-// (defaults to the two protected roots above; missing directories are skipped
-// so the gate stays green before the billing lane creates src/billing/pure).
+// (defaults to the four protected roots above; missing directories are skipped
+// so the gate stays green before a lane creates its directory).
 //
 // Limitation note: comment/string stripping below is a pragmatic scanner, not a
 // full JS parser. It is intentionally strict: any import-shaped occurrence of
@@ -19,7 +24,12 @@ import { readdirSync, readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
-export const DEFAULT_PROTECTED_ROOTS = ['src/domain', 'src/billing/pure'];
+export const DEFAULT_PROTECTED_ROOTS = [
+  'src/domain',
+  'src/billing/pure',
+  'src/platform/http',
+  'src/platform/webhooks',
+];
 
 const SCANNED_EXTENSIONS = new Set([
   '.ts', '.tsx', '.mts', '.cts', '.js', '.jsx', '.mjs', '.cjs',
@@ -36,8 +46,9 @@ const IMPORT_PATTERNS = [
  * Removes comments while preserving every newline and all string/template
  * contents (module specifiers live inside strings and must stay scannable).
  * Quote-state aware so `//` inside strings is not treated as a comment.
+ * Exported for reuse by lane leak-grep tests (cycle 2).
  */
-function stripComments(code) {
+export function stripComments(code) {
   let out = '';
   let i = 0;
   const n = code.length;

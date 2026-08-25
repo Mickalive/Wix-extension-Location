@@ -37,6 +37,7 @@ import type {
   Clock,
   MutationJournalStore,
   MutationPlan,
+  MutationRecordState,
   PersistedMutationRecord,
   RollbackResult,
   ScheduleGateway,
@@ -87,7 +88,26 @@ export interface RecoverySummary {
   auditEntryId: string;
 }
 
-const TERMINAL_STATES = new Set(['APPLY_COMPLETED', 'ROLLED_BACK', 'RECOVERED']);
+/**
+ * Terminal journal states (cycle-2 hardening, accepted-audit observation N1):
+ * EVERY state outside the non-terminal allowlist below is treated as terminal,
+ * so a future state addition can never silently bypass the guards. Both
+ * completeApply and failApply reject every terminal state with INVALID_STATE
+ * BEFORE touching the gateway or appending any audit entry.
+ */
+const NON_TERMINAL_STATES: ReadonlySet<MutationRecordState> = new Set([
+  'SNAPSHOT_PERSISTED',
+  'APPLY_IN_PROGRESS',
+]);
+
+function assertNotTerminal(planId: string, state: MutationRecordState): void {
+  if (!NON_TERMINAL_STATES.has(state)) {
+    throw new PlatformError(
+      'INVALID_STATE',
+      `plan ${planId} already reached terminal state ${state}; the requested transition is rejected fail-fast (no gateway call, no journal write, no audit entry)`,
+    );
+  }
+}
 
 export class ScheduleMutationOrchestrator {
   private readonly gateway: ScheduleGateway;
@@ -117,12 +137,7 @@ export class ScheduleMutationOrchestrator {
   async beginApply(plan: MutationPlan): Promise<BeginApplyOutcome> {
     const existing = await this.journal.loadByPlanId(plan.planId);
     if (existing) {
-      if (TERMINAL_STATES.has(existing.state)) {
-        throw new PlatformError(
-          'INVALID_STATE',
-          `plan ${plan.planId} already reached terminal state ${existing.state}; use a new planId`,
-        );
-      }
+      assertNotTerminal(plan.planId, existing.state);
       return { record: existing, snapshot: existing.snapshot, resumed: true };
     }
 
@@ -149,12 +164,7 @@ export class ScheduleMutationOrchestrator {
    */
   async applyNextChange(plan: MutationPlan): Promise<AppliedChangeRecord> {
     const record = await this.mustLoad(plan.planId);
-    if (TERMINAL_STATES.has(record.state)) {
-      throw new PlatformError(
-        'INVALID_STATE',
-        `plan ${plan.planId} is terminal (${record.state}); no further changes can be applied`,
-      );
-    }
+    assertNotTerminal(plan.planId, record.state);
     // Defensive re-enrichment: the durable record is the source of truth for
     // resume flows, and older baselines may predate key derivation.
     const enrichedRecordPlan = this.withDerivedIdempotencyKeys(record.plan);
@@ -182,13 +192,17 @@ export class ScheduleMutationOrchestrator {
    * Steps 5–7: verify the mutated schedule; on success mark APPLY_COMPLETED and
    * append the single audit entry; on verification failure roll back (§9.6),
    * mark ROLLED_BACK and append the failure audit entry.
+   *
+   * Terminal-state hardening (cycle-2, audit observation N1): rejects EVERY
+   * terminal journal state (APPLY_COMPLETED, ROLLED_BACK, RECOVERED — and any
+   * future terminal state) with INVALID_STATE BEFORE the gateway is consulted,
+   * so a post-rollback or post-recovery completion can never re-verify,
+   * re-roll back, or append a second audit entry.
    */
   async completeApply(plan: MutationPlan): Promise<MutationSummary> {
     const enriched = this.withDerivedIdempotencyKeys(plan);
     const record = await this.mustLoad(enriched.planId);
-    if (record.state === 'APPLY_COMPLETED') {
-      throw new PlatformError('INVALID_STATE', `plan ${enriched.planId} already completed`);
-    }
+    assertNotTerminal(enriched.planId, record.state);
     const verify = await this.gateway.verifyApplied(enriched);
     if (!verify.verified) {
       return this.failApply(enriched, {
@@ -217,13 +231,21 @@ export class ScheduleMutationOrchestrator {
     };
   }
 
-  /** Failure path: rollback from the persisted snapshot, then audit (§9.6/§9.7). */
+  /**
+   * Failure path: rollback from the persisted snapshot, then audit (§9.6/§9.7).
+   *
+   * Terminal-state hardening (cycle-2, audit observation N1): rejects EVERY
+   * terminal journal state with INVALID_STATE BEFORE rolling back, so a
+   * completed, rolled-back or recovered plan can never be rolled back again
+   * or accumulate a second failure audit entry.
+   */
   async failApply(
     plan: MutationPlan,
     cause: { code: string; message: string; verify?: VerifyResult },
   ): Promise<MutationSummary> {
     const enriched = this.withDerivedIdempotencyKeys(plan);
     const record = await this.mustLoad(enriched.planId);
+    assertNotTerminal(enriched.planId, record.state);
     const rollback = await this.gateway.rollbackTo(record.snapshot);
     await this.journal.updateProgress(enriched.planId, { state: 'ROLLED_BACK' });
     const auditEntryId = await this.appendAudit({

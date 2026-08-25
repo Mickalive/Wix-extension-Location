@@ -10,6 +10,7 @@ export type ErrorCode =
   | 'ENTITLEMENT_DEGRADED'
   | 'INVALID_QUERY'
   | 'INVALID_STATE'
+  | 'UNAUTHORIZED'
   | 'NOT_FOUND'
   | 'INTERNAL_ERROR';
 

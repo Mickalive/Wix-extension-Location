@@ -1,0 +1,11 @@
+{
+  "name": "wix-dashboard-lane-tests",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Dashboard lane component/state suite (Node built-in runner, credential-free).",
+  "type": "module",
+  "scripts": {
+    "test": "npm run test:unit",
+    "test:unit": "node --test"
+  }
+}

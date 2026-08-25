@@ -13,3 +13,4 @@ export { FakeBookingCountGateway } from './bookingCountGateway';
 export type { SeededBooking } from './bookingCountGateway';
 export { FakeEntitlementGate } from './entitlementGate';
 export { FakeMutationJournalStore } from './mutationJournalStore';
+export { FakeWebhookIngestionStore } from './webhookIngestionStore';

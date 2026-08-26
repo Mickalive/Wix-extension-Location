@@ -1,17 +1,13 @@
 name: Wix Autonomous Recovery Watchdog
-# Persistent self-healing: repair product failures, retry outages, fail closed on safety/external prerequisites.
+# Persistent self-healing supervisor. It stays alive and inspects the Factory every 5 minutes.
+# GitHub schedule is only a fallback heartbeat; autonomy does not depend on cron punctuality.
 
 on:
   push:
     branches: [main]
-    paths: [".github/workflows/wix-watchdog.yml"]
-  workflow_run:
-    workflows:
-      - "Wix Autonomous Product Factory"
-    types:
-      - completed
+    paths: [".github/workflows/wix-watchdog.yml", ".github/scripts/recover-transient-opencode.sh"]
   schedule:
-    - cron: "*/5 * * * *"
+    - cron: "*/30 * * * *"
   workflow_dispatch:
 
 permissions:
@@ -20,7 +16,7 @@ permissions:
 
 concurrency:
   group: wix-autonomous-recovery-watchdog
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   cleanup:
@@ -40,7 +36,6 @@ jobs:
           keep_file=$(mktemp)
           trap 'rm -f "$keep_file"' EXIT
 
-          # Never delete a queued/in-progress run, including this cleanup run.
           jq -r '.[] | select(.status != "completed") | .id' <<<"$runs" >> "$keep_file"
 
           keep_latest() {
@@ -55,12 +50,10 @@ jobs:
               <<<"$runs" >> "$keep_file"
           }
 
-          # Two Factory runs preserve the last accepted baseline plus the latest diagnostic.
           keep_latest '.github/workflows/wix-build-loop.yml' 2
-          # One recent run is enough for deterministic CI, simulation and recovery evidence.
           keep_latest '.github/workflows/ci.yml' 1
           keep_latest '.github/workflows/wix-sim.yml' 1
-          keep_latest '.github/workflows/wix-watchdog.yml' 1
+          keep_latest '.github/workflows/wix-watchdog.yml' 2
 
           sort -u "$keep_file" -o "$keep_file"
           deleted=0
@@ -109,23 +102,53 @@ jobs:
             -f cycle_index="$next" \
             -f max_cycles="0" \
             -f human_note=""
-          echo "Dispatched Product Factory cycle $next from current main."
+          echo "Dispatched Product Factory cycle $next from accepted state."
 
-  recover:
-    name: Diagnose, retry, or repair Product Factory
-    if: ${{ github.repository == 'Mickalive/Wix-extension-Location' && ((github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'failure') || github.event_name == 'workflow_dispatch' || github.event_name == 'schedule') }}
+  supervise:
+    name: Persistent autonomous supervisor — 5 minute heartbeat
+    needs: [cleanup, launch]
+    if: ${{ always() && github.repository == 'Mickalive/Wix-extension-Location' }}
     runs-on: ubuntu-24.04
-    timeout-minutes: 12
+    timeout-minutes: 355
     steps:
       - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
         with:
           fetch-depth: 1
           ref: main
           persist-credentials: false
-      - name: Route failure to retry, fresh repair cycle, or fail-closed prerequisite
+      - name: Inspect and heal the Factory every five minutes
         env:
           GH_TOKEN: ${{ github.token }}
           WIX_LOOP_WORKFLOW: wix-build-loop.yml
+        shell: bash
+        run: |
+          set -u -o pipefail
+          for tick in $(seq 1 70); do
+            echo "=== autonomous supervisor tick $tick/70 at $(date -u +%FT%TZ) ==="
+
+            # Refresh the reviewed recovery logic so a long-lived supervisor adopts safe fixes on main.
+            auth=$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)
+            git -c "http.extraheader=AUTHORIZATION: basic $auth" fetch origin main --quiet || true
+            if git show origin/main:.github/scripts/recover-transient-opencode.sh > /tmp/recover.sh 2>/dev/null; then
+              chmod +x /tmp/recover.sh
+              if ! bash /tmp/recover.sh; then
+                rc=$?
+                echo "::warning::Recovery router returned $rc; supervisor remains alive and will inspect again."
+              fi
+            else
+              echo "::warning::Could not refresh recovery router; supervisor remains alive."
+            fi
+
+            if (( tick < 70 )); then
+              sleep 300
+            fi
+          done
+      - name: Hand off to a fresh supervisor before runner timeout
+        if: ${{ always() }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
         run: |
           set -euo pipefail
-          bash .github/scripts/recover-transient-opencode.sh
+          gh workflow run wix-watchdog.yml --repo "$GITHUB_REPOSITORY" --ref main
+          echo "Fresh autonomous supervisor dispatched."

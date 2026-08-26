@@ -194,6 +194,35 @@ Cell rationale:
 - **Out-of-hours create probe (T-VP1):** unchanged; the CREATE path is pinned
   bit-for-bit by the default-contract corpus.
 
+**Standing matrix properties (cycle 5, RULES-C5-1).** The matrix above is now
+enforced by executable properties, not only by prose and pin tests:
+
+- **Determinism across the matrix** (`tests/domain/evaluate.spec.ts`,
+  "determinism property"): every corpus scenario is repeated under explicit
+  CREATE, CANCEL and RESCHEDULE contexts and must produce byte-identical
+  outcomes per (scenario, target). The corpus includes split-window scenarios,
+  midnight-boundary fits, and DST spring-forward/fall-back fixtures, so the
+  guarantee covers the hardest zone math in the matrix.
+- **Explanation completeness across the matrix**
+  (`tests/domain/evaluate.spec.ts`, "explanation well-formedness"): every
+  outcome under ANY target carries full `{ruleId, code, customerMessage}`
+  explanations from the closed engine-family vocabulary, with jargon-free
+  customer text (no internal identifiers, no machine codes).
+- **CANCEL-tail drift guard** (`tests/domain/targets/matrixProperties.spec.ts`):
+  CANCEL outcomes may contain ONLY classification-family explanations
+  (`ruleset`: `BOOKING_ALLOWED` / `RULESET_INVALID` / `INVALID_SLOT` /
+  `EVALUATION_ERROR`). The forbidden-family set is DERIVED from the CANCEL
+  column of the matrix table above, so a future notice-emitting family that
+  forgets the CANCEL branch fails loudly (anti-vacuity injection proofs
+  included), and changing CANCEL behavior requires a conscious matrix edit.
+- **Matrix ↔ code consistency**
+  (`tests/domain/targets/matrixProperties.spec.ts`): each matrix cell is tied
+  to an observed per-target behavior probe; documentation drift in either
+  direction fails the suite (deliberate doc-drift simulation included), and
+  the accepted cells are pinned outright. The same suite pins the frozen
+  cycle-5 `ports.ts` contract (SHA-256 `d46e0743…18802`,
+  `canonical_contracts_notice`) so a freeze breach fails in-suite.
+
 ## Fail-closed classification
 
 `evaluateRules` never throws. Invalid configuration ⇒ `RULESET_INVALID`;

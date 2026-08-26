@@ -16,24 +16,26 @@ jobs:
       - uses: actions/setup-node@ae0d4ed08881f17d1511386f5be3e62356acd4a6
         with:
           node-version: 22.13.0
-      - name: Inspect AppsService filter contracts
+      - name: Inspect AppsService ambassador package
         shell: bash
         run: |
           set -euo pipefail
-          d=$(mktemp -d)
-          npm install --prefix "$d" --no-audit --no-fund --ignore-scripts @wix/create-new@0.0.105 >/dev/null
-          pkg="$d/node_modules/@wix/ambassador-devcenter-apps-v1-app"
-          test -d "$pkg"
-          echo '=== PACKAGE VERSION ==='
-          node -e 'const p=require(process.argv[1]); console.log(p.version)' "$pkg/package.json"
+          d=$(mktemp -d); cd "$d"
+          echo '=== NPM VERSION ==='
+          npm view @wix/ambassador-devcenter-apps-v1-app version
+          tgz=$(npm pack @wix/ambassador-devcenter-apps-v1-app --silent)
+          tar -xzf "$tgz"
+          pkg="$d/package"
+          echo '=== PACKAGE ==='
+          cat "$pkg/package.json"
           echo '=== FILES ==='
-          find "$pkg" -maxdepth 4 -type f | sort | head -220
+          find "$pkg" -maxdepth 5 -type f | sort | head -260
           echo '=== QUERY CONTRACT HITS ==='
-          grep -RniE 'QueryApp|queryApp|filterable|filter.*field|createdDate|updatedDate|codeIdentifier|namespace' "$pkg" --exclude='*.map' | head -800 || true
-          echo '=== TYPES / DESCRIPTORS ==='
-          for f in $(find "$pkg" -type f \( -name '*.d.ts' -o -name '*.proto' -o -name '*.json' \) | sort); do
+          grep -RniE 'QueryApp|queryApp|filterable|filter.*field|createdDate|updatedDate|codeIdentifier|namespace|supported.*filter' "$pkg" --exclude='*.map' | head -1200 || true
+          echo '=== TYPES / PROTOS / DESCRIPTORS ==='
+          while IFS= read -r f; do
             if grep -qiE 'QueryApp|createdDate|codeIdentifier|namespace' "$f"; then
               echo "--- $f ---"
-              grep -ni -B12 -A45 -E 'QueryApp|createdDate|updatedDate|codeIdentifier|namespace' "$f" | head -260 || true
+              grep -ni -B15 -A60 -E 'QueryApp|createdDate|updatedDate|codeIdentifier|namespace|filter' "$f" | head -360 || true
             fi
-          done
+          done < <(find "$pkg" -type f \( -name '*.d.ts' -o -name '*.proto' -o -name '*.json' \) | sort)

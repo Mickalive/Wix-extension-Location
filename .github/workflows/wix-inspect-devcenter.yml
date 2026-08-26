@@ -1,0 +1,28 @@
+name: Wix Inspect DevCenter Client
+
+on:
+  push:
+    branches: [main]
+    paths: [".github/workflows/wix-inspect-devcenter.yml"]
+
+permissions:
+  contents: read
+
+jobs:
+  inspect:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/setup-node@ae0d4ed08881f17d1511386f5be3e62356acd4a6
+        with:
+          node-version: 22.13.0
+      - name: Inspect public Dev Center client methods
+        shell: bash
+        run: |
+          set -euo pipefail
+          d=$(mktemp -d)
+          cd "$d"
+          npm pack @wix/dev-center-client --silent >/tmp/pkgname
+          pkg=$(cat /tmp/pkgname)
+          tar -xzf "$pkg"
+          grep -RniE 'list[A-Za-z]*Apps|query[A-Za-z]*Apps|get[A-Za-z]*Apps|appDef|appId|custom apps|owned apps' package 2>/dev/null | head -n 300

@@ -16,7 +16,7 @@ jobs:
       - uses: actions/setup-node@ae0d4ed08881f17d1511386f5be3e62356acd4a6
         with:
           node-version: 22.13.0
-      - name: Inspect installed Wix creator internals
+      - name: Inspect DevCenter client endpoint surface
         shell: bash
         run: |
           set -u
@@ -24,12 +24,16 @@ jobs:
           cd "$d"
           npm init -y >/dev/null 2>&1
           npm install --ignore-scripts --no-audit --no-fund @wix/create-new@0.0.105 >/dev/null 2>&1 || true
-          echo '--- dev-center-client files ---'
-          find node_modules/@wix/dev-center-client -maxdepth 4 -type f 2>/dev/null | sort | head -n 200 || true
-          echo '--- createAppFromTemplate ---'
-          grep -Rni -C 8 'createAppFromTemplate' node_modules/@wix 2>/dev/null | head -n 300 || true
-          echo '--- wix config writers ---'
-          grep -Rni -C 6 -E 'wix\.config\.json|projectId|projectType|appId' node_modules/@wix/create-new-packages node_modules/@wix/dev-center-client 2>/dev/null | head -n 600 || true
-          echo '--- possible app lookup methods/endpoints ---'
-          grep -Rni -C 4 -E 'list.*app|query.*app|get.*app|my-app|app-def|app-definitions|dev-center.*app' node_modules/@wix/dev-center-client node_modules/@wix/create-new-packages 2>/dev/null | head -n 600 || true
+          js=node_modules/@wix/dev-center-client/dist/src/dev-center-client.js
+          dts=node_modules/@wix/dev-center-client/dist/src/dev-center-client.d.ts
+          echo '--- public declarations ---'
+          sed -n '1,260p' "$dts" 2>/dev/null || true
+          echo '--- URL literals ---'
+          grep -nE 'baseURL|url:|/v[0-9]/|/apps|app-def|app-template|dev-center' "$js" 2>/dev/null | head -n 600 || true
+          echo '--- getAppInfo implementation ---'
+          grep -n -A35 -B10 'getAppInfo' "$js" 2>/dev/null | head -n 220 || true
+          echo '--- createAppFromTemplate implementation ---'
+          grep -n -A55 -B15 'createAppFromTemplate' "$js" 2>/dev/null | head -n 260 || true
+          echo '--- all async/member methods ---'
+          grep -nE '^  [A-Za-z0-9_]+\(|^  async [A-Za-z0-9_]+' "$js" 2>/dev/null | head -n 400 || true
           exit 0

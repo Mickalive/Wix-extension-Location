@@ -11,18 +11,15 @@ permissions:
   actions: write
 
 concurrency:
-  group: wix-one-shot-app-binding-v2
+  group: wix-one-shot-app-binding-v3
   cancel-in-progress: true
 
 jobs:
   bind:
-    name: Register real Wix app and persist binding
+    name: Register real Wix app via official wizard and persist binding
     if: ${{ github.repository == 'Mickalive/Wix-extension-Location' && !github.event.repository.fork }}
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
-    env:
-      CI: "true"
-      npm_config_yes: "true"
+    timeout-minutes: 18
     steps:
       - name: Cancel stale bootstrap attempts
         env:
@@ -73,73 +70,124 @@ jobs:
           }
           rm -f /tmp/wix-login.log
 
-      - name: Try every currently documented Wix app template
+      - name: Drive official Wix app wizard in a pseudo-terminal
         id: create
         if: ${{ steps.base.outputs.already_bound != 'true' }}
         shell: bash
         run: |
           set -euo pipefail
-          templates=(
-            "24493a0d-18f2-4f68-b6d5-55992cef7daa"
-            "c442b755-2276-4336-918a-915865a9fa2b"
-            "46746ee0-e0b0-4971-be34-f3ea94dd979b"
-            "2ff7a5ae-d116-4c06-9394-7d7493428d0e"
-            "5fcf03b8-46ba-499b-8dbb-40ecf811aceb"
-          )
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq expect >/dev/null
           root=$(mktemp -d)
-          chosen=""
-          config=""
-          for template in "${templates[@]}"; do
-            work="$root/$template"
-            mkdir -p "$work"
-            echo "Trying documented Wix template ${template:0:8}…"
-            set +e
-            (cd "$work" && timeout 50s npm create @wix/new@latest app -- --app-name "Advanced Booking Rules" --template "$template" >create.log 2>&1)
-            rc=$?
-            set -e
-            if (( rc == 0 )); then
-              found=$(find "$work" -type f -name wix.config.json -print -quit)
-              if [[ -n "$found" ]] && jq -e 'type=="object" and (.appId|type=="string" and length>0) and (.projectId|type=="string" and length>0) and (.projectType|type=="string" and length>0)' "$found" >/dev/null; then
-                chosen="$template"
-                config="$found"
-                break
-              fi
-            else
-              code=$(grep -Eo 'Code: [A-Z_]+' "$work/create.log" | tail -1 | cut -d' ' -f2- || true)
-              status=$(grep -Eo 'status code [0-9]+' "$work/create.log" | tail -1 | awk '{print $3}' || true)
-              if (( rc == 124 )); then code="TIMEOUT_OR_HIDDEN_PROMPT"; fi
-              echo "Template ${template:0:8} failed: ${code:-unknown}/${status:-unknown}"
-            fi
-          done
-          if [[ -z "$config" ]]; then
-            echo "::error::All currently documented Wix app templates failed under authenticated CI."
+          cat > "$root/wix.exp" <<'EXPECT'
+          #!/usr/bin/expect -f
+          set timeout 240
+          log_user 1
+          log_file -noappend /tmp/wix-wizard.raw
+          cd [lindex $argv 0]
+          spawn npm create @wix/new@latest app
+          set chose_new 0
+          set chose_basic 0
+          set gave_name 0
+          set gave_folder 0
+          set handled_mcp 0
+          set handled_ide 0
+          set handled_namespace 0
+          set handled_code 0
+          expect {
+            -re {(?i)create a new wix app} {
+              if {!$chose_new} { send "\r"; set chose_new 1 }
+              exp_continue
+            }
+            -re {(?i)create a basic app} {
+              if {!$chose_basic} { send "\r"; set chose_basic 1 }
+              exp_continue
+            }
+            -re {(?i)(name for your app|app name)} {
+              if {!$gave_name} { send "Advanced Booking Rules\r"; set gave_name 1 }
+              exp_continue
+            }
+            -re {(?i)(folder name|project folder)} {
+              if {!$gave_folder} { send "advanced-booking-rules\r"; set gave_folder 1 }
+              exp_continue
+            }
+            -re {(?i)(configure.*wix mcp|wix mcp.*ide)} {
+              if {!$handled_mcp} { send "\r"; set handled_mcp 1 }
+              exp_continue
+            }
+            -re {(?i)(which.*ide|preferred.*ide|select.*ide)} {
+              if {!$handled_ide} { send "\r"; set handled_ide 1 }
+              exp_continue
+            }
+            -re {(?i)namespace} {
+              if {!$handled_namespace} { send "\r"; set handled_namespace 1 }
+              exp_continue
+            }
+            -re {(?i)code identifier} {
+              if {!$handled_code} { send "\r"; set handled_code 1 }
+              exp_continue
+            }
+            -re {(?i)(failed to register|not_found|forbidden|unauthorized)} {
+              send_user "\nWIX_WIZARD_REGISTRATION_ERROR\n"
+              exp_continue
+            }
+            eof {
+              catch wait result
+              exit [lindex $result 3]
+            }
+            timeout {
+              send_user "\nWIX_WIZARD_TIMEOUT\n"
+              exit 124
+            }
+          }
+          EXPECT
+          chmod +x "$root/wix.exp"
+          mkdir -p "$root/work"
+          set +e
+          timeout 300s "$root/wix.exp" "$root/work" >/tmp/wix-wizard.log 2>&1
+          rc=$?
+          set -e
+          sed -E 's/[A-Za-z0-9_=-]{24,}/[REDACTED]/g' /tmp/wix-wizard.log | tail -120
+          if (( rc != 0 )); then
+            echo "::error::Official Wix interactive wizard failed under authenticated CI (exit $rc)."
+            rm -rf "$root" /tmp/wix-wizard.log /tmp/wix-wizard.raw
             exit 1
           fi
+          config=$(find "$root/work" -type f -name wix.config.json -print -quit)
+          if [[ -z "$config" ]]; then
+            echo "::error::Wix wizard exited without generating wix.config.json."
+            rm -rf "$root" /tmp/wix-wizard.log /tmp/wix-wizard.raw
+            exit 1
+          fi
+          jq -e 'type=="object" and (.appId|type=="string" and length>0) and (.projectId|type=="string" and length>0) and (.projectType|type=="string" and length>0)' "$config" >/dev/null
           if jq -e 'paths(scalars) as $p | ($p|map(tostring)|join(".")) | test("secret|token|password|api.?key";"i")' "$config" >/dev/null; then
             echo "::error::Generated wix.config.json contains a secret-like field; refusing to persist."
             exit 1
           fi
+          project_dir=$(dirname "$config")
+          echo "project_dir=$project_dir" >> "$GITHUB_OUTPUT"
           cp "$config" "$GITHUB_WORKSPACE/wix.config.json"
-          echo "template=$chosen" >> "$GITHUB_OUTPUT"
-          rm -rf "$root"
+          rm -f /tmp/wix-wizard.log /tmp/wix-wizard.raw
 
-      - name: Probe real Wix build without discarding a valid binding
+      - name: Verify Wix-generated scaffold can build
         id: build
         if: ${{ steps.base.outputs.already_bound != 'true' }}
+        env:
+          PROJECT_DIR: ${{ steps.create.outputs.project_dir }}
         shell: bash
         run: |
-          set +e
-          timeout 60s npx -y @wix/cli@1.1.237 build >/tmp/wix-build.log 2>&1
-          rc=$?
+          set -euo pipefail
+          test -n "$PROJECT_DIR"
+          cd "$PROJECT_DIR"
+          timeout 120s npx -y @wix/cli@1.1.237 build >/tmp/wix-build.log 2>&1 || {
+            sed -E 's/[A-Za-z0-9_=-]{24,}/[REDACTED]/g' /tmp/wix-build.log | tail -100 >&2
+            rm -f /tmp/wix-build.log
+            exit 1
+          }
           rm -f /tmp/wix-build.log
-          if (( rc == 0 )); then echo "result=passed" >> "$GITHUB_OUTPUT"; else echo "result=needs_integration_repair" >> "$GITHUB_OUTPUT"; fi
-          exit 0
 
       - name: Record non-secret binding evidence
         if: ${{ steps.base.outputs.already_bound != 'true' }}
-        env:
-          TEMPLATE: ${{ steps.create.outputs.template }}
-          BUILD_RESULT: ${{ steps.build.outputs.result }}
         shell: bash
         run: |
           set -euo pipefail
@@ -148,13 +196,11 @@ jobs:
           cat > reports/wix-live/BOOTSTRAP_BINDING.md <<EOF
           # Authenticated Wix app binding
 
-          Wix CLI authentication succeeded using the repository secret. Wix registered **Advanced Booking Rules** non-interactively using a currently documented app template.
+          Wix CLI authentication succeeded using the repository secret. GitHub Actions then drove Wix's official interactive **Create a new Wix App → Create a basic app** wizard through a pseudo-terminal. Wix generated a real project binding and the Wix-generated scaffold passed \`wix build\`.
 
-          Template ID: $TEMPLATE
           Persisted wix.config.json fields: $keys
-          Initial wix build probe: $BUILD_RESULT
 
-          No API key, auth file, token, password, or other credential was persisted.
+          No API key, CLI auth store, token, password, generated scaffold, or other credential was persisted. Only Wix's non-secret project binding is retained for the accepted product.
           EOF
 
       - name: Persist binding to accepted product branch

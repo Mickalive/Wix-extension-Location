@@ -22,6 +22,26 @@ jobs:
     runs-on: ubuntu-22.04
     timeout-minutes: 10
     steps:
+      - name: Retire superseded active watchdogs
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          repo="$GITHUB_REPOSITORY"
+          current="$GITHUB_RUN_ID"
+          current_sha="$GITHUB_SHA"
+          runs=$(gh api "repos/$repo/actions/workflows/wix-watchdog.yml/runs?per_page=100")
+          retired=0
+          while IFS= read -r id; do
+            [[ -z "$id" ]] && continue
+            echo "Cancelling superseded watchdog run $id"
+            if gh api --method POST "repos/$repo/actions/runs/$id/cancel" >/dev/null 2>&1; then
+              retired=$((retired + 1))
+            fi
+          done < <(jq -r --arg current "$current" --arg sha "$current_sha" '.workflow_runs[] | select(.status != "completed") | select((.id|tostring) != $current) | select(.head_sha != $sha) | .id' <<<"$runs")
+          echo "Retired $retired superseded active watchdog runs."
+
       - name: Delete obsolete completed Actions runs
         env:
           GH_TOKEN: ${{ github.token }}
@@ -33,7 +53,7 @@ jobs:
           keep_file=$(mktemp)
           trap 'rm -f "$keep_file"' EXIT
 
-          # Never touch queued/running/waiting work.
+          # Never touch queued/running/waiting work here. Legacy active watchdogs are retired above.
           jq -r '.[] | select(.status != "completed") | .id' <<<"$runs" >> "$keep_file"
 
           keep_latest() {
@@ -61,7 +81,7 @@ jobs:
           done < <(jq -r '.[] | [.id,.status,.path,.name,(.conclusion // "")] | @tsv' <<<"$runs")
           echo "Deleted $deleted obsolete completed Actions runs."
 
-      - name: Delete completed cycle branches
+      - name: Delete obsolete cycle branches
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
@@ -69,24 +89,33 @@ jobs:
           set -euo pipefail
           repo="$GITHUB_REPOSITORY"
 
-          # A cycle branch is protected only while its owning Factory run is live.
+          # Build-cycle branches are protected only while their owning Factory run is live.
           active_ids=$(gh run list --repo "$repo" --workflow wix-build-loop.yml --limit 100 \
             --json databaseId,status \
             | jq -r '.[] | select(.status != "completed") | .databaseId' | sort -u)
 
           deleted=0
           while IFS= read -r branch; do
-            [[ "$branch" == cycle/wix-build/* ]] || continue
-            run_id=$(awk -F/ '{print $3}' <<<"$branch")
-            [[ "$run_id" =~ ^[0-9]+$ ]] || continue
-            if grep -qx "$run_id" <<<"$active_ids"; then
-              echo "Keeping active cycle branch: $branch"
-              continue
-            fi
-            echo "Deleting obsolete cycle branch: $branch"
-            if gh api --method DELETE "repos/$repo/git/refs/heads/$branch" >/dev/null 2>&1; then
-              deleted=$((deleted + 1))
-            fi
+            case "$branch" in
+              cycle/wix-recon/*)
+                echo "Deleting obsolete legacy recon branch: $branch"
+                if gh api --method DELETE "repos/$repo/git/refs/heads/$branch" >/dev/null 2>&1; then
+                  deleted=$((deleted + 1))
+                fi
+                ;;
+              cycle/wix-build/*)
+                run_id=$(awk -F/ '{print $3}' <<<"$branch")
+                [[ "$run_id" =~ ^[0-9]+$ ]] || continue
+                if grep -qx "$run_id" <<<"$active_ids"; then
+                  echo "Keeping active cycle branch: $branch"
+                  continue
+                fi
+                echo "Deleting obsolete build-cycle branch: $branch"
+                if gh api --method DELETE "repos/$repo/git/refs/heads/$branch" >/dev/null 2>&1; then
+                  deleted=$((deleted + 1))
+                fi
+                ;;
+            esac
           done < <(gh api --paginate "repos/$repo/branches?per_page=100" --jq '.[].name')
           echo "Deleted $deleted obsolete cycle branches."
 

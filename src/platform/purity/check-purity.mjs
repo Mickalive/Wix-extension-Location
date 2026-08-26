@@ -20,10 +20,15 @@
 //                                  audit CYCLE_32881643441_INTEGRATION.md obs O2:
 //                                  defense-in-depth over accepted code that is
 //                                  already @wix/-import-free)
+//     src/platform/registration/** (unified-CLI scaffold/registration surface —
+//                                  cycle 6 repair, INT-C6-R1; pure classifier/
+//                                  inventory modules; the real SDK adapter stays
+//                                  a scaffold-time thin adapter per the
+//                                  validation-plugin README §6 protocol)
 //
 // Zero-dependency ESM script. Runnable standalone:
 //     node src/platform/purity/check-purity.mjs [rootDir ...]
-// (defaults to the six protected roots above; missing directories are skipped
+// (defaults to the seven protected roots above; missing directories are skipped
 // so the gate stays green before a lane creates its directory).
 //
 // Limitation note: comment/string stripping below is a pragmatic scanner, not a
@@ -41,6 +46,7 @@ export const DEFAULT_PROTECTED_ROOTS = [
   'src/platform/webhooks',
   'src/platform/validation-plugin',
   'src/platform/composition',
+  'src/platform/registration',
 ];
 
 const SCANNED_EXTENSIONS = new Set([

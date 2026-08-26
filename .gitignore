@@ -11,6 +11,13 @@ coverage/
 # Wix CLI local state (dev-site selection etc. - see contract UQ1)
 .wix/
 
+# Real Wix CLI project binding - generated ONLY by the authenticated one-time
+# scaffold (npm create @wix/new@latest app; human-owned credentials, gate
+# T-VP0). Holds account-bound identifiers; never commit or hand-fabricate.
+# Committed shape template: wix.config.example.json. Context:
+# src/platform/registration/README.md
+wix.config.json
+
 # OS / editor noise
 .DS_Store
 *.log

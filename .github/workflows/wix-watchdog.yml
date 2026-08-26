@@ -1,5 +1,5 @@
 name: Wix Autonomous Recovery Watchdog
-# Resumed after authenticated Wix binding; generic OpenCode server errors now retry as transient.
+# Persistent recovery: poll every 5 minutes and retry only proven transient Factory failures.
 
 on:
   push:
@@ -10,6 +10,8 @@ on:
       - "Wix Autonomous Product Factory"
     types:
       - completed
+  schedule:
+    - cron: "*/5 * * * *"
   workflow_dispatch:
 
 permissions:
@@ -111,7 +113,7 @@ jobs:
 
   recover:
     name: Recover transient Product Factory failure
-    if: ${{ github.repository == 'Mickalive/Wix-extension-Location' && !github.event.repository.fork && ((github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'failure') || github.event_name == 'workflow_dispatch') }}
+    if: ${{ github.repository == 'Mickalive/Wix-extension-Location' && ((github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'failure') || github.event_name == 'workflow_dispatch' || github.event_name == 'schedule') }}
     runs-on: ubuntu-24.04
     timeout-minutes: 12
     steps:

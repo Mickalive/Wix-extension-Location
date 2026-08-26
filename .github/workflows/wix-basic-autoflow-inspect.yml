@@ -16,18 +16,16 @@ jobs:
       - uses: actions/setup-node@ae0d4ed08881f17d1511386f5be3e62356acd4a6
         with:
           node-version: 22.13.0
-      - name: Inspect AppsService methods and routes
+      - name: Inspect QueryApp payload and response
         shell: bash
         run: |
           set -euo pipefail
           d=$(mktemp -d); cd "$d"
           tgz=$(npm pack @wix/create-new@0.0.105 --silent); tar -xzf "$tgz"
           f=package/build/index.js
-          echo '=== APPS SERVICE FQNS ==='
-          grep -n 'wix.devcenter.apps.v1.AppsService' "$f" | head -120 || true
-          echo '=== POSSIBLE APP QUERY/LIST FUNCTIONS ==='
-          grep -nE 'function (query|list|search|find|my).*App|queryApps|listApps|searchApps|QueryApps|ListApps|SearchApps' "$f" | head -160 || true
-          echo '=== APPS ROUTES ==='
-          grep -nE 'protoPath: "/v1/apps|srcPath: "/apps-service|/apps-service/v1/apps' "$f" | head -180 || true
-          echo '=== DEVCENTER CLIENT APP METHODS ==='
-          sed -n '80390,80680p' "$f"
+          echo '=== QUERY APP FUNCTION ==='
+          sed -n '72620,72690p' "$f"
+          echo '=== QUERY APP SCHEMAS / CALLERS ==='
+          grep -n -B15 -A35 'queryAppSchema\|queryApp({' "$f" | head -260 || true
+          echo '=== APP DATA SCHEMA ==='
+          grep -n -B15 -A50 'var appSchema\|const appSchema\|appName:' "$f" | head -260 || true

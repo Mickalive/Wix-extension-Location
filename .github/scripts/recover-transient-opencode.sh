@@ -74,8 +74,6 @@ while IFS= read -r encoded_job; do
   elif grep -Eqi \
        'endpoint is unavailable|upstream request failed|service unavailable|provider unavailable' \
        "$log_file"; then
-    # Older attempts may have incorrectly emitted the permanent marker for these
-    # provider-side failures. The concrete upstream-unavailability signature wins.
     transient_jobs+=("$job_name (provider unavailable)")
   elif grep -Fq 'WIX_OPENCODE_FAILURE_KIND=permanent' "$log_file"; then
     unsafe_jobs+=("$job_name")
@@ -85,7 +83,7 @@ while IFS= read -r encoded_job; do
        grep -Eqi 'OpenCode .* unavailable after [0-9]+ attempts|OpenCode .* remains unavailable after [0-9]+ attempts' "$log_file"; then
     transient_jobs+=("$job_name (legacy retry marker)")
   elif grep -Eqi \
-       "couldn't find remote ref cycle/wix-(recon|build)/|candidate branch found=false|candidate_found=false|missing candidate snapshot|missing research snapshot" \
+       "couldn't find remote ref cycle/wix-build/|candidate branch found=false|candidate_found=false|missing candidate snapshot" \
        "$log_file"; then
     dependent_jobs+=("$job_name")
   else

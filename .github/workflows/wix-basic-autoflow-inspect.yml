@@ -16,18 +16,17 @@ jobs:
       - uses: actions/setup-node@ae0d4ed08881f17d1511386f5be3e62356acd4a6
         with:
           node-version: 22.13.0
-      - name: Inspect QueryMyApps route and extend flow
+      - name: Inspect MyApps URL resolver
         shell: bash
         run: |
           set -euo pipefail
           d=$(mktemp -d); cd "$d"
           tgz=$(npm pack @wix/create-new@0.0.105 --silent); tar -xzf "$tgz"
           f=package/build/index.js
-          echo '=== QUERY MY APPS AMBASSADOR ==='
-          sed -n '72815,72865p' "$f"
-          echo '=== GET DEVELOPER APPS ==='
-          sed -n '80655,80690p' "$f"
-          echo '=== EXTEND APP FLOW ==='
-          sed -n '82670,82815p' "$f"
-          echo '=== HIDDEN SKIP FLAGS ==='
-          grep -n -B12 -A20 'skip-git\|skip-install' "$f" | tail -160 || true
+          grep -n 'resolveWixDevcenterMyappsV1MyAppsServiceUrl' "$f" | head -10
+          n=$(grep -n 'function resolveWixDevcenterMyappsV1MyAppsServiceUrl' "$f" | head -1 | cut -d: -f1)
+          test -n "$n"
+          start=$((n-20)); end=$((n+95))
+          sed -n "${start},${end}p" "$f"
+          echo '=== BACKOFFICE HTTP CLIENT ==='
+          grep -n -B20 -A45 'type: "backoffice"' "$f" | head -180

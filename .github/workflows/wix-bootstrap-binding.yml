@@ -72,7 +72,7 @@ jobs:
           }
           rm -f /tmp/wix-login.log
 
-      - name: Discover existing app through API-key compatible AppsService.QueryApp
+      - name: Discover existing app by its known registration window
         id: app
         if: ${{ steps.base.outputs.already_bound != 'true' }}
         shell: bash
@@ -105,12 +105,18 @@ jobs:
               createHeaders: () => authState.getRequestHeaders()
             });
             let lastError;
-            for (let attempt = 1; attempt <= 5; attempt++) {
+            for (let attempt = 1; attempt <= 3; attempt++) {
               try {
                 const result = await directHttpClient.request(queryApp({
                   query: {
-                    filter: { name: "Advanced Booking Rules" },
-                    paging: { limit: 10 }
+                    filter: {
+                      createdDate: {
+                        $gte: "2026-08-26T13:45:00.000Z",
+                        $lt: "2026-08-26T13:51:00.000Z"
+                      }
+                    },
+                    paging: { limit: 20 },
+                    sort: [{ fieldName: "createdDate", order: "DESC" }]
                   }
                 }));
                 console.log("WIX_QUERY_APP_JSON=" + JSON.stringify(result.data));
@@ -120,7 +126,7 @@ jobs:
                 const status = error?.response?.status;
                 console.error("WIX_QUERY_APP_ATTEMPT=" + attempt + " STATUS=" + (status ?? "unknown"));
                 if (status && status !== 504 && status !== 502 && status !== 503 && status !== 429) throw error;
-                await new Promise((resolve) => setTimeout(resolve, attempt * 1500));
+                await new Promise((resolve) => setTimeout(resolve, attempt * 1200));
               }
             }
             throw lastError;
@@ -133,13 +139,13 @@ jobs:
           set +e
           (
             cd "$root"
-            WIX_QUERY_EXISTING_APP=1 timeout 120s npm exec -- create-new
+            WIX_QUERY_EXISTING_APP=1 timeout 90s npm exec -- create-new
           ) >/tmp/wix-app-discovery.out 2>&1
           rc=$?
           set -e
           marker=$(grep -a 'WIX_QUERY_APP_JSON=' /tmp/wix-app-discovery.out | tail -1 | tr -d '\r' || true)
           if [[ -z "$marker" ]]; then
-            echo "::error::Wix AppsService.QueryApp did not return the existing app (exit $rc)."
+            echo "::error::Wix AppsService.QueryApp could not resolve the registration window (exit $rc)."
             sed -E 's/[A-Za-z0-9_=-]{24,}/[REDACTED]/g' /tmp/wix-app-discovery.out | tail -140 >&2
             rm -rf "$root" /tmp/wix-app-discovery.out
             exit 1
@@ -149,14 +155,14 @@ jobs:
           MATCHES=$(printf '%s' "$json" | jq '[.apps[]? | select(.name == "Advanced Booking Rules")] | length')
           rm -rf "$root" /tmp/wix-app-discovery.out
 
-          test -n "$APP_ID" || { echo "::error::QueryApp returned no Advanced Booking Rules app."; exit 1; }
+          test -n "$APP_ID" || { echo "::error::No Advanced Booking Rules app was returned in the known registration window."; exit 1; }
           [[ "$APP_ID" =~ ^[0-9a-fA-F-]{36}$ ]] || { echo "::error::Wix returned a malformed app id."; exit 1; }
           if (( MATCHES > 1 )); then
-            echo "::error::Multiple AppsService results have the exact same app name; refusing to guess."
+            echo "::error::Multiple exact-name apps were created in the registration window; refusing to guess."
             exit 1
           fi
           echo "app_id=$APP_ID" >> "$GITHUB_OUTPUT"
-          echo "AppsService.QueryApp resolved the already-registered Advanced Booking Rules app; no new app was created."
+          echo "AppsService.QueryApp resolved the already-registered Advanced Booking Rules app by creation window; no new app was created."
 
       - name: Scaffold that exact existing app without creating a duplicate
         id: create
@@ -225,7 +231,7 @@ jobs:
           cat > reports/wix-live/BOOTSTRAP_BINDING.md <<EOF
           # Authenticated Wix app binding
 
-          GitHub Actions authenticated with the protected Wix API key, resolved the already-registered **Advanced Booking Rules** app through Wix AppsService.QueryApp, scaffolded that exact existing app without registering a duplicate, and passed a real \`wix build\` against Wix's generated project.
+          GitHub Actions authenticated with the protected Wix API key, resolved the already-registered **Advanced Booking Rules** app through Wix AppsService.QueryApp using its known creation window, scaffolded that exact existing app without registering a duplicate, and passed a real \`wix build\` against Wix's generated project.
 
           Persisted wix.config.json fields: $keys
 

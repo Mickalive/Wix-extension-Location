@@ -16,18 +16,18 @@ jobs:
       - uses: actions/setup-node@ae0d4ed08881f17d1511386f5be3e62356acd4a6
         with:
           node-version: 22.13.0
-      - name: Inspect direct HTTP client construction
+      - name: Inspect AppsService methods and routes
         shell: bash
         run: |
           set -euo pipefail
           d=$(mktemp -d); cd "$d"
           tgz=$(npm pack @wix/create-new@0.0.105 --silent); tar -xzf "$tgz"
           f=package/build/index.js
-          echo '=== CREATE HTTP CLIENT ==='
-          sed -n '49045,49155p' "$f"
-          echo '=== USE HTTP CLIENT ==='
-          grep -n 'function useHttpClient\|var useHttpClient' "$f" | head -10
-          n=$(grep -n 'function useHttpClient\|var useHttpClient' "$f" | head -1 | cut -d: -f1)
-          if [[ -n "$n" ]]; then start=$((n-20)); end=$((n+70)); sed -n "${start},${end}p" "$f"; fi
-          echo '=== AUTH STRATEGY / CREATE CLIENT CALLERS ==='
-          grep -nE 'createHttpClient\(\{|createApiKeyAuthState|isLoggedIn\(' "$f" | tail -100
+          echo '=== APPS SERVICE FQNS ==='
+          grep -n 'wix.devcenter.apps.v1.AppsService' "$f" | head -120 || true
+          echo '=== POSSIBLE APP QUERY/LIST FUNCTIONS ==='
+          grep -nE 'function (query|list|search|find|my).*App|queryApps|listApps|searchApps|QueryApps|ListApps|SearchApps' "$f" | head -160 || true
+          echo '=== APPS ROUTES ==='
+          grep -nE 'protoPath: "/v1/apps|srcPath: "/apps-service|/apps-service/v1/apps' "$f" | head -180 || true
+          echo '=== DEVCENTER CLIENT APP METHODS ==='
+          sed -n '80390,80680p' "$f"

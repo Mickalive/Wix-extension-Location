@@ -1,6 +1,7 @@
 name: Wix Autonomous Recovery Watchdog
-# Persistent product supervisor: READY is the only normal terminal state.
-# Everything else is retried, repaired, escalated, or safely rechecked every 5 minutes.
+# READY is the only normal terminal product state.
+# A persistent supervisor heals every 5 minutes; a separate scheduled heartbeat
+# only recreates that supervisor if it disappears, so cron never kills healthy work.
 
 on:
   push:
@@ -14,13 +15,37 @@ permissions:
   contents: read
   actions: write
 
-concurrency:
-  group: wix-autonomous-recovery-supervisor-v3
-  cancel-in-progress: true
-
 jobs:
+  heartbeat:
+    name: Ensure persistent supervisor exists
+    if: ${{ github.event_name == 'schedule' }}
+    runs-on: ubuntu-22.04
+    timeout-minutes: 5
+    steps:
+      - name: Recreate supervisor only if absent
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          repo="$GITHUB_REPOSITORY"
+          current="$GITHUB_RUN_ID"
+          active=$(gh run list --repo "$repo" --workflow wix-watchdog.yml --limit 30 \
+            --json databaseId,status,event \
+            | jq --arg current "$current" '[.[] | select((.status == "in_progress" or .status == "queued" or .status == "pending") and .event != "schedule" and ((.databaseId|tostring) != $current))] | length')
+          if (( active > 0 )); then
+            echo "Persistent supervisor already exists; heartbeat is a no-op."
+            exit 0
+          fi
+          gh workflow run wix-watchdog.yml --repo "$repo" --ref main
+          echo "Persistent supervisor was absent; replacement dispatched."
+
   supervise:
-    name: Persistent autonomous supervisor — 5 minute heartbeat
+    name: Persistent autonomous supervisor — 5 minute control loop
+    if: ${{ github.event_name != 'schedule' }}
+    concurrency:
+      group: wix-autonomous-recovery-persistent-v4
+      cancel-in-progress: false
     runs-on: ubuntu-22.04
     timeout-minutes: 355
     steps:
@@ -29,23 +54,6 @@ jobs:
           fetch-depth: 1
           ref: main
           persist-credentials: false
-
-      - name: Retire superseded watchdog runs
-        env:
-          GH_TOKEN: ${{ github.token }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          repo="$GITHUB_REPOSITORY"
-          current="$GITHUB_RUN_ID"
-          gh run list --repo "$repo" --workflow wix-watchdog.yml --limit 30 \
-            --json databaseId,status,createdAt \
-            | jq -r --arg current "$current" '.[] | select((.status != "completed") and ((.databaseId|tostring) != $current)) | .databaseId' \
-            | while read -r id; do
-                [[ -z "$id" ]] && continue
-                echo "Cancelling superseded watchdog run $id"
-                gh api --method POST "repos/$repo/actions/runs/$id/cancel" >/dev/null 2>&1 || true
-              done
 
       - name: Prune obsolete completed Actions evidence
         if: ${{ github.event_name == 'push' }}
@@ -58,7 +66,6 @@ jobs:
           runs=$(gh api --paginate "repos/$repo/actions/runs?per_page=100" --jq '.workflow_runs[]' | jq -s '.')
           keep_file=$(mktemp)
           trap 'rm -f "$keep_file"' EXIT
-
           jq -r '.[] | select(.status != "completed") | .id' <<<"$runs" >> "$keep_file"
           keep_latest() {
             local path="$1" count="$2"
@@ -71,7 +78,6 @@ jobs:
           keep_latest '.github/workflows/wix-sim.yml' 1
           keep_latest '.github/workflows/wix-watchdog.yml' 3
           sort -u "$keep_file" -o "$keep_file"
-
           while IFS=$'\t' read -r id status path name conclusion; do
             if grep -qx "$id" "$keep_file" || [[ "$status" != completed ]]; then continue; fi
             echo "Deleting obsolete run $id | $name | $conclusion | $path"
@@ -88,13 +94,15 @@ jobs:
           rm -f /tmp/wix-product-ready
           for tick in $(seq 1 70); do
             echo "=== autonomous supervisor tick $tick/70 at $(date -u +%FT%TZ) ==="
-
             auth=$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)
             git -c "http.extraheader=AUTHORIZATION: basic $auth" fetch origin main --quiet || true
             if git show origin/main:.github/scripts/recover-transient-opencode.sh > /tmp/recover.sh 2>/dev/null; then
               chmod +x /tmp/recover.sh
               set +e
-              bash /tmp/recover.sh
+              # Job-level concurrency already guarantees one persistent v4 supervisor.
+              # Remove GITHUB_RUN_ID so legacy "newest watchdog" guards cannot be
+              # confused by the independent scheduled heartbeat runs.
+              env -u GITHUB_RUN_ID bash /tmp/recover.sh
               rc=$?
               set -e
               if (( rc == 10 )); then
@@ -107,7 +115,6 @@ jobs:
             else
               echo "::warning::Could not refresh recovery router; supervisor remains alive."
             fi
-
             if (( tick < 70 )); then sleep 300; fi
           done
 
@@ -123,4 +130,4 @@ jobs:
             exit 0
           fi
           gh workflow run wix-watchdog.yml --repo "$GITHUB_REPOSITORY" --ref main
-          echo "Fresh autonomous supervisor dispatched before runner timeout."
+          echo "Fresh persistent supervisor dispatched before runner timeout."

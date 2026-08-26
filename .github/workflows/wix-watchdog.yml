@@ -1,5 +1,5 @@
 name: Wix Autonomous Recovery Watchdog
-# Persistent recovery: poll every 5 minutes and retry only proven transient Factory failures.
+# Persistent self-healing: repair product failures, retry outages, fail closed on safety/external prerequisites.
 
 on:
   push:
@@ -112,7 +112,7 @@ jobs:
           echo "Dispatched Product Factory cycle $next from current main."
 
   recover:
-    name: Recover transient Product Factory failure
+    name: Diagnose, retry, or repair Product Factory
     if: ${{ github.repository == 'Mickalive/Wix-extension-Location' && ((github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'failure') || github.event_name == 'workflow_dispatch' || github.event_name == 'schedule') }}
     runs-on: ubuntu-24.04
     timeout-minutes: 12
@@ -122,10 +122,7 @@ jobs:
           fetch-depth: 1
           ref: main
           persist-credentials: false
-      - name: Allow transient provider or runner outage to clear
-        if: ${{ github.event_name == 'workflow_run' }}
-        run: sleep 300
-      - name: Re-run only proven transient or runner failures
+      - name: Route failure to retry, fresh repair cycle, or fail-closed prerequisite
         env:
           GH_TOKEN: ${{ github.token }}
           WIX_LOOP_WORKFLOW: wix-build-loop.yml

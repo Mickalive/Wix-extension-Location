@@ -1,5 +1,5 @@
 name: Wix Autonomous Recovery Watchdog
-# Resumed after authenticated Wix binding and real wix build verification.
+# Resumed after authenticated Wix binding; generic OpenCode server errors now retry as transient.
 
 on:
   push:

@@ -102,20 +102,40 @@ jobs:
           git config --global user.email wix-binding-bootstrap@users.noreply.github.com
 
           cd "$work"
+          set +e
           timeout 420s npm exec --yes --package=@wix/create-new@0.0.105 -- create-new app \
             --extend-app-id "$TARGET_WIX_APP_ID" \
             --app-name "Advanced Booking Rules" \
             --template-path "$blank" \
-            --skip-git >/tmp/wix-extend.log 2>&1 || {
-              sed -E 's/[A-Za-z0-9_=-]{40,}/[REDACTED]/g' /tmp/wix-extend.log | tail -180 >&2
-              rm -f /tmp/wix-extend.log
-              exit 1
-            }
-          rm -f /tmp/wix-extend.log
+            --skip-git >/tmp/wix-extend.log 2>&1
+          create_rc=$?
+          set -e
 
           config=$(find "$work" -mindepth 2 -maxdepth 4 -type f -name wix.config.json -print -quit)
-          test -n "$config" || { echo "::error::Existing-app scaffold completed without wix.config.json"; exit 1; }
-          jq -e --arg id "$TARGET_WIX_APP_ID" 'type=="object" and .appId==$id and (.projectId|type=="string" and length>0) and (.projectType|type=="string" and length>0)' "$config" >/dev/null
+          if [[ -z "$config" ]]; then
+            sed -E 's/[A-Za-z0-9_=-]{40,}/[REDACTED]/g' /tmp/wix-extend.log | tail -180 >&2
+            echo "::error::Existing-app scaffold did not produce wix.config.json"
+            rm -f /tmp/wix-extend.log
+            exit 1
+          fi
+
+          jq -e --arg id "$TARGET_WIX_APP_ID" 'type=="object" and .appId==$id and (.projectId|type=="string" and length>0) and (.projectType|type=="string" and length>0)' "$config" >/dev/null || {
+            echo "::error::Generated Wix binding is incomplete or points to another app."
+            exit 1
+          }
+
+          if (( create_rc != 0 )); then
+            if grep -q 'FailedToRunExternalCommand' /tmp/wix-extend.log \
+              && grep -Eq 'skills add|agent-skills' /tmp/wix-extend.log; then
+              echo "::warning::Wix scaffold hit only the auxiliary agent-skills installer after the real binding was generated; continuing to real wix build."
+            else
+              sed -E 's/[A-Za-z0-9_=-]{40,}/[REDACTED]/g' /tmp/wix-extend.log | tail -180 >&2
+              echo "::error::Wix scaffold failed for a reason other than the known auxiliary skills installer."
+              exit 1
+            fi
+          fi
+          rm -f /tmp/wix-extend.log
+
           if jq -e 'paths(scalars) as $p | ($p|map(tostring)|join(".")) | test("secret|token|password|api.?key";"i")' "$config" >/dev/null; then
             echo "::error::Generated wix.config.json contains a secret-like field"
             exit 1
@@ -155,7 +175,7 @@ jobs:
 
           GitHub Actions authenticated with the protected Wix API key and bound the product to the explicitly selected existing Wix app **Advanced Booking Rules** (App ID: $TARGET_WIX_APP_ID). No app was created by this run.
 
-          Wix generated a real wix.config.json for that exact app and a real \`wix build\` completed successfully before the binding was persisted.
+          Wix generated a real wix.config.json for that exact app and a real \`wix build\` completed successfully before the binding was persisted. The create-new scaffold may emit a known auxiliary Wix agent-skills installation failure in CI; that failure is accepted only after validating the real appId/projectId/projectType and is not treated as product evidence. The subsequent real \`wix build\` remains mandatory.
 
           Persisted wix.config.json fields: $keys
 

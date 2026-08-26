@@ -19,7 +19,7 @@ jobs:
     name: Recover existing Wix app and persist real binding
     if: ${{ github.repository == 'Mickalive/Wix-extension-Location' && !github.event.repository.fork }}
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 18
     steps:
       - name: Cancel obsolete Wix bootstrap experiments
         env:
@@ -72,43 +72,56 @@ jobs:
           }
           rm -f /tmp/wix-login.log
 
-      - name: Discover the already-registered app through Wix Dev Center
+      - name: Discover existing app through Wix's own Dev Center client
         id: app
         if: ${{ steps.base.outputs.already_bound != 'true' }}
-        env:
-          WIX_API_KEY: ${{ secrets.WIX_API_KEY }}
         shell: bash
         run: |
           set -euo pipefail
-          ACCOUNT_ID=$(jq -r '.accountId // .payload.accountId // empty' "$HOME/.wix/auth/api-key.json")
-          test -n "$ACCOUNT_ID" || { echo "::error::Wix login succeeded but accountId is absent from the API-key auth state."; exit 1; }
+          root=$(mktemp -d)
+          npm install --prefix "$root" --no-audit --no-fund --ignore-scripts @wix/create-new@0.0.105 >/dev/null
+          entry="$root/node_modules/@wix/create-new/build/index.js"
+          test -f "$entry" || { echo "::error::Pinned Wix create-new entrypoint not found."; exit 1; }
 
-          body='{"query":{"paging":{"limit":500},"sort":[{"fieldName":"updatedDate","order":"DESC"}]}}'
-          code=$(curl -sS -o /tmp/my-apps.json -w '%{http_code}' \
-            -X POST 'https://manage.wix.com/v1/my-apps/query' \
-            -H "Authorization: $WIX_API_KEY" \
-            -H "wix-account-id: $ACCOUNT_ID" \
-            -H 'Content-Type: application/json' \
-            --data "$body")
-          if [[ "$code" != 2* ]]; then
-            echo "::error::Wix QueryMyApps failed with HTTP $code on the backoffice host."
-            jq -r '{message,details}' /tmp/my-apps.json 2>/dev/null || true
-            rm -f /tmp/my-apps.json
+          ENTRY="$entry" node <<'NODE'
+          const fs = require('fs');
+          const p = process.env.ENTRY;
+          let s = fs.readFileSync(p, 'utf8');
+          const needle = 'const developerApps = await getDeveloperApps();';
+          const hits = s.split(needle).length - 1;
+          if (hits !== 1) {
+            console.error(`Expected exactly one Wix developer-app discovery call, found ${hits}`);
+            process.exit(2);
+          }
+          s = s.replace(needle, needle + '\n      console.log("WIX_DEVELOPER_APPS_JSON=" + JSON.stringify(developerApps));');
+          fs.writeFileSync(p, s);
+          NODE
+
+          set +e
+          timeout 45s script -qec "node '$entry' app --skip-git" /tmp/wix-app-discovery.tty >/tmp/wix-app-discovery.out 2>&1
+          rc=$?
+          set -e
+          marker=$(grep -a 'WIX_DEVELOPER_APPS_JSON=' /tmp/wix-app-discovery.out | tail -1 | tr -d '\r' || true)
+          if [[ -z "$marker" ]]; then
+            echo "::error::Wix client did not expose its developer-app list (runner exit $rc)."
+            sed -E 's/[A-Za-z0-9_=-]{24,}/[REDACTED]/g' /tmp/wix-app-discovery.out | tail -100 >&2
+            rm -rf "$root" /tmp/wix-app-discovery.tty /tmp/wix-app-discovery.out
             exit 1
           fi
+          json=${marker#*WIX_DEVELOPER_APPS_JSON=}
+          APP_ID=$(printf '%s' "$json" | jq -r '[.[] | select(.appData.appName == "Advanced Booking Rules")][0].id // empty')
+          MATCHES=$(printf '%s' "$json" | jq '[.[] | select(.appData.appName == "Advanced Booking Rules")] | length')
+          rm -rf "$root" /tmp/wix-app-discovery.tty /tmp/wix-app-discovery.out
 
-          APP_ID=$(jq -r '[.myApps[]? | select(.appData.appName == "Advanced Booking Rules")][0].id // empty' /tmp/my-apps.json)
-          MATCHES=$(jq '[.myApps[]? | select(.appData.appName == "Advanced Booking Rules")] | length' /tmp/my-apps.json)
-          rm -f /tmp/my-apps.json
-          test -n "$APP_ID" || { echo "::error::Registered app Advanced Booking Rules was not returned by QueryMyApps."; exit 1; }
+          test -n "$APP_ID" || { echo "::error::Wix client did not return the already-registered Advanced Booking Rules app."; exit 1; }
           [[ "$APP_ID" =~ ^[0-9a-fA-F-]{36}$ ]] || { echo "::error::Wix returned a malformed app id."; exit 1; }
           if (( MATCHES > 1 )); then
-            echo "::warning::Multiple apps share this name; selecting the most recently updated match returned by Wix."
+            echo "::warning::Multiple apps share this name; Wix sorts this list by updatedDate DESC, so the most recent one is selected."
           fi
           echo "app_id=$APP_ID" >> "$GITHUB_OUTPUT"
-          echo "Resolved the existing Advanced Booking Rules app from Wix Dev Center; no new app will be registered."
+          echo "Wix's own Dev Center client resolved the existing Advanced Booking Rules app; no new app will be registered."
 
-      - name: Scaffold the existing app without creating another app
+      - name: Scaffold that exact existing app without creating a duplicate
         id: create
         if: ${{ steps.base.outputs.already_bound != 'true' }}
         env:
@@ -175,11 +188,11 @@ jobs:
           cat > reports/wix-live/BOOTSTRAP_BINDING.md <<EOF
           # Authenticated Wix app binding
 
-          GitHub Actions authenticated with the protected Wix API key, resolved the already-registered **Advanced Booking Rules** app through Wix Dev Center QueryMyApps, scaffolded that exact existing app without registering a duplicate, and passed a real \`wix build\` against Wix's generated project.
+          GitHub Actions authenticated with the protected Wix API key, resolved the already-registered **Advanced Booking Rules** app using Wix's own Dev Center client, scaffolded that exact existing app without registering a duplicate, and passed a real \`wix build\` against Wix's generated project.
 
           Persisted wix.config.json fields: $keys
 
-          No API key, account auth store, token, password, or other credential was persisted.
+          No API key, account auth store, token, password, patched Wix package, or other credential was persisted.
           EOF
 
       - name: Persist only the Wix-generated binding to accepted product branch

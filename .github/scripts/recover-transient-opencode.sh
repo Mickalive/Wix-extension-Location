@@ -53,6 +53,10 @@ infra_jobs=()
 dependent_jobs=()
 unsafe_jobs=()
 
+permanent_pattern='invalid api.?key|api.?key[^[:cntrl:]]*(invalid|expired|revoked)|token[^[:cntrl:]]*(expired|revoked)|unauthorized|forbidden|permission denied|authentication (failed|required)|login required|model[^[:cntrl:]]*(not found|does not exist|unsupported)|unknown model|invalid model|config(uration)?[^[:cntrl:]]*(invalid|schema|validation)|validation error|bad request|HTTP[^0-9]*(400|401|403|404)'
+generic_server_pattern='Unexpected server error|"name"[[:space:]]*:[[:space:]]*"UnknownError"|"ref"[[:space:]]*:[[:space:]]*"err_[A-Za-z0-9_-]+"|HTTP[^0-9]*500'
+legacy_transient_pattern='network_error|network error|temporarily unavailable|connection (reset|closed)|ECONNRESET|ETIMEDOUT|timed out|timeout|rate[_ -]?limit|HTTP[^0-9]*(429|500|502|503|504)'
+
 while IFS= read -r encoded_job; do
   job=$(printf '%s' "$encoded_job" | base64 -d)
   job_id=$(jq -r '.id' <<<"$job")
@@ -69,17 +73,25 @@ while IFS= read -r encoded_job; do
     continue
   fi
 
+  explicit_permanent=false
+  if grep -Eqi "$permanent_pattern" "$log_file"; then
+    explicit_permanent=true
+  fi
+
   if grep -Fq 'WIX_OPENCODE_FAILURE_KIND=transient' "$log_file"; then
     transient_jobs+=("$job_name")
+  elif [[ "$explicit_permanent" == false ]] && grep -Eqi "$generic_server_pattern" "$log_file"; then
+    # Compatibility recovery for runs produced before UnknownError/err_* was
+    # correctly classified. An obsolete 'permanent' marker must not override
+    # direct evidence of a generic server 500 when no explicit permanent cause exists.
+    transient_jobs+=("$job_name (generic OpenCode server error)")
   elif grep -Eqi \
        'endpoint is unavailable|upstream request failed|service unavailable|provider unavailable' \
        "$log_file"; then
     transient_jobs+=("$job_name (provider unavailable)")
   elif grep -Fq 'WIX_OPENCODE_FAILURE_KIND=permanent' "$log_file"; then
     unsafe_jobs+=("$job_name")
-  elif grep -Eqi \
-       'network_error|network error|temporarily unavailable|connection (reset|closed)|ECONNRESET|ETIMEDOUT|timed out|timeout|rate[_ -]?limit|HTTP[^0-9]*(429|500|502|503|504)' \
-       "$log_file" &&
+  elif [[ "$explicit_permanent" == false ]] && grep -Eqi "$legacy_transient_pattern" "$log_file" &&
        grep -Eqi 'OpenCode .* unavailable after [0-9]+ attempts|OpenCode .* remains unavailable after [0-9]+ attempts' "$log_file"; then
     transient_jobs+=("$job_name (legacy retry marker)")
   elif grep -Eqi \

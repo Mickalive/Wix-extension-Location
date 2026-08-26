@@ -87,42 +87,59 @@ jobs:
           const fs = require('fs');
           const p = process.env.ENTRY;
           let s = fs.readFileSync(p, 'utf8');
-          const needle = 'const developerApps = await getDeveloperApps();';
+          const needle = 'try {\n  await program2.parseAsync();';
           const hits = s.split(needle).length - 1;
           if (hits !== 1) {
-            console.error(`Expected exactly one Wix developer-app discovery call, found ${hits}`);
+            console.error(`Expected one Wix command entrypoint, found ${hits}`);
             process.exit(2);
           }
-          s = s.replace(needle, needle + '\n      console.log("WIX_DEVELOPER_APPS_JSON=" + JSON.stringify(developerApps));');
+          const direct = `if (process.env.WIX_DUMP_APPS === "1") {
+            const authState = await apiKeyAuthStrategy.isLoggedIn();
+            if (!authState) {
+              console.error("WIX_DIRECT_AUTH_MISSING");
+              process.exit(2);
+            }
+            const directHttpClient = createHttpClient({
+              type: "backoffice",
+              getAppToken: () => authState.getAccessToken(),
+              createHeaders: () => authState.getRequestHeaders()
+            });
+            const directDevCenter = new DevCenterClient(directHttpClient);
+            const directApps = await directDevCenter.getDeveloperApps();
+            console.log("WIX_DEVELOPER_APPS_JSON=" + JSON.stringify(directApps));
+            process.exit(0);
+          }
+          `;
+          s = s.replace(needle, direct + needle);
           fs.writeFileSync(p, s);
           NODE
 
           set +e
           (
             cd "$root"
-            timeout 45s script -qec "npm exec -- create-new app --skip-git" /tmp/wix-app-discovery.tty >/tmp/wix-app-discovery.out 2>&1
-          )
+            WIX_DUMP_APPS=1 timeout 90s npm exec -- create-new
+          ) >/tmp/wix-app-discovery.out 2>&1
           rc=$?
           set -e
           marker=$(grep -a 'WIX_DEVELOPER_APPS_JSON=' /tmp/wix-app-discovery.out | tail -1 | tr -d '\r' || true)
           if [[ -z "$marker" ]]; then
-            echo "::error::Wix client did not expose its developer-app list (runner exit $rc)."
-            sed -E 's/[A-Za-z0-9_=-]{24,}/[REDACTED]/g' /tmp/wix-app-discovery.out | tail -100 >&2
-            rm -rf "$root" /tmp/wix-app-discovery.tty /tmp/wix-app-discovery.out
+            echo "::error::Direct Wix Dev Center client query failed (exit $rc)."
+            sed -E 's/[A-Za-z0-9_=-]{24,}/[REDACTED]/g' /tmp/wix-app-discovery.out | tail -120 >&2
+            rm -rf "$root" /tmp/wix-app-discovery.out
             exit 1
           fi
           json=${marker#*WIX_DEVELOPER_APPS_JSON=}
           APP_ID=$(printf '%s' "$json" | jq -r '[.[] | select(.appData.appName == "Advanced Booking Rules")][0].id // empty')
           MATCHES=$(printf '%s' "$json" | jq '[.[] | select(.appData.appName == "Advanced Booking Rules")] | length')
-          rm -rf "$root" /tmp/wix-app-discovery.tty /tmp/wix-app-discovery.out
+          rm -rf "$root" /tmp/wix-app-discovery.out
 
-          test -n "$APP_ID" || { echo "::error::Wix client did not return the already-registered Advanced Booking Rules app."; exit 1; }
+          test -n "$APP_ID" || { echo "::error::Wix did not return the already-registered Advanced Booking Rules app."; exit 1; }
           [[ "$APP_ID" =~ ^[0-9a-fA-F-]{36}$ ]] || { echo "::error::Wix returned a malformed app id."; exit 1; }
           if (( MATCHES > 1 )); then
-            echo "::warning::Multiple apps share this name; Wix sorts this list by updatedDate DESC, so the most recent one is selected."
+            echo "::warning::Multiple apps share this name; Wix returns them updatedDate DESC, so the most recent match is selected."
           fi
           echo "app_id=$APP_ID" >> "$GITHUB_OUTPUT"
-          echo "Wix's own Dev Center client resolved the existing Advanced Booking Rules app; no new app will be registered."
+          echo "Direct Wix Dev Center client resolved the existing Advanced Booking Rules app; no new app will be registered."
 
       - name: Scaffold that exact existing app without creating a duplicate
         id: create

@@ -16,17 +16,18 @@ jobs:
       - uses: actions/setup-node@ae0d4ed08881f17d1511386f5be3e62356acd4a6
         with:
           node-version: 22.13.0
-      - name: Inspect MyApps URL resolver
+      - name: Locate direct DevCenter client entrypoint
         shell: bash
         run: |
           set -euo pipefail
           d=$(mktemp -d); cd "$d"
           tgz=$(npm pack @wix/create-new@0.0.105 --silent); tar -xzf "$tgz"
           f=package/build/index.js
-          grep -n 'resolveWixDevcenterMyappsV1MyAppsServiceUrl' "$f" | head -10
-          n=$(grep -n 'function resolveWixDevcenterMyappsV1MyAppsServiceUrl' "$f" | head -1 | cut -d: -f1)
-          test -n "$n"
-          start=$((n-20)); end=$((n+95))
-          sed -n "${start},${end}p" "$f"
-          echo '=== BACKOFFICE HTTP CLIENT ==='
-          grep -n -B20 -A45 'type: "backoffice"' "$f" | head -180
+          echo '=== DEV CENTER CLASS ==='
+          grep -n 'var DevCenterClient = class\|class DevCenterClient' "$f" | head -10 || true
+          echo '=== CREATE HTTP CLIENT DEFINITIONS ==='
+          grep -n 'function createHttpClient\|var createHttpClient\|createHttpClient =' "$f" | head -30 || true
+          echo '=== APP COMMAND INVOCATIONS ==='
+          grep -nE 'render\(|runApp|AppCommand|process\.argv|command\.parse|program\.parse|parseAsync' "$f" | tail -100 || true
+          echo '=== FILE TAIL ==='
+          tail -220 "$f"

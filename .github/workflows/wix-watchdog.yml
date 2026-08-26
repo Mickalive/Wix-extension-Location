@@ -1,4 +1,5 @@
 name: Wix Autonomous Recovery Watchdog
+# Resumed after authenticated Wix binding and real wix build verification.
 
 on:
   push:

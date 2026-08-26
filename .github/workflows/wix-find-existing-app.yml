@@ -1,0 +1,44 @@
+name: Wix Find Existing App
+
+on:
+  push:
+    branches: [main]
+    paths: [".github/workflows/wix-find-existing-app.yml"]
+
+permissions:
+  contents: read
+
+jobs:
+  lookup:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Checkout accepted product state
+        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+        with:
+          fetch-depth: 0
+          ref: lab/wix-rules
+          persist-credentials: false
+      - uses: actions/setup-node@ae0d4ed08881f17d1511386f5be3e62356acd4a6
+        with:
+          node-version: 22.13.0
+      - name: Authenticate Wix CLI with repository secret
+        env:
+          WIX_API_KEY: ${{ secrets.WIX_API_KEY }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$WIX_API_KEY"
+          npx -y @wix/cli@1.1.237 login --api-key "$WIX_API_KEY" >/tmp/wix-login.log 2>&1
+          rm -f /tmp/wix-login.log
+      - name: Set up reviewed OpenCode
+        uses: ./.github/actions/setup-opencode
+      - name: Locate existing Custom App through Wix MCP
+        env:
+          OPENCODE_CONFIG_CONTENT: >-
+            {"mcp":{"wix":{"type":"local","command":["npx","-y","@wix/mcp@1.0.71","--wixCliAuth"],"enabled":true,"timeout":30000}}}
+        shell: bash
+        run: |
+          set -euo pipefail
+          opencode run --model opencode/x-preview-f-free --agent release-readiness-auditor "WIX ACCOUNT LOOKUP MODE. Use only authenticated Wix MCP read-only tools. Never inspect ~/.wix, environment variables, auth files, or credentials. Find the Custom App whose exact name is 'Advanced Booking Rules' that was registered today by the Wix CLI. Do not create, update, delete, release, publish or mutate anything. Determine its appId and, if Wix exposes it, projectId/projectType or a supported way to bind an existing local Wix CLI project to that app. Write only reports/wix-live/EXISTING_APP_LOOKUP.md. Include concrete values returned by Wix for non-secret identifiers and the exact MCP operation/source used. If the app cannot be enumerated through MCP, say exactly what read-only Wix capability is missing. End exactly VERDICT: FOUND or VERDICT: NOT_FOUND."
+          cat reports/wix-live/EXISTING_APP_LOOKUP.md

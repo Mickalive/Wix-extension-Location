@@ -1,13 +1,13 @@
 name: Wix Autonomous Recovery Watchdog
-# One persistent job owns recovery end-to-end on the same runner.
-# It inspects the Product Factory every 5 minutes; cron is only a fallback heartbeat.
+# Persistent product supervisor: READY is the only normal terminal state.
+# Everything else is retried, repaired, escalated, or safely rechecked every 5 minutes.
 
 on:
   push:
     branches: [main]
     paths: [".github/workflows/wix-watchdog.yml", ".github/scripts/recover-transient-opencode.sh"]
   schedule:
-    - cron: "*/30 * * * *"
+    - cron: "*/5 * * * *"
   workflow_dispatch:
 
 permissions:
@@ -15,7 +15,7 @@ permissions:
   actions: write
 
 concurrency:
-  group: wix-autonomous-recovery-supervisor-v2
+  group: wix-autonomous-recovery-supervisor-v3
   cancel-in-progress: true
 
 jobs:
@@ -30,7 +30,24 @@ jobs:
           ref: main
           persist-credentials: false
 
-      - name: Prune obsolete Actions evidence without touching active runs
+      - name: Retire superseded watchdog runs
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          repo="$GITHUB_REPOSITORY"
+          current="$GITHUB_RUN_ID"
+          gh run list --repo "$repo" --workflow wix-watchdog.yml --limit 30 \
+            --json databaseId,status,createdAt \
+            | jq -r --arg current "$current" '.[] | select((.status != "completed") and ((.databaseId|tostring) != $current)) | .databaseId' \
+            | while read -r id; do
+                [[ -z "$id" ]] && continue
+                echo "Cancelling superseded watchdog run $id"
+                gh api --method POST "repos/$repo/actions/runs/$id/cancel" >/dev/null 2>&1 || true
+              done
+
+      - name: Prune obsolete completed Actions evidence
         if: ${{ github.event_name == 'push' }}
         env:
           GH_TOKEN: ${{ github.token }}
@@ -45,60 +62,30 @@ jobs:
           jq -r '.[] | select(.status != "completed") | .id' <<<"$runs" >> "$keep_file"
           keep_latest() {
             local path="$1" count="$2"
-            local active
-            active=$(jq --arg p "$path" '[.[] | select(.path == $p and .status != "completed")] | length' <<<"$runs")
-            if (( active > 0 )); then return; fi
             jq -r --arg p "$path" --argjson n "$count" \
               '[.[] | select(.path == $p and .status == "completed")] | sort_by(.created_at) | reverse | .[:$n] | .[].id' \
               <<<"$runs" >> "$keep_file"
           }
-
-          keep_latest '.github/workflows/wix-build-loop.yml' 2
+          keep_latest '.github/workflows/wix-build-loop.yml' 3
           keep_latest '.github/workflows/ci.yml' 1
           keep_latest '.github/workflows/wix-sim.yml' 1
-          keep_latest '.github/workflows/wix-watchdog.yml' 2
+          keep_latest '.github/workflows/wix-watchdog.yml' 3
           sort -u "$keep_file" -o "$keep_file"
 
           while IFS=$'\t' read -r id status path name conclusion; do
             if grep -qx "$id" "$keep_file" || [[ "$status" != completed ]]; then continue; fi
             echo "Deleting obsolete run $id | $name | $conclusion | $path"
-            gh api --method DELETE "repos/$repo/actions/runs/$id" || true
+            gh api --method DELETE "repos/$repo/actions/runs/$id" >/dev/null 2>&1 || true
           done < <(jq -r '.[] | [.id,.status,.path,.name,(.conclusion // "")] | @tsv' <<<"$runs")
 
-      - name: Ensure a Product Factory exists after supervisor changes
-        if: ${{ github.event_name == 'push' }}
-        env:
-          GH_TOKEN: ${{ github.token }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          active=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow wix-build-loop.yml --limit 30 --json status | jq '[.[] | select(.status != "completed")] | length')
-          if (( active > 0 )); then
-            echo "Product Factory already active; supervisor will observe it."
-            exit 0
-          fi
-
-          latest=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow wix-build-loop.yml --limit 1 --json conclusion | jq -r '.[0].conclusion // ""')
-          if [[ "$latest" == failure ]]; then
-            echo "Latest Factory failed; recovery router owns the next action."
-            exit 0
-          fi
-
-          state_b64=$(gh api "repos/$GITHUB_REPOSITORY/contents/docs/state.json?ref=lab/wix-rules" --jq '.content')
-          current=$(printf '%s' "$state_b64" | tr -d '\n' | base64 -d | jq -r '.cycle // 0')
-          [[ "$current" =~ ^[0-9]+$ ]]
-          next=$((current + 1))
-          gh workflow run wix-build-loop.yml --repo "$GITHUB_REPOSITORY" --ref main \
-            -f cycle_index="$next" -f max_cycles="0" -f human_note=""
-          echo "Dispatched Product Factory cycle $next from accepted state."
-
-      - name: Inspect and heal the Factory every five minutes
+      - name: Inspect and heal Product Factory every five minutes
         env:
           GH_TOKEN: ${{ github.token }}
           WIX_LOOP_WORKFLOW: wix-build-loop.yml
         shell: bash
         run: |
           set -u -o pipefail
+          rm -f /tmp/wix-product-ready
           for tick in $(seq 1 70); do
             echo "=== autonomous supervisor tick $tick/70 at $(date -u +%FT%TZ) ==="
 
@@ -106,20 +93,34 @@ jobs:
             git -c "http.extraheader=AUTHORIZATION: basic $auth" fetch origin main --quiet || true
             if git show origin/main:.github/scripts/recover-transient-opencode.sh > /tmp/recover.sh 2>/dev/null; then
               chmod +x /tmp/recover.sh
-              bash /tmp/recover.sh || echo "::warning::Recovery router failed this tick; supervisor stays alive."
+              set +e
+              bash /tmp/recover.sh
+              rc=$?
+              set -e
+              if (( rc == 10 )); then
+                echo "READY release evidence confirmed. Supervisor terminal condition reached."
+                touch /tmp/wix-product-ready
+                break
+              elif (( rc != 0 )); then
+                echo "::warning::Recovery router returned $rc; supervisor remains alive and will inspect again."
+              fi
             else
-              echo "::warning::Could not refresh recovery router; supervisor stays alive."
+              echo "::warning::Could not refresh recovery router; supervisor remains alive."
             fi
 
             if (( tick < 70 )); then sleep 300; fi
           done
 
-      - name: Hand off before runner timeout
+      - name: Hand off before runner timeout unless READY
         if: ${{ always() }}
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
           set -euo pipefail
+          if [[ -f /tmp/wix-product-ready ]]; then
+            echo "Product READY: no further watchdog handoff required."
+            exit 0
+          fi
           gh workflow run wix-watchdog.yml --repo "$GITHUB_REPOSITORY" --ref main
-          echo "Fresh autonomous supervisor dispatched."
+          echo "Fresh autonomous supervisor dispatched before runner timeout."

@@ -26,6 +26,12 @@ export type DegradationKind =
   | 'COUNT_CACHE_MISS'
   /** Existing-bookings read failed ⇒ duplicate layer degrades to native protection. */
   | 'DUPLICATE_INPUT_FAILURE'
+  /**
+   * Subject-booking-facts seam threw (INT-C5-1) ⇒ facts treated as
+   * UNAVAILABLE: RESCHEDULE self-exclusion/self-count stay inert and behavior
+   * is identical to the default seam. Never hides, never fabricates facts.
+   */
+  | 'SUBJECT_FACTS_FAILURE'
   /** RESCHEDULE internal error/timeout ⇒ rules NOT enforced for this call. */
   | 'ENFORCEMENT_FAIL_OPEN'
   /** CREATE/CANCEL internal error/timeout ⇒ all items blocked with retry hint. */

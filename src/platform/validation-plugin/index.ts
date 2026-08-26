@@ -8,7 +8,12 @@
 export type {
   ValidationTarget,
 } from './targets';
-export { VALIDATION_TARGETS, isValidationTarget, semanticsOf } from './targets';
+export {
+  VALIDATION_TARGETS,
+  evaluationTargetOf,
+  isValidationTarget,
+  semanticsOf,
+} from './targets';
 export type {
   MetadataIdentity,
   MetadataIdentityKind,
@@ -25,6 +30,9 @@ export type {
   ExistingBookingsPort,
   IdentityPayloadPolicy,
   ItemDisposition,
+  SubjectBookingFacts,
+  SubjectBookingFactsPort,
+  SubjectBookingFactsRequest,
   ValidationHandlerResult,
   ValidationHandlers,
   ValidationItemResult,
@@ -34,6 +42,7 @@ export type {
 export {
   createValidationHandlers,
   DEFAULT_IDENTITY_PAYLOAD_POLICY,
+  DEFAULT_SUBJECT_BOOKING_FACTS_PORT,
   FAIL_CLOSED_CODE,
   FAIL_CLOSED_MESSAGE,
 } from './handlers';

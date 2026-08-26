@@ -18,6 +18,35 @@
  *   degradation logged/alerted/persisted; the result NEVER claims enforcement
  *   (`enforcementClaim: 'FAIL_OPEN_NOT_ENFORCED'`).
  *
+ * TARGET-AWARE EVALUATION (INT-C5-1 item a — activates RULES-C4-1 at
+ * runtime): EVERY `evaluateRules` call receives `deps.targetContext` mapping
+ * the six platform targets onto the canonical three-operation union via
+ * {@link evaluationTargetOf} (`_MULTI_SERVICE` shares its base operation's
+ * semantics). CANCEL therefore frees capacity (classification families only)
+ * and RESCHEDULE evaluates availability against the PROPOSED slot — per the
+ * binding matrix in src/domain/README.md ("Target-aware evaluation"). CREATE
+ * semantics are bit-for-bit unchanged (the explicit CREATE context equals the
+ * evaluator's safe default).
+ *
+ * SUBJECT-BOOKING-FACTS SEAM (INT-C5-1 item b; Invariant C1 discipline):
+ * whether a RESCHEDULE payload provably carries the rescheduled booking's
+ * identifier is UNPROVEN until payload-probe gates T-VP3/T-VP5 run. The seam
+ * ({@link ValidationPluginDeps.subjectBookingFacts}) is INJECTABLE and
+ * DEFAULTS TO UNAVAILABLE: absent port, a null result, or a non-empty-string
+ * booking id ⇒ `subjectBookingId` stays undefined ⇒ RESCHEDULE duplicate
+ * self-exclusion stays inert and behavior is identical to pre-INT-C5-1.
+ * Activation happens ONLY by injecting an evidence-backed adapter that reads
+ * a PROVEN payload field — never by fabricating payload access here.
+ *
+ * SAME-DAY SELF-COUNT (INT-C5-1 item d — Rules-audit observation B): when a
+ * RESCHEDULE subject id IS supplied AND the loaded existing-bookings snapshot
+ * contains a fact with EXACTLY that id whose contribution to a queried cap
+ * bucket is PROVABLE (declared status included, service/location match,
+ * start inside the query's half-open UTC bucket), the authoritative count is
+ * adjusted by exactly −1 before evaluation. Where contribution is unprovable
+ * the count passes through untouched — degrading exactly as before — and the
+ * residual stays documented in ./README.md. Never guesses.
+ *
  * ENTITLEMENT (ratified over-limit posture, Contract §7/§11 C5):
  *   - The gate resolves ONCE per request (fast response). Locations OUTSIDE
  *     `allowedLocationIds` are UNCOVERED: rule evaluation is SKIPPED for them
@@ -55,6 +84,8 @@ import type {
   CountQuery,
   EntitlementGate,
   EvaluationDeps,
+  EvaluationTarget,
+  EvaluationTargetContext,
   ExistingBookingFact,
   PolicyDecision,
   RuleOutcome,
@@ -67,7 +98,7 @@ import type { DegradationRecord, DegradationSink } from './incidents';
 import { safeRecord } from './incidents';
 import { ownerBusinessLocationId, parseValidationRequest } from './payload';
 import type { ParsedSlotItem } from './payload';
-import { semanticsOf } from './targets';
+import { evaluationTargetOf, semanticsOf } from './targets';
 import type { ValidationTarget } from './targets';
 
 // ------------------------------------------------------------------ ports
@@ -94,6 +125,48 @@ export const DEFAULT_IDENTITY_PAYLOAD_POLICY: IdentityPayloadPolicy = {
   consumeMetadataIdentity: false,
 };
 
+// ------------------------------------------------- subject-booking facts
+
+/** Provably-supplied facts about the SUBJECT booking of a RESCHEDULE. */
+export interface SubjectBookingFacts {
+  /**
+   * Booking identifier of the booking being rescheduled, as PROVABLY carried
+   * by the payload (evidence-gated; never fabricated). Absent/empty ⇒ the
+   * RESCHEDULE duplicate self-exclusion and self-count adjustment stay inert.
+   */
+  bookingId?: string;
+}
+
+export interface SubjectBookingFactsRequest {
+  /** Base operation of this invocation (always RESCHEDULE when consulted). */
+  target: EvaluationTarget;
+  /** Parsed bulk items — documented payload fields ONLY (Invariant C1). */
+  items: readonly ParsedSlotItem[];
+  /**
+   * The raw wire request. An evidence-backed adapter may read it AFTER gates
+   * T-VP3/T-VP5 prove which field carries the subject identifier; the default
+   * port never touches it.
+   */
+  rawRequest: unknown;
+}
+
+/**
+ * Injectable seam resolving subject-booking facts for one request. PURE and
+ * synchronous (no I/O): it derives facts from the already-parsed request so
+ * the fast-response budget (Contract §5.3) is preserved. Returns null when
+ * facts are unavailable — the honest default until real payload evidence.
+ */
+export type SubjectBookingFactsPort = (
+  request: SubjectBookingFactsRequest,
+) => SubjectBookingFacts | null;
+
+/**
+ * DEFAULT seam: facts UNAVAILABLE. Keeps pre-INT-C5-1 behavior exactly:
+ * `subjectBookingId` stays undefined, the RESCHEDULE self-exclusion is inert,
+ * and the same-day self-count residual degrades as documented.
+ */
+export const DEFAULT_SUBJECT_BOOKING_FACTS_PORT: SubjectBookingFactsPort = () => null;
+
 // ----------------------------------------------------------- deps + result
 
 export interface ValidationPluginDeps {
@@ -114,6 +187,15 @@ export interface ValidationPluginDeps {
   deadlineMs?: number;
   /** Defaults to {@link DEFAULT_IDENTITY_PAYLOAD_POLICY} (flag OFF). */
   identityPolicy?: IdentityPayloadPolicy;
+  /**
+   * Subject-booking-facts seam (INT-C5-1 item b). Optional; defaults to
+   * {@link DEFAULT_SUBJECT_BOOKING_FACTS_PORT} (facts unavailable ⇒ behavior
+   * identical to pre-INT-C5-1). Consulted ONLY for RESCHEDULE* targets.
+   * Activation of RESCHEDULE duplicate self-exclusion and the same-day
+   * self-count adjustment happens exclusively through an injected,
+   * evidence-backed port (gates T-VP3/T-VP5) — never via payload guessing.
+   */
+  subjectBookingFacts?: SubjectBookingFactsPort;
 }
 
 /** Why a verdict was reached when the pure evaluator did not decide it. */
@@ -178,6 +260,8 @@ const SYNTHETIC_DEGRADED_WARNING =
 
 interface ResolvedDeps extends ValidationPluginDeps {
   identityPolicyResolved: IdentityPayloadPolicy;
+  /** Resolved subject-facts seam (defaults to the unavailable port). */
+  subjectBookingFactsResolved: SubjectBookingFactsPort;
   /**
    * Shared short-TTL counter cache owned by the factory closure: identical
    * queries are fetched once across the TTL — within a bulk exchange AND
@@ -411,6 +495,97 @@ async function preresolveCounts(
   };
 }
 
+/**
+ * Resolves the RESCHEDULE subject booking id through the injected seam
+ * (INT-C5-1 item b). Consulted ONLY for RESCHEDULE* targets — CREATE/CANCEL
+ * evaluations have no subject (the domain ignores it there anyway, and a
+ * non-consultation contract keeps adapters honest). Any seam failure degrades
+ * VISIBLY to facts-unavailable ({@link SUBJECT_FACTS_FAILURE}); it never
+ * throws into the booking decision and never fabricates an id. Values that do
+ * not prove presence (missing/empty/non-string) are treated as unavailable.
+ */
+function resolveSubjectBookingId(
+  deps: ResolvedDeps,
+  target: ValidationTarget,
+  items: readonly ParsedSlotItem[],
+  rawRequest: unknown,
+  at: Instant,
+  emission: Emission,
+): string | undefined {
+  const operation = evaluationTargetOf(target);
+  if (operation !== 'RESCHEDULE') return undefined;
+  try {
+    const facts = deps.subjectBookingFactsResolved({ target: operation, items, rawRequest });
+    const id = facts?.bookingId;
+    return typeof id === 'string' && id.length > 0 ? id : undefined;
+  } catch (error) {
+    emission.emit({
+      kind: 'SUBJECT_FACTS_FAILURE',
+      at,
+      target,
+      detail: `subject-booking-facts seam failed — facts treated as unavailable, RESCHEDULE self-exclusion stays inert: ${messageOf(error)}`,
+    });
+    return undefined;
+  }
+}
+
+/**
+ * Observation B proof test (INT-C5-1 item d): does the subject fact PROVABLY
+ * contribute to this cap bucket? Every clause demands positive evidence —
+ * anything unprovable (malformed instants, undeclared status, dimension
+ * mismatch, start outside the bucket) yields false and the authoritative
+ * count passes through untouched (degrade exactly as before, never guess).
+ *
+ * Bucket convention matches the domain caps/duplicates start-bucket rule:
+ * half-open [fromUtc, toUtc) over the booking's START instant.
+ */
+function subjectProvablyInBucket(subject: ExistingBookingFact, query: CountQuery): boolean {
+  const startMs = Date.parse(subject.startUtc);
+  const fromMs = Date.parse(query.fromUtc);
+  const toMs = Date.parse(query.toUtc);
+  if (!Number.isFinite(startMs) || !Number.isFinite(fromMs) || !Number.isFinite(toMs)) {
+    return false;
+  }
+  if (!(startMs >= fromMs && startMs < toMs)) return false;
+  // Status must be KNOWN and declared-included for this query's bucket.
+  if (subject.status === undefined || !query.includedStatuses.includes(subject.status)) {
+    return false;
+  }
+  // Dimension narrowing must match the subject's own scope.
+  if (query.serviceId !== undefined && subject.serviceId !== query.serviceId) return false;
+  if (query.locationId !== undefined && (subject.locationId ?? null) !== query.locationId) {
+    return false;
+  }
+  return true;
+}
+
+/**
+ * Observation B adjustment (INT-C5-1 item d): for RESCHEDULE with a supplied
+ * subject id whose snapshot fact provably contributes to a queried bucket,
+ * adjust the authoritative count by EXACTLY −1 (the mover's own still-existing
+ * booking would otherwise double-count against its own proposed day). Applied
+ * at LOOKUP time — the cache keeps authoritative values, prefetch planning is
+ * untouched, degraded (null) counts stay degraded, and the result clamps at
+ * zero so contradictory data can never produce negative counts.
+ */
+function subjectAwareCountLookup(
+  lookup: (query: CountQuery) => number | null,
+  existing: readonly ExistingBookingFact[],
+  subjectBookingId: string | undefined,
+  operation: EvaluationTarget,
+): (query: CountQuery) => number | null {
+  if (operation !== 'RESCHEDULE' || subjectBookingId === undefined) return lookup;
+  // Conservative identity match: only a fact carrying EXACTLY this id can be
+  // the subject; id-less facts can never prove contribution.
+  const subject = existing.find((fact) => fact.bookingId === subjectBookingId);
+  if (subject === undefined) return lookup;
+  return (query: CountQuery): number | null => {
+    const value = lookup(query);
+    if (value === null) return null; // degraded reads stay degraded
+    return subjectProvablyInBucket(subject, query) ? Math.max(0, value - 1) : value;
+  };
+}
+
 function itemResultFromOutcome(index: number, outcome: RuleOutcome): ValidationItemResult {
   if (outcome.decision === 'allow') {
     return { index, valid: true, outcome, disposition: 'RULES_EVALUATED', invalidReason: null };
@@ -437,6 +612,7 @@ function itemResultFromOutcome(index: number, outcome: RuleOutcome): ValidationI
 async function executeRequest(
   target: ValidationTarget,
   items: readonly ParsedSlotItem[],
+  rawRequest: unknown,
   deps: ResolvedDeps,
   emission: Emission,
 ): Promise<ValidationHandlerResult> {
@@ -496,10 +672,26 @@ async function executeRequest(
     emission,
   );
 
+  // INT-C5-1 item b: subject facts resolve through the injectable seam
+  // (RESCHEDULE* only; default = unavailable ⇒ undefined ⇒ legacy behavior).
+  // Consulted only when at least one item will actually be evaluated — facts
+  // that cannot influence any verdict are never requested.
+  const operation = evaluationTargetOf(target);
+  const subjectBookingId =
+    evaluated.length > 0
+      ? resolveSubjectBookingId(deps, target, items, rawRequest, at, emission)
+      : undefined;
+  const targetContext: EvaluationTargetContext =
+    subjectBookingId === undefined
+      ? { target: operation }
+      : { target: operation, subjectBookingId };
+
   const evalDeps: EvaluationDeps = {
     entitlement,
-    countForQuery: countLookup,
+    countForQuery: subjectAwareCountLookup(countLookup, existing, subjectBookingId, operation),
     existingBookings: () => existing,
+    // INT-C5-1 item a: EVERY evaluation carries the canonical target context.
+    targetContext,
   };
 
   for (const { item, facts } of evaluated) {
@@ -592,7 +784,10 @@ async function handleTarget(
   const parsed = parseValidationRequest(rawRequest);
 
   try {
-    return await withDeadline(executeRequest(target, parsed.items, deps, emission), deps.deadlineMs);
+    return await withDeadline(
+      executeRequest(target, parsed.items, rawRequest, deps, emission),
+      deps.deadlineMs,
+    );
   } catch (error) {
     return targetFailureResult(target, parsed.items.length, error, deps, emission);
   }
@@ -609,6 +804,7 @@ export function createValidationHandlers(deps: ValidationPluginDeps): Validation
   const resolved: ResolvedDeps = {
     ...deps,
     identityPolicyResolved: deps.identityPolicy ?? DEFAULT_IDENTITY_PAYLOAD_POLICY,
+    subjectBookingFactsResolved: deps.subjectBookingFacts ?? DEFAULT_SUBJECT_BOOKING_FACTS_PORT,
     countCache: new CachedBookingCountGateway({
       gateway: deps.counts,
       clock: deps.clock,

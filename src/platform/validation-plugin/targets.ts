@@ -18,6 +18,7 @@
 
 import { failureSemanticsFor } from '../../shared/errors';
 import type { FailureSemantics } from '../../shared/errors';
+import type { EvaluationTarget } from '../../domain';
 
 export type ValidationTarget =
   | 'CREATE'
@@ -46,4 +47,18 @@ export function isValidationTarget(value: unknown): value is ValidationTarget {
 /** Binding per-target failure semantics (Contract §5.3). */
 export function semanticsOf(target: ValidationTarget): FailureSemantics {
   return failureSemanticsFor(target.replace('_MULTI_SERVICE', '') as 'CREATE' | 'CANCEL' | 'RESCHEDULE');
+}
+
+/**
+ * Canonical target mapping (INT-C5-1 item a): collapses the six platform
+ * targets onto the three-member {@link EvaluationTarget} union EXACTLY as
+ * documented in src/domain/ports.ts — strip the `_MULTI_SERVICE` suffix;
+ * multi-service bookings are sequences of single-service bookings under one
+ * operation and share their base operation's evaluation semantics. The cast
+ * mirrors {@link semanticsOf}: the stripped ValidationTarget union is by
+ * construction the shared TargetOperation union (compile-time sync via the
+ * domain alias; any taxonomy drift fails the handler-matrix tests).
+ */
+export function evaluationTargetOf(target: ValidationTarget): EvaluationTarget {
+  return target.replace('_MULTI_SERVICE', '') as EvaluationTarget;
 }

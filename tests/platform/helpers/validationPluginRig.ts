@@ -18,6 +18,7 @@ import {
 } from '../../../src/platform/validation-plugin';
 import type {
   IdentityPayloadPolicy,
+  SubjectBookingFactsPort,
   ValidationHandlers,
 } from '../../../src/platform/validation-plugin';
 import type {
@@ -25,6 +26,7 @@ import type {
   CountQuery,
   ExistingBookingFact,
   PolicyDecision,
+  RulesConfigStore,
   RuleSet,
 } from '../../../src/domain';
 
@@ -140,6 +142,18 @@ export interface RigOptions {
   configStoreError?: Error;
   /** Never-resolving RuleSet load — deterministic deadline-expiry proof. */
   hangingConfigStore?: boolean;
+  /**
+   * Replaces the fake store entirely (INT-C5-1): fixtures that need the REAL
+   * loaded object identity preserved (e.g. getter-poisoned RuleSets probing
+   * the evaluator's internal failure classification).
+   */
+  configStoreOverride?: RulesConfigStore;
+  /**
+   * Injectable subject-booking-facts seam (INT-C5-1). Absent ⇒ the factory
+   * default applies (facts unavailable ⇒ subjectBookingId undefined ⇒
+   * behavior identical to the pre-INT-C5-1 handlers).
+   */
+  subjectBookingFacts?: SubjectBookingFactsPort;
   existingError?: Error;
   counterError?: Error;
   counterTtlMs?: number;
@@ -164,15 +178,15 @@ export function makeRig(options: RigOptions = {}): Rig {
 
   const store = new FakeRulesConfigStore();
   store.setActive(options.ruleSet !== undefined ? options.ruleSet : openRuleSet());
-  let configStore: Pick<typeof store, 'loadActiveRuleSet' | 'saveRuleSet'> = store;
-  if (options.configStoreError) {
+  let configStore: Pick<RulesConfigStore, 'loadActiveRuleSet' | 'saveRuleSet'> = options.configStoreOverride ?? store;
+  if (!options.configStoreOverride && options.configStoreError) {
     configStore = {
       loadActiveRuleSet: async (): Promise<RuleSet | null> => {
         throw options.configStoreError as Error;
       },
       saveRuleSet: store.saveRuleSet.bind(store),
     };
-  } else if (options.hangingConfigStore) {
+  } else if (!options.configStoreOverride && options.hangingConfigStore) {
     configStore = {
       loadActiveRuleSet: (): Promise<RuleSet | null> => new Promise<RuleSet | null>(() => undefined),
       saveRuleSet: store.saveRuleSet.bind(store),
@@ -213,6 +227,9 @@ export function makeRig(options: RigOptions = {}): Rig {
     ...(options.counterTtlMs !== undefined ? { counterCacheTtlMs: options.counterTtlMs } : {}),
     ...(options.deadlineMs !== undefined ? { deadlineMs: options.deadlineMs } : {}),
     ...(options.identityPolicy !== undefined ? { identityPolicy: options.identityPolicy } : {}),
+    ...(options.subjectBookingFacts !== undefined
+      ? { subjectBookingFacts: options.subjectBookingFacts }
+      : {}),
   });
 
   return {

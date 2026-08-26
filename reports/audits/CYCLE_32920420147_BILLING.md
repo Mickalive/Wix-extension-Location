@@ -1,0 +1,5 @@
+# billing lane — deterministic no-op audit
+
+Queue status: **complete**. Candidate has no product diff from accepted SHA.
+
+VERDICT: ACCEPT

@@ -1,0 +1,30 @@
+{
+  "run_id": "32920420147",
+  "accepted_base": "aec73b05eefb17a3643043f3d4f7a6bcba92fc0b",
+  "lanes": {
+    "integration": {
+      "candidate_sha": "e1c83cd0cae0255305ee1918cb3c06e40d98e1e4",
+      "audit_sha": "202487d43e06fedee37dad46f48e0d8f4e7bb603",
+      "verdict": "ACCEPT",
+      "has_product_diff": true
+    },
+    "rules": {
+      "candidate_sha": "784afe4bf0e68f5511bb174a78b162b80e0b525d",
+      "audit_sha": "b2ae57353ddb02b09a8105538b59481bb392d0ba",
+      "verdict": "ACCEPT",
+      "has_product_diff": false
+    },
+    "dashboard": {
+      "candidate_sha": "30fb80083fd14876de5f5074b09bc46b549a7126",
+      "audit_sha": "e5b19d6585b2e61c918c9a3aff90292bf5cb02c8",
+      "verdict": "ACCEPT",
+      "has_product_diff": false
+    },
+    "billing": {
+      "candidate_sha": "e569be97aec116981fb8379a6ca50146adfefb61",
+      "audit_sha": "73de7479d9241bb3c4c81a5637ccdd4de6dc4249",
+      "verdict": "ACCEPT",
+      "has_product_diff": false
+    }
+  }
+}

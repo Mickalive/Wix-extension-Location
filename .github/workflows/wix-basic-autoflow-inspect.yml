@@ -16,57 +16,33 @@ jobs:
       - uses: actions/setup-node@ae0d4ed08881f17d1511386f5be3e62356acd4a6
         with:
           node-version: 22.13.0
-      - name: Inspect embedded AppsService source maps
+      - name: Print embedded AppsService generated types
         shell: bash
         run: |
           set -euo pipefail
           d=$(mktemp -d); cd "$d"
           tgz=$(npm pack @wix/create-new@0.0.105 --silent)
           tar -xzf "$tgz"
-          pkg="$d/package"
-          echo '=== MAP FILES ==='
-          find "$pkg" -type f -name '*.map' -print | head -80 || true
-          echo '=== EMBEDDED SOURCE CONTRACTS ==='
-          PKG="$pkg" node <<'NODE'
+          PKG="$d/package" node <<'NODE'
           const fs = require('fs');
           const path = require('path');
           const root = process.env.PKG;
-          const maps = [];
-          const walk = d => {
-            for (const e of fs.readdirSync(d, {withFileTypes:true})) {
-              const p = path.join(d, e.name);
-              if (e.isDirectory()) walk(p);
-              else if (e.isFile() && e.name.endsWith('.map')) maps.push(p);
-            }
-          };
+          const maps=[];
+          const walk=d=>{for(const e of fs.readdirSync(d,{withFileTypes:true})){const p=path.join(d,e.name); if(e.isDirectory()) walk(p); else if(e.isFile()&&e.name.endsWith('.map')) maps.push(p)}};
           walk(root);
-          let hits = 0;
-          for (const mp of maps) {
-            let m;
-            try { m = JSON.parse(fs.readFileSync(mp, 'utf8')); } catch { continue; }
-            const sources = m.sources || [];
-            const contents = m.sourcesContent || [];
-            for (let i=0; i<sources.length; i++) {
-              const src = sources[i] || '';
-              const txt = contents[i] || '';
-              if (/ambassador-devcenter-apps-v1-app|AppsService|QueryApp|queryApp/i.test(src + '\n' + txt)) {
-                hits++;
-                console.log('\n--- SOURCE ' + src + ' ---');
-                const lines = txt.split('\n');
-                const idxs = [];
-                lines.forEach((line, idx) => {
-                  if (/QueryApp|queryApp|createdDate|updatedDate|codeIdentifier|namespace|filterable|filter/i.test(line)) idxs.push(idx);
-                });
-                const printed = new Set();
-                for (const idx of idxs.slice(0,80)) {
-                  const a = Math.max(0, idx-8), b = Math.min(lines.length, idx+18);
-                  for (let j=a; j<b; j++) {
-                    if (!printed.has(j)) { console.log(String(j+1).padStart(5)+': '+lines[j]); printed.add(j); }
-                  }
-                }
+          let found=0;
+          for(const mp of maps){
+            let m; try{m=JSON.parse(fs.readFileSync(mp,'utf8'))}catch{continue}
+            for(let i=0;i<(m.sources||[]).length;i++){
+              const src=m.sources[i]||''; const txt=(m.sourcesContent||[])[i]||'';
+              if(/node_modules\/@wix\/ambassador-devcenter-apps-v1-app\/(types\.impl|http\.impl)\.ts$/.test(src)){
+                found++;
+                console.log('\n===== '+src+' =====');
+                const lines=txt.split('\n');
+                for(let j=0;j<Math.min(lines.length,900);j++) console.log(String(j+1).padStart(5)+': '+lines[j]);
               }
             }
           }
-          console.log('\nSOURCE_HITS=' + hits);
-          if (!hits) process.exit(2);
+          console.log('FOUND='+found);
+          if(!found) process.exit(2);
           NODE

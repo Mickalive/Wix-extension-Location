@@ -2,6 +2,7 @@ name: Wix Autonomous Recovery Watchdog
 # READY is the only normal terminal product state.
 # A persistent supervisor heals every 5 minutes; a separate scheduled heartbeat
 # only recreates that supervisor if it disappears, so cron never kills healthy work.
+# Cleanup is continuous: obsolete Actions runs and completed cycle branches are ephemeral.
 
 on:
   push:
@@ -12,13 +13,87 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
   actions: write
 
 jobs:
+  cleanup:
+    name: Prune obsolete automation state
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    steps:
+      - name: Delete obsolete completed Actions runs
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          repo="$GITHUB_REPOSITORY"
+          runs=$(gh api --paginate "repos/$repo/actions/runs?per_page=100" --jq '.workflow_runs[]' | jq -s '.')
+          keep_file=$(mktemp)
+          trap 'rm -f "$keep_file"' EXIT
+
+          # Never touch queued/running/waiting work.
+          jq -r '.[] | select(.status != "completed") | .id' <<<"$runs" >> "$keep_file"
+
+          keep_latest() {
+            local path="$1" count="$2"
+            jq -r --arg p "$path" --argjson n "$count" \
+              '[.[] | select(.path == $p and .status == "completed")] | sort_by(.created_at) | reverse | .[:$n] | .[].id' \
+              <<<"$runs" >> "$keep_file"
+          }
+
+          # Minimal useful evidence only. Accepted scientific/product evidence lives on lab/wix-rules.
+          keep_latest '.github/workflows/wix-build-loop.yml' 2
+          keep_latest '.github/workflows/ci.yml' 1
+          keep_latest '.github/workflows/wix-sim.yml' 1
+          keep_latest '.github/workflows/wix-watchdog.yml' 2
+          sort -u "$keep_file" -o "$keep_file"
+
+          deleted=0
+          while IFS=$'\t' read -r id status path name conclusion; do
+            [[ "$status" == completed ]] || continue
+            grep -qx "$id" "$keep_file" && continue
+            echo "Deleting obsolete run $id | $name | $conclusion | $path"
+            if gh api --method DELETE "repos/$repo/actions/runs/$id" >/dev/null 2>&1; then
+              deleted=$((deleted + 1))
+            fi
+          done < <(jq -r '.[] | [.id,.status,.path,.name,(.conclusion // "")] | @tsv' <<<"$runs")
+          echo "Deleted $deleted obsolete completed Actions runs."
+
+      - name: Delete completed cycle branches
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          repo="$GITHUB_REPOSITORY"
+
+          # A cycle branch is protected only while its owning Factory run is live.
+          active_ids=$(gh run list --repo "$repo" --workflow wix-build-loop.yml --limit 100 \
+            --json databaseId,status \
+            | jq -r '.[] | select(.status != "completed") | .databaseId' | sort -u)
+
+          deleted=0
+          while IFS= read -r branch; do
+            [[ "$branch" == cycle/wix-build/* ]] || continue
+            run_id=$(awk -F/ '{print $3}' <<<"$branch")
+            [[ "$run_id" =~ ^[0-9]+$ ]] || continue
+            if grep -qx "$run_id" <<<"$active_ids"; then
+              echo "Keeping active cycle branch: $branch"
+              continue
+            fi
+            echo "Deleting obsolete cycle branch: $branch"
+            if gh api --method DELETE "repos/$repo/git/refs/heads/$branch" >/dev/null 2>&1; then
+              deleted=$((deleted + 1))
+            fi
+          done < <(gh api --paginate "repos/$repo/branches?per_page=100" --jq '.[].name')
+          echo "Deleted $deleted obsolete cycle branches."
+
   heartbeat:
     name: Ensure persistent supervisor exists
-    if: ${{ github.event_name == 'schedule' }}
+    needs: cleanup
+    if: ${{ github.event_name == 'schedule' && always() }}
     runs-on: ubuntu-22.04
     timeout-minutes: 5
     steps:
@@ -42,7 +117,8 @@ jobs:
 
   supervise:
     name: Persistent autonomous supervisor — 5 minute control loop
-    if: ${{ github.event_name != 'schedule' }}
+    needs: cleanup
+    if: ${{ github.event_name != 'schedule' && always() }}
     concurrency:
       group: wix-autonomous-recovery-persistent-v4
       cancel-in-progress: false
@@ -54,35 +130,6 @@ jobs:
           fetch-depth: 1
           ref: main
           persist-credentials: false
-
-      - name: Prune obsolete completed Actions evidence
-        if: ${{ github.event_name == 'push' }}
-        env:
-          GH_TOKEN: ${{ github.token }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          repo="$GITHUB_REPOSITORY"
-          runs=$(gh api --paginate "repos/$repo/actions/runs?per_page=100" --jq '.workflow_runs[]' | jq -s '.')
-          keep_file=$(mktemp)
-          trap 'rm -f "$keep_file"' EXIT
-          jq -r '.[] | select(.status != "completed") | .id' <<<"$runs" >> "$keep_file"
-          keep_latest() {
-            local path="$1" count="$2"
-            jq -r --arg p "$path" --argjson n "$count" \
-              '[.[] | select(.path == $p and .status == "completed")] | sort_by(.created_at) | reverse | .[:$n] | .[].id' \
-              <<<"$runs" >> "$keep_file"
-          }
-          keep_latest '.github/workflows/wix-build-loop.yml' 3
-          keep_latest '.github/workflows/ci.yml' 1
-          keep_latest '.github/workflows/wix-sim.yml' 1
-          keep_latest '.github/workflows/wix-watchdog.yml' 3
-          sort -u "$keep_file" -o "$keep_file"
-          while IFS=$'\t' read -r id status path name conclusion; do
-            if grep -qx "$id" "$keep_file" || [[ "$status" != completed ]]; then continue; fi
-            echo "Deleting obsolete run $id | $name | $conclusion | $path"
-            gh api --method DELETE "repos/$repo/actions/runs/$id" >/dev/null 2>&1 || true
-          done < <(jq -r '.[] | [.id,.status,.path,.name,(.conclusion // "")] | @tsv' <<<"$runs")
 
       - name: Inspect and heal Product Factory every five minutes
         env:
@@ -100,8 +147,7 @@ jobs:
               chmod +x /tmp/recover.sh
               set +e
               # Job-level concurrency already guarantees one persistent v4 supervisor.
-              # Remove GITHUB_RUN_ID so legacy "newest watchdog" guards cannot be
-              # confused by the independent scheduled heartbeat runs.
+              # Remove GITHUB_RUN_ID so scheduled heartbeat runs cannot confuse legacy guards.
               env -u GITHUB_RUN_ID bash /tmp/recover.sh
               rc=$?
               set -e

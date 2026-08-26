@@ -1,6 +1,9 @@
 name: Wix Autonomous Recovery Watchdog
 
 on:
+  push:
+    branches: [main]
+    paths: [".github/workflows/wix-watchdog.yml"]
   workflow_run:
     workflows:
       - "Wix Autonomous Product Factory"
@@ -17,6 +20,94 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  cleanup:
+    name: Prune obsolete Actions history
+    if: ${{ github.event_name == 'push' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Keep only current evidence-bearing Actions runs
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          repo="$GITHUB_REPOSITORY"
+          runs=$(gh api --paginate "repos/$repo/actions/runs?per_page=100" --jq '.workflow_runs[]' | jq -s '.')
+          keep_file=$(mktemp)
+          trap 'rm -f "$keep_file"' EXIT
+
+          # Never delete a queued/in-progress run, including this cleanup run.
+          jq -r '.[] | select(.status != "completed") | .id' <<<"$runs" >> "$keep_file"
+
+          keep_latest() {
+            local path="$1" count="$2"
+            local active
+            active=$(jq --arg p "$path" '[.[] | select(.path == $p and .status != "completed")] | length' <<<"$runs")
+            if (( active > 0 )); then
+              return
+            fi
+            jq -r --arg p "$path" --argjson n "$count" \
+              '[.[] | select(.path == $p and .status == "completed")] | sort_by(.created_at) | reverse | .[:$n] | .[].id' \
+              <<<"$runs" >> "$keep_file"
+          }
+
+          # Two Factory runs preserve the last accepted baseline plus the latest diagnostic.
+          keep_latest '.github/workflows/wix-build-loop.yml' 2
+          # One recent run is enough for deterministic CI, simulation and recovery evidence.
+          keep_latest '.github/workflows/ci.yml' 1
+          keep_latest '.github/workflows/wix-sim.yml' 1
+          keep_latest '.github/workflows/wix-watchdog.yml' 1
+
+          sort -u "$keep_file" -o "$keep_file"
+          deleted=0
+          kept=0
+          while IFS=$'\t' read -r id status path name conclusion; do
+            if grep -qx "$id" "$keep_file" || [[ "$status" != completed ]]; then
+              kept=$((kept+1))
+              continue
+            fi
+            echo "Deleting obsolete run $id | $name | $conclusion | $path"
+            gh api --method DELETE "repos/$repo/actions/runs/$id"
+            deleted=$((deleted+1))
+          done < <(jq -r '.[] | [.id,.status,.path,.name,(.conclusion // "")] | @tsv' <<<"$runs")
+
+          echo "Deleted obsolete runs: $deleted"
+          echo "Preserved runs: $kept"
+
+  launch:
+    name: Launch corrected Product Factory v2
+    if: ${{ github.event_name == 'push' }}
+    needs: cleanup
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout accepted product state
+        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+        with:
+          fetch-depth: 1
+          ref: lab/wix-rules
+          persist-credentials: false
+      - name: Dispatch only if no Factory is already active
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          active=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow wix-build-loop.yml --limit 20 --json status | jq '[.[] | select(.status != "completed")] | length')
+          if (( active > 0 )); then
+            echo "Product Factory already active; no duplicate dispatch."
+            exit 0
+          fi
+          current=$(jq -r '.cycle // 0' docs/state.json)
+          [[ "$current" =~ ^[0-9]+$ ]]
+          next=$((current + 1))
+          gh workflow run wix-build-loop.yml --repo "$GITHUB_REPOSITORY" --ref main \
+            -f cycle_index="$next" \
+            -f max_cycles="0" \
+            -f human_note=""
+          echo "Dispatched Product Factory cycle $next from current main."
+
   recover:
     name: Recover transient Product Factory failure
     if: ${{ github.repository == 'Mickalive/Wix-extension-Location' && !github.event.repository.fork && ((github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'failure') || github.event_name == 'workflow_dispatch') }}

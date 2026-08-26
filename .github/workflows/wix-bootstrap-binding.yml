@@ -98,7 +98,10 @@ jobs:
           NODE
 
           set +e
-          timeout 45s script -qec "node '$entry' app --skip-git" /tmp/wix-app-discovery.tty >/tmp/wix-app-discovery.out 2>&1
+          (
+            cd "$root"
+            timeout 45s script -qec "npm exec -- create-new app --skip-git" /tmp/wix-app-discovery.tty >/tmp/wix-app-discovery.out 2>&1
+          )
           rc=$?
           set -e
           marker=$(grep -a 'WIX_DEVELOPER_APPS_JSON=' /tmp/wix-app-discovery.out | tail -1 | tr -d '\r' || true)

@@ -16,20 +16,18 @@ jobs:
       - uses: actions/setup-node@ae0d4ed08881f17d1511386f5be3e62356acd4a6
         with:
           node-version: 22.13.0
-      - name: Inspect identity generation and QueryApp fields
+      - name: Inspect app-project discovery APIs
         shell: bash
         run: |
           set -euo pipefail
           d=$(mktemp -d); cd "$d"
           tgz=$(npm pack @wix/create-new@0.0.105 --silent); tar -xzf "$tgz"
           f=package/build/index.js
-          echo '=== V1 APP SERIALIZER ==='
-          grep -n -B8 -A45 'var _v1App =\|_v1App = {' "$f" | head -120 || true
-          echo '=== APP CREATION FLOW ==='
-          grep -n 'function useAppCreation\|var useAppCreation\|useAppCreation =' "$f" | head -10 || true
-          n=$(grep -n 'function useAppCreation\|var useAppCreation\|useAppCreation =' "$f" | head -1 | cut -d: -f1)
-          if [[ -n "$n" ]]; then start=$((n-40)); end=$((n+220)); sed -n "${start},${end}p" "$f"; fi
-          echo '=== NAMESPACE / CODE IDENTIFIER SUGGESTIONS ==='
-          grep -n -B12 -A30 -E 'suggest.*namespace|suggest.*code|namespace.*suggest|codeIdentifier.*suggest|generate.*namespace|generate.*code|setNamespace\(|setCodeIdentifier\(' "$f" | head -500 || true
-          echo '=== CONFIG GENERATION ==='
-          grep -n -B20 -A60 -E 'wix\.config\.json|projectId|environmentId|projectType' "$f" | grep -E 'wix\.config|projectId|environmentId|projectType|appId|writeFile' | head -350 || true
+          echo '=== APP PROJECT HTTP FUNCTIONS ==='
+          grep -n -B15 -A40 -Ei 'queryAppProject|listAppProject|searchAppProject|app-projects/query|app-project/query|listProjects|queryProjects' "$f" | head -700 || true
+          echo '=== BACKEND AS A SERVICE CLIENT ==='
+          grep -n 'var BackendAsAServiceClient = class\|class BackendAsAServiceClient' "$f" | head -10 || true
+          n=$(grep -n 'var BackendAsAServiceClient = class\|class BackendAsAServiceClient' "$f" | head -1 | cut -d: -f1)
+          if [[ -n "$n" ]]; then start=$((n-30)); end=$((n+360)); sed -n "${start},${end}p" "$f"; fi
+          echo '=== APP PROJECT ROUTES ==='
+          grep -n -B8 -A20 -Ei 'appProjectId|app-project|app_project|AppProject' "$f" | grep -E 'url:|protoPath:|methodFqn:|function |var .* = class|getAppProject|createAppProject|query|list' | head -700 || true

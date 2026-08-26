@@ -1,0 +1,158 @@
+name: Wix One-Shot App Binding
+
+on:
+  push:
+    branches: [main]
+    paths: [".github/workflows/wix-bootstrap-binding.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: wix-one-shot-app-binding
+  cancel-in-progress: false
+
+jobs:
+  bind:
+    name: Register real Wix app and persist binding
+    if: ${{ github.repository == 'Mickalive/Wix-extension-Location' && !github.event.repository.fork }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Checkout accepted product state
+        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+        with:
+          fetch-depth: 0
+          ref: lab/wix-rules
+          persist-credentials: false
+
+      - name: Pin accepted head
+        id: base
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          if [[ -f wix.config.json ]]; then echo "already_bound=true" >> "$GITHUB_OUTPUT"; else echo "already_bound=false" >> "$GITHUB_OUTPUT"; fi
+
+      - uses: actions/setup-node@ae0d4ed08881f17d1511386f5be3e62356acd4a6
+        if: ${{ steps.base.outputs.already_bound != 'true' }}
+        with:
+          node-version: 22.13.0
+
+      - name: Authenticate Wix CLI from repository secret
+        if: ${{ steps.base.outputs.already_bound != 'true' }}
+        env:
+          WIX_API_KEY: ${{ secrets.WIX_API_KEY }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$WIX_API_KEY" || { echo "::error::WIX_API_KEY missing"; exit 1; }
+          npx -y @wix/cli@1.1.237 logout >/dev/null 2>&1 || true
+          npx -y @wix/cli@1.1.237 login --api-key "$WIX_API_KEY" >/tmp/wix-login.log 2>&1 || {
+            sed -E 's/[A-Za-z0-9_=-]{24,}/[REDACTED]/g' /tmp/wix-login.log >&2
+            exit 1
+          }
+          rm -f /tmp/wix-login.log
+          npx -y @wix/cli@1.1.237 whoami >/tmp/wix-whoami.log 2>&1 || true
+          rm -f /tmp/wix-whoami.log
+
+      - name: Try every currently documented Wix app template
+        id: create
+        if: ${{ steps.base.outputs.already_bound != 'true' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          templates=(
+            "24493a0d-18f2-4f68-b6d5-55992cef7daa"
+            "c442b755-2276-4336-918a-915865a9fa2b"
+            "46746ee0-e0b0-4971-be34-f3ea94dd979b"
+            "2ff7a5ae-d116-4c06-9394-7d7493428d0e"
+            "5fcf03b8-46ba-499b-8dbb-40ecf811aceb"
+          )
+          root=$(mktemp -d)
+          chosen=""
+          config=""
+          for template in "${templates[@]}"; do
+            work="$root/$template"
+            mkdir -p "$work"
+            echo "Trying documented Wix template ${template:0:8}…"
+            if (cd "$work" && npm create @wix/new@latest app -- --app-name "Advanced Booking Rules" --template "$template" >create.log 2>&1); then
+              found=$(find "$work" -type f -name wix.config.json -print -quit)
+              if [[ -n "$found" ]] && jq -e 'type=="object" and (.appId|type=="string" and length>0) and (.projectId|type=="string" and length>0) and (.projectType|type=="string" and length>0)' "$found" >/dev/null; then
+                chosen="$template"
+                config="$found"
+                break
+              fi
+            else
+              code=$(grep -Eo 'Code: [A-Z_]+' "$work/create.log" | tail -1 | cut -d' ' -f2- || true)
+              status=$(grep -Eo 'status code [0-9]+' "$work/create.log" | tail -1 | awk '{print $3}' || true)
+              echo "Template ${template:0:8} failed: ${code:-unknown}/${status:-unknown}"
+            fi
+          done
+          if [[ -z "$config" ]]; then
+            echo "::error::All currently documented Wix app templates failed to register under the authenticated CI session."
+            exit 1
+          fi
+          if jq -e 'paths(scalars) as $p | ($p|map(tostring)|join(".")) | test("secret|token|password|api.?key";"i")' "$config" >/dev/null; then
+            echo "::error::Generated wix.config.json contains a secret-like field; refusing to persist."
+            exit 1
+          fi
+          cp "$config" "$GITHUB_WORKSPACE/wix.config.json"
+          echo "template=$chosen" >> "$GITHUB_OUTPUT"
+          rm -rf "$root"
+
+      - name: Probe real Wix build without discarding a valid binding
+        id: build
+        if: ${{ steps.base.outputs.already_bound != 'true' }}
+        shell: bash
+        run: |
+          set +e
+          npx -y @wix/cli@1.1.237 build >/tmp/wix-build.log 2>&1
+          rc=$?
+          rm -f /tmp/wix-build.log
+          if (( rc == 0 )); then echo "result=passed" >> "$GITHUB_OUTPUT"; else echo "result=needs_integration_repair" >> "$GITHUB_OUTPUT"; fi
+          exit 0
+
+      - name: Record non-secret binding evidence
+        if: ${{ steps.base.outputs.already_bound != 'true' }}
+        env:
+          TEMPLATE: ${{ steps.create.outputs.template }}
+          BUILD_RESULT: ${{ steps.build.outputs.result }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p reports/wix-live
+          keys=$(jq -r 'keys|sort|join(", ")' wix.config.json)
+          cat > reports/wix-live/BOOTSTRAP_BINDING.md <<EOF
+          # Authenticated Wix app binding
+
+          Wix CLI authentication succeeded using the repository secret. Wix registered **Advanced Booking Rules** non-interactively using a currently documented app template.
+
+          Template ID: $TEMPLATE
+          Persisted wix.config.json fields: $keys
+          Initial wix build probe: $BUILD_RESULT
+
+          No API key, auth file, token, password, or other credential was persisted.
+          EOF
+
+      - name: Persist binding to accepted product branch
+        if: ${{ steps.base.outputs.already_bound != 'true' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BASE_SHA: ${{ steps.base.outputs.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name wix-binding-bootstrap
+          git config user.email wix-binding-bootstrap@users.noreply.github.com
+          git add -f wix.config.json reports/wix-live/BOOTSTRAP_BINDING.md
+          git commit -m "wix: persist authenticated app binding"
+          auth=$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)
+          remote=$(git -c "http.extraheader=AUTHORIZATION: basic $auth" ls-remote origin refs/heads/lab/wix-rules | awk '{print $1}')
+          test "$remote" = "$BASE_SHA" || { echo "::error::lab/wix-rules moved during bootstrap"; exit 1; }
+          git -c "http.extraheader=AUTHORIZATION: basic $auth" push origin HEAD:refs/heads/lab/wix-rules
+
+      - name: Already bound
+        if: ${{ steps.base.outputs.already_bound == 'true' }}
+        run: echo "Real wix.config.json already exists; bootstrap is unnecessary."

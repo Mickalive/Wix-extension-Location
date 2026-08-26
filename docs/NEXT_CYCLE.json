@@ -1,87 +1,60 @@
 {
-  "cycle": 5,
+  "cycle": 6,
   "phase": "build",
-  "generated_by": "wix-build-director",
-  "date": "2026-08-25",
-  "decision_record": "reports/director/CYCLE_32881643441.json",
+  "generated_by": "deterministic-recovery-of-cycle-6-director-plan",
+  "date": "2026-08-26",
+  "decision_record": "reports/wix-live/CYCLE_32915633541.md",
   "authority": {
     "contract": "docs/WIX_TECHNICAL_CONTRACT.md",
     "blueprint": "docs/BUILD_BLUEPRINT.md"
   },
-  "repair_priority_rule": "If a lane's latest persisted audit is FIX_BEFORE_INTEGRATION or REJECT, repairing those findings takes priority over any scheduled feature work. A repaired candidate requires a fresh independent audit before integration.",
+  "repair_priority_rule": "Negative empirical Wix evidence is routed to its owning lane before unrelated work. Never fabricate Wix identifiers or claim live readiness without live evidence.",
   "decision": "continue",
-  "repair_lanes": [],
-  "objective": "Activate what cycle 4 built: wire the accepted target-aware domain semantics into the enforcement handlers so CANCEL frees capacity and RESCHEDULE ignores the mover's own booking AT RUNTIME (closing the dormant-semantics gap), pin the expanded target matrix against silent drift with determinism/explanation-completeness properties, and implement the Technical Contract §7-mandated management-side entitlement restriction in the RulesEditor. Billing completes: every §7 requirement is implemented and adversarially audited with no evidence-backed pre-scaffold task remaining.",
-  "canonical_contracts_notice": "src/domain/ports.ts evolved in cycle 4 via the authorized RULES-C4-1 additive evolution; accepted SHA-256 d46e0743fa825315a80456962d0f4412c02cbd437f0acabce909356f43c18802 (prior af68e698…fbc). src/shared/{types,errors}.js unchanged (af03134c… / 8b12ec16…). ports.ts is FROZEN in cycle 5: no lane may edit it; INT-C5-1 consumes the existing optional targetContext exactly as accepted; any further evolution requires fresh Director coordination and a fresh Rules ACCEPT. shared/** remains Director-amendment-only. Purity gate now protects SIX roots incl. src/platform/composition (Director amendment, audit obs O2).",
+  "repair_lanes": ["integration"],
+  "objective": "Establish the supported real non-secret Wix CLI scaffold and registration required by the accepted Wix Live finding while preserving every cycle-6 accepted product change.",
   "lanes": {
     "integration": {
       "status": "active",
-      "task_id": "INT-C5-1",
-      "task": "Activate target-aware enforcement wiring inside src/platform/validation-plugin/** + tests/platform/** (Director-coordinated follow-up explicitly reserved by cycle-4 cross_lane_compatibility): (a) map the six ValidationTargets onto the canonical EvaluationTarget union exactly as documented in src/domain/ports.ts (strip the _MULTI_SERVICE suffix; multi-service bookings share their base operation's semantics) and supply deps.targetContext on EVERY evaluateRules call in handlers.ts — absent today, which leaves CANCEL/RESCHEDULE running CREATE-uniform semantics at runtime; (b) add an injectable subject-booking-facts seam on ValidationPluginDeps (default: facts unavailable ⇒ subjectBookingId undefined ⇒ behavior identical to today) so RESCHEDULE duplicate self-exclusion activates ONLY when the payload provably carries the booking identifier (C1 discipline: T-VP3/T-VP5 payload probe still unproven — never fabricate payload fields); (c) platform-level regressions through the REAL handlers reproducing both Observation-A probes end-to-end: CANCEL of the only booking on an at-capacity day ⇒ allowed with explicit per-item results; RESCHEDULE overlapping the mover's own still-existing booking WITH supplied subject id ⇒ not DUPLICATE_BOOKING while a genuine third-party overlap still blocks; CREATE-family outcomes proven byte-identical to pre-change handler behavior; (d) disposition Rules-audit observation B (same-day self-count): when subject facts ARE supplyable and prove the subject contributes to a queried cap bucket, adjust the authoritative count accordingly; where unprovable, degrade exactly as today and document the residual in the module README (never guess); (e) extend the handler-matrix tests: CANCEL targets still run classification families fail-closed (RULESET_INVALID/INVALID_SLOT/EVALUATION_ERROR paths unchanged), RESCHEDULE stays fail-open, enforcementClaims honest per §5.3.",
-      "why_needed": "The cycle-4 rules fix is integrated but DORMANT: handlers.ts line ~506 builds evalDeps without targetContext, so runtime CANCEL/RESCHEDULE enforcement cannot free capacity or exclude the mover's booking. This is the last known enforcement-correctness gap and it gates capability #9 and all T-VP cancel/reschedule claims.",
+      "task_id": "INT-C6-R1",
+      "task": "Establish the supported non-secret unified Wix CLI app scaffold and registration surface. Create the documented project/scaffold files, including wix.config.json only with values that are legitimately derivable without secrets or fabricated account identifiers; add the platform registration module required by the Blueprint; wire the documented Wix Bookings validation-extension registration shape; explicitly record account-authenticated values or steps that cannot be derived in CI rather than inventing them. Keep all existing accepted product behavior intact.",
+      "why_needed": "Cycle 6 passed every lane audit, the deterministic preview gate and the independent cross-lane audit, but Wix Live QA returned FIX_BEFORE_INTEGRATION because no real wix.config.json exists and the product is not yet registered as a testable Wix CLI app.",
       "source_evidence": [
-        "reports/audits/CYCLE_32881643441_RULES.md sections 1–5 (accepted additive target context; consumers verified unforked — i.e., not yet wired)",
-        "reports/audits/CYCLE_32792897988_INTEGRATION.md sections 4–5 observation A (original adversarial probes, now domain-fixed but runtime-dormant)",
-        "reports/audits/CYCLE_32881643441_RULES.md section 6 observation B (self-count residual routed to platform)",
-        "docs/WIX_TECHNICAL_CONTRACT.md section 5.3 (per-target validation semantics; omitted items default valid; fail-closed vs fail-open)",
-        "docs/NEXT_CYCLE.json cycle-4 cross_lane_compatibility.sequencing (Director-coordinated follow-up reservation)"
+        "reports/wix-live/CYCLE_32915633541.md",
+        "reports/audits/CYCLE_32915633541_INTEGRATED.md",
+        "docs/runbooks/T_VP0_SCAFFOLD.md",
+        "docs/WIX_TECHNICAL_CONTRACT.md",
+        "docs/BUILD_BLUEPRINT.md"
       ],
       "acceptance_criteria": [
-        "'npm ci && npm run check' passes offline credential-free; purity gate green over all six roots",
-        "handler-level tests prove CANCEL frees capacity and RESCHEDULE self-exclusion through the REAL createValidationHandlers path, with third-party-overlap and defect-baseline controls",
-        "CREATE-family handler outcomes proven unchanged (existing handler suites green unmodified; explicit byte-equality pins where outcomes are sampled)",
-        "subject-facts seam default keeps today's exact behavior; activation only via injected facts; no fabricated payload-field access",
-        "self-count adjustment implemented only behind provable subject facts; degradation path documented + tested",
-        "ports.ts untouched (SHA d46e0743…18802 preserved); scope limited to src/platform/validation-plugin/** + tests/platform/**; no production-capability claims; fresh independent lane audit ends VERDICT: ACCEPT"
+        "npm ci --ignore-scripts --no-audit --no-fund && npm run check && npm run build pass",
+        "wix.config.json and registration files contain no secrets and no fabricated Wix/account/site identifiers",
+        "the real Wix Live job gets past the missing-scaffold branch into authentication/build/dev-site probing, or returns a narrowly evidenced BLOCKED_EXTERNAL prerequisite",
+        "all previously accepted domain/platform/dashboard/billing behavior remains green",
+        "fresh independent Integration audit ends VERDICT: ACCEPT"
       ],
-      "out_of_scope": "domain edits (ports frozen), billing projection semantics, dashboard UI, real Wix transport/scaffold (T-VP0), enabling production claims about reschedule enforcement (stays best-effort per §10 #9)",
+      "out_of_scope": "publishing/releasing the app, broad account administration, fabricated IDs, unrelated feature work",
       "blocker": null,
       "completion_evidence": null
     },
     "rules": {
-      "status": "active",
-      "task_id": "RULES-C5-1",
-      "task": "Target-matrix property hardening inside src/domain/** + tests/domain/** (no ports.ts changes — frozen this cycle): (a) extend the existing determinism property suite (tests/domain/evaluate.spec.ts 'determinism property') to sweep ALL THREE EvaluationTargets: repeated evaluations under explicit CREATE/CANCEL/RESCHEDULE target contexts produce identical outcomes per scenario; (b) explanation-completeness invariant across the matrix: every block outcome under ANY target carries {ruleId, code, customerMessage} with jargon-free customer text (extend the existing completeness suite to CANCEL/RESCHEDULE contexts); (c) CANCEL-tail drift guard (Rules cycle-4 audit observation A): a property test pinning that CANCEL outcomes contain ONLY classification-family explanations (entitlement/windows/exceptions/caps/duplicates families NEVER appear) so any future notice-emitting family that forgets the CANCEL branch fails loudly instead of silently; (d) matrix-vs-code consistency assertions: derive the tested per-target family behavior from the README matrix table so documentation drift also fails loudly; (e) refresh src/domain/README.md only where the new properties add guarantees (no semantic changes).",
-      "why_needed": "Cycle 4 tripled the outcome surface (three targets) but the determinism/completeness properties still sweep only default-dep CREATE scenarios, and the CANCEL fall-through tail is protected only by comments — audit observation A warns the next notice-emitting family could silently change CANCEL behavior. Blueprint §6 mandates determinism and explanation-completeness as standing properties; they must cover the matrix they now guard.",
-      "source_evidence": [
-        "reports/audits/CYCLE_32881643441_RULES.md section 6 observation A (CANCEL tail drift risk, 'silent drift loud' obligation)",
-        "docs/BUILD_BLUEPRINT.md section 6 rules test strategy (determinism property; explanation completeness; negative and edge cases for every rule)",
-        "src/domain/README.md target-aware evaluation matrix (cycle-4 accepted documentation to be pinned by tests)",
-        "tests/domain/evaluate.spec.ts determinism property (existing coverage limited to default-dep scenarios)"
-      ],
-      "acceptance_criteria": [
-        "determinism sweep green across all three targets including DST fixtures and split-window scenarios",
-        "explanation-completeness green across all three targets with customer-safe message assertions",
-        "CANCEL-tail guard fails when a synthetic non-classification explanation is injected into the CANCEL path (anti-vacuity proof) and passes on the real code",
-        "matrix-consistency assertions tie README table cells to observed per-target behavior; deliberate doc-drift simulation fails the suite",
-        "ports.ts SHA d46e0743…18802 preserved; no Wix imports, no I/O, purity gate green, no .skip/.todo/.only; existing 465-test suite green unmodified",
-        "fresh independent lane audit ends VERDICT: ACCEPT"
-      ],
-      "out_of_scope": "ports.ts/shared edits, new rule features, platform wiring (INT-C5-1 owns it), UI validators",
+      "status": "complete",
+      "task": "",
+      "why_needed": "",
+      "source_evidence": [],
+      "acceptance_criteria": [],
+      "out_of_scope": null,
       "blocker": null,
-      "completion_evidence": null
+      "completion_evidence": "Run 32915633541 Rules candidate was independently ACCEPT and included in preview fb4a9ac; integrated deterministic and cross-lane gates passed."
     },
     "dashboard": {
-      "status": "active",
-      "task_id": "DASH-C5-1",
-      "task": "Management-side entitlement restriction (Contract §7 'restrict rule management/enforcement coverage to the plan allowance'; enforcement side already shipped) inside src/ui/** + src/extensions/dashboard/** + tests/ui/**: (a) RulesEditor consumes getEntitlementMeter() (shipped bridge method, pinned DTO v1 — NO DTO changes this cycle): locations OUTSIDE coverage.allowedLocationIds are visibly restricted for NEW rule configuration (badged/disabled with stable-ordering note 'default location first, then alphabetical'), while EXISTING configuration for uncovered locations is displayed read-only-ish and NEVER deleted or silently dropped (§7: never delete user data); (b) degraded meter state (meter.degraded || coverage.degraded) shows the persistent fail-open warning banner inside the editor too — warn, never brick editing blindly (fail-open posture C5); (c) overLimit state surfaces the upgrade CTA (buildUpgradeUrl contract, NEW TAB) in the editor alongside the LocationsUsage page; (d) missing/404 meter (null) degrades to today's unrestricted editor with a non-blocking info notice (endpoint may be absent pre-integration of newer platform code) — never a crash; (e) accessible markup consistent with the page kit (roles/labels/keyboard); fixture tests against the pinned v1 DTO; honest copy only (§12).",
-      "why_needed": "§7 makes developer-side plan restriction mandatory and review-tested, but restriction currently exists only at enforcement time (rules for uncovered locations are silently skipped with UNCOVERED_LOCATION_RULES_SKIPPED) and on the meter page. A merchant can still CONFIGURE rules for locations their plan does not manage and only discover it at booking time — confusing, support-generating, and a marketplace-review risk. The data source (GET /meter via getEntitlementMeter) shipped and was audited this cycle.",
-      "source_evidence": [
-        "docs/WIX_TECHNICAL_CONTRACT.md section 7 (over-limit behavior: restrict rule MANAGEMENT using stable ordering; never delete user data; show upgrade CTA; fail-open warnings)",
-        "docs/BUILD_BLUEPRINT.md section 4 flow 5 (gate feeds both enforcement coverage and dashboard) and section 1 pages/RulesEditor ownership",
-        "reports/audits/CYCLE_32881643441_DASHBOARD.md sections 3–5 (getEntitlementMeter + pinned DTO shipped and adversarially verified)",
-        "reports/audits/CYCLE_32881643441_INTEGRATION.md section 3 item 4 (GET /meter contract: 404 n/a, fail-open degraded body)"
-      ],
-      "acceptance_criteria": [
-        "node runner suite green (186 baseline + new tests), credential-free, offline",
-        "editor tests prove: uncovered-location restriction rendering, stable-ordering note, existing-config preservation (no deletion path), CTA visibility on overLimit, degraded banner persistence, 404/null graceful degradation",
-        "bridge reuse only (no direct transport calls outside services/bridge.js); ruleDraftValidators.js byte-for-byte unchanged; parity ledger green",
-        "no banned claims (§12); accessible markup assertions included",
-        "scope limited to src/ui/**, src/extensions/dashboard/**, tests/ui/**; fresh independent lane audit ends VERDICT: ACCEPT"
-      ],
-      "out_of_scope": "platform/billing/domain code, DTO reshaping (v1 pinned), allowance-number display (N-1 consciously deferred), live Wix fetching, React mount (T-VP0)",
+      "status": "complete",
+      "task": "",
+      "why_needed": "",
+      "source_evidence": [],
+      "acceptance_criteria": [],
+      "out_of_scope": null,
       "blocker": null,
-      "completion_evidence": null
+      "completion_evidence": "Run 32915633541 Dashboard candidate was independently ACCEPT and included in preview fb4a9ac; integrated deterministic and cross-lane gates passed."
     },
     "billing": {
       "status": "complete",
@@ -91,16 +64,8 @@
       "acceptance_criteria": [],
       "out_of_scope": null,
       "blocker": null,
-      "completion_evidence": "All Contract §7/§11 billing requirements are implemented, tested, and independently audited across cycles 2–4: tier mapping (4 plans, identical features, location-count-only differences), billable-location counting (pagination >50/>100, intersection dedup, archived exclusion, CUSTOM-only floor 0→1, fail-open posture), entitlement state machine (purchase/cancel/renewal-cancel webhooks, snapshot supremacy reconciliation, trial-as-paid, dunning, clone isolation via originInstanceId/copiedFromTemplate, UNKNOWN_PLAN sentinel), entitlement gate (stable ordering, over-limit surfacing, downgrade-through-gate regression, restore-on-re-upgrade), upgrade URL builder, and the projectedSnapshotSource handoff consumed by the accepted composition root. Final evidence: reports/audits/CYCLE_32881643441_BILLING.md VERDICT: ACCEPT (eight adversarial probes unfalsified), integrated into lab/wix-rules this pass; 96/96 billing tests green within the 465/465 integrated gate. Remaining billing-adjacent obligations are NOT billing-lane work: dedup retention lives in the accepted platform compaction wrapper; management-side restriction UX is DASH-C5-1; real webhook delivery is T-VP0/scaffold-gated. No evidence-backed pre-scaffold billing task remains; inventing one would violate the no-busywork rule."
+      "completion_evidence": "Billing was already complete; run 32915633541 deterministic no-op candidate/audit ACCEPT and integrated gates passed."
     }
-  },
-  "cross_lane_compatibility": {
-    "shared_contracts": "Canonical src/domain/ports.ts (SHA d46e0743…18802 post-RULES-C4-1) + src/shared/{types,errors}.ts accepted. PORTS.TS FROZEN in cycle 5 — INT-C5-1 consumes the existing optional targetContext unforked; no lane edits domain files.",
-    "pinned_dto_get_meter": "GET /meter response body remains pinned v1 EXACTLY: {\"meter\":{\"count\":number|null,\"degraded\":boolean},\"coverage\":{\"allowedLocationIds\":string[],\"overLimit\":boolean,\"degraded\":boolean,\"warning\":string|null}}. DASH-C5-1 consumes it as shipped; no DTO evolution this cycle (N-1 allowance display consciously deferred).",
-    "sequencing": "INT-C5-1 activates the domain semantics RULES-C4-1 landed; RULES-C5-1 hardens the same matrix properties in parallel without touching ports; DASH-C5-1 consumes the already-shipped GET /meter bridge method fixture-first. No cross-lane file overlaps; Director resolves any drift at integration.",
-    "parity_ledger_rule": "tests/domain/uiValidatorParity.spec.ts pins both validators and fails loudly on drift. ruleDraftValidators.js stays byte-for-byte unchanged; R1–R4 decisions of record apply only at the future T-VP0 mirror repoint, which MUST cite the parity spec and update the ledger consciously (Rules audit N1; Dashboard audit N-3 repoint obligation rides the same gate).",
-    "vitest_glob_rule": "Domain/billing/platform suites execute through the platform-owned vitest config glob tests/**/*.spec.ts; never narrowed; dashboard lane runs node --test from tests/ui.",
-    "forbidden_everywhere": "production-capability claims before empirical gates T-VP*/T-WH*/T-BK*/T-RB* pass; claiming reschedule enforcement beyond best-effort; PREVIEW_GATED dependencies; UNSUPPORTED mechanisms; fabricated Wix identifiers or payload fields (C1 discipline applies doubly to INT-C5-1's subject-facts seam); secrets in repo."
   },
   "critical_external_blocker": null
 }

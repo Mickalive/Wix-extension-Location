@@ -43,7 +43,7 @@ jobs:
               <<<"$runs" >> "$keep_file"
           }
 
-          # Minimal useful evidence only. Accepted scientific/product evidence lives on lab/wix-rules.
+          # Minimal useful evidence only. Accepted product evidence lives on lab/wix-rules.
           keep_latest '.github/workflows/wix-build-loop.yml' 2
           keep_latest '.github/workflows/ci.yml' 1
           keep_latest '.github/workflows/wix-sim.yml' 1
@@ -127,7 +127,7 @@ jobs:
     steps:
       - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
         with:
-          fetch-depth: 1
+          fetch-depth: 0
           ref: main
           persist-credentials: false
 
@@ -139,10 +139,54 @@ jobs:
         run: |
           set -u -o pipefail
           rm -f /tmp/wix-product-ready
+
+          sanitize_accepted_lane() {
+            local repo="$GITHUB_REPOSITORY"
+            local lane="lab/wix-rules"
+            local auth base remote tmp
+            auth=$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)
+            base=$(git -c "http.extraheader=AUTHORIZATION: basic $auth" ls-remote origin "refs/heads/$lane" | awk '{print $1}')
+            [[ -n "$base" ]] || return 0
+            git -c "http.extraheader=AUTHORIZATION: basic $auth" fetch origin "$lane:refs/remotes/origin/$lane" --quiet || return 0
+            tmp=$(mktemp -d)
+            git worktree add --detach "$tmp" "$base" >/dev/null 2>&1 || { rm -rf "$tmp"; return 0; }
+
+            # The accepted product branch owns product state and its deterministic CI only.
+            # Orchestration/recon/simulation/watchdog live exclusively on main.
+            rm -f \
+              "$tmp/.github/workflows/wix-recon.yml" \
+              "$tmp/.github/workflows/wix-build-loop.yml" \
+              "$tmp/.github/workflows/wix-sim.yml" \
+              "$tmp/.github/workflows/wix-watchdog.yml"
+
+            if [[ -n "$(git -C "$tmp" status --porcelain -- .github/workflows)" ]]; then
+              git -C "$tmp" config user.name wix-automation-sanitizer
+              git -C "$tmp" config user.email wix-automation-sanitizer@users.noreply.github.com
+              git -C "$tmp" add -A .github/workflows
+              git -C "$tmp" commit -m "chore: keep orchestration workflows off accepted product lane" >/dev/null
+              remote=$(git -c "http.extraheader=AUTHORIZATION: basic $auth" ls-remote origin "refs/heads/$lane" | awk '{print $1}')
+              if [[ "$remote" == "$base" ]]; then
+                git -C "$tmp" -c "http.extraheader=AUTHORIZATION: basic $auth" push origin "HEAD:refs/heads/$lane" >/dev/null
+                echo "Sanitized accepted lane workflows at $(git -C "$tmp" rev-parse HEAD)."
+              else
+                echo "Accepted lane moved during sanitation; leaving it untouched this tick."
+              fi
+            fi
+            git worktree remove --force "$tmp" >/dev/null 2>&1 || true
+            rm -rf "$tmp"
+          }
+
           for tick in $(seq 1 70); do
             echo "=== autonomous supervisor tick $tick/70 at $(date -u +%FT%TZ) ==="
             auth=$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)
             git -c "http.extraheader=AUTHORIZATION: basic $auth" fetch origin main --quiet || true
+
+            factory_active=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow "$WIX_LOOP_WORKFLOW" --limit 50 \
+              --json status | jq '[.[] | select(.status != "completed")] | length')
+            if (( factory_active == 0 )); then
+              sanitize_accepted_lane
+            fi
+
             if git show origin/main:.github/scripts/recover-transient-opencode.sh > /tmp/recover.sh 2>/dev/null; then
               chmod +x /tmp/recover.sh
               set +e

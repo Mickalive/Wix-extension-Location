@@ -25,6 +25,24 @@
  * button ("Recover interrupted apply") that calls bridge.recover(scope) on
  * click; nothing on this page ever auto-retries or auto-applies a destructive
  * operation (Contract §9.2).
+ *
+ * Entitlement coverage (DASH-C5-1; Contract §7 management-side restriction,
+ * Blueprint §4 flow 5): the page loads the billable-location meter through
+ * the typed bridge method getEntitlementMeter() (pinned v1 DTO, consumed
+ * verbatim) and restricts NEW rule configuration for locations OUTSIDE
+ * coverage.allowedLocationIds (badged + disabled, with the stable-ordering
+ * note). EXISTING configuration for uncovered locations stays rendered
+ * read-only and is never deleted or silently dropped (§7); any control whose
+ * current value contributes a validation issue stays correctable, so
+ * restriction can never trap the editor in a permanently invalid draft.
+ * Degraded coverage fails OPEN exactly like enforcement (C5): a persistent
+ * warning renders, but nobody is restricted off an unreliable list.
+ * meter.degraded shows the persistent fail-open warning banner without
+ * bricking editing. overLimit surfaces the Contract §7 upgrade CTA (exact
+ * buildUpgradeUrl contract, opened in a NEW TAB) alongside the Locations
+ * usage page; identifiers are host-injected and never fabricated. A missing
+ * meter (documented 404 n/a) or a typed bridge failure degrades to today's
+ * unrestricted editor behind a non-blocking notice — never a crash.
  */
 
 import { el } from '../dom/kit.js';
@@ -33,6 +51,7 @@ import { openDiffPreviewModal } from '../modals/diffPreviewModal.js';
 import { renderExplainPanel } from '../explain/explainPanel.js';
 import { describeBridgeFailure } from '../state/editorStore.js';
 import { pollMutationUntilTerminal } from '../state/mutationPoller.js';
+import { buildUpgradeUrl } from '../upgrade/upgradeUrl.js';
 
 const WEEKDAYS = ['MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT', 'SUN'];
 
@@ -42,6 +61,36 @@ const LOCATIONS_DISCLOSURE =
 
 const CAPS_DISCLOSURE =
   'Daily and per-service limits are checked when a booking is validated. Because two customers can check out at the same moment, a count can briefly exceed its limit; the app reconciles counts continuously afterwards.';
+
+// --- Entitlement restriction copy (DASH-C5-1; honest wording, Contract §12) ---
+
+const COVERAGE_BADGE = 'Not covered by your plan';
+
+const COVERAGE_ORDERING_NOTE =
+  'Coverage follows a fixed order: your default location first, then alphabetical.';
+
+const RESTRICTION_NOTE_MANAGED =
+  'Your plan does not manage this location, so new booking rules for it are disabled here.';
+
+const RESTRICTION_NOTE_PRESERVED =
+  'Its existing hours below stay saved and read-only — nothing is deleted. Bookings at this location are not controlled by this app’s rules.';
+
+const NEW_RULES_LOCK_TITLE =
+  'New booking rules for this location are disabled: your plan does not manage it.';
+
+const READONLY_LOCK_TITLE = 'Read-only: this location is not covered by your plan.';
+
+const REMOVE_LOCK_TITLE =
+  'Saved hours for a location outside your plan cannot be removed here; nothing is deleted.';
+
+const METER_NA_NOTICE =
+  'Usage information is not available from the app backend yet, so plan coverage cannot be checked here. The editor stays fully editable.';
+
+const METER_DEGRADED_LINE =
+  'The counted-location total cannot be read right now. Your rules keep running; see the Locations usage page for details.';
+
+const COVERAGE_DEGRADED_DEFAULT_LINE =
+  'Entitlement coverage is temporarily unknown. Your rules keep running; the covered-location list may be incomplete.';
 
 function scopeLabel(scopeType) {
   return scopeType === 'location' ? 'Location' : 'Service';
@@ -78,6 +127,190 @@ export function renderRulesEditorPage(options) {
   );
 
   let modalController = null;
+
+  // -------------------------------------------------------------------
+  // Entitlement coverage (DASH-C5-1; Contract §7 management-side
+  // restriction; Blueprint §4 flow 5). Consumed through the typed bridge
+  // method getEntitlementMeter() ONLY — never transport directly. The
+  // pinned v1 DTO is consumed verbatim; nothing here reshapes it.
+  //
+  // Posture:
+  //   - healthy coverage: locations OUTSIDE coverage.allowedLocationIds
+  //     are visibly restricted for NEW rule configuration (badged +
+  //     disabled). EXISTING configuration for those locations stays
+  //     rendered read-only and is never deleted or silently dropped (§7).
+  //     Any control whose current value contributes a validation issue
+  //     stays correctable, so restriction can never trap the editor in a
+  //     permanently invalid state.
+  //   - degraded coverage fails OPEN exactly like enforcement (C5): the
+  //     editor warns persistently but restricts nobody based on an
+  //     unreliable list.
+  //   - meter.degraded (count unreadable): persistent fail-open warning
+  //     banner; editing is never bricked blindly.
+  //   - overLimit: the Contract §7 upgrade CTA (buildUpgradeUrl contract,
+  //     NEW TAB) renders alongside the Locations usage page. Identifiers
+  //     are host-injected and never fabricated.
+  //   - 404/null meter (the endpoint may be absent pre-integration of
+  //     newer platform code): the editor degrades to today's unrestricted
+  //     form behind a non-blocking info notice — never a crash. Typed
+  //     bridge failures behave the same with honest wording.
+  // -------------------------------------------------------------------
+
+  const upgradeIdentifiers = options.upgrade ?? {};
+  /** @type {{status:'idle'|'loading'|'ready'|'na'|'unavailable', dto: object|null, errorMessage: string|null}} */
+  let entitlement = { status: 'idle', dto: null, errorMessage: null };
+  let meterLoadInFlight = false;
+
+  async function loadEntitlementMeter() {
+    if (meterLoadInFlight || destroyed) return;
+    // Bridges predating the meter endpoint carry no source at all; the
+    // editor stays unrestricted instead of inventing entitlement state.
+    if (!bridge || typeof bridge.getEntitlementMeter !== 'function') return;
+    meterLoadInFlight = true;
+    try {
+      const dto = await bridge.getEntitlementMeter();
+      if (destroyed) return;
+      entitlement =
+        dto === null
+          ? { status: 'na', dto: null, errorMessage: null }
+          : { status: 'ready', dto, errorMessage: null };
+    } catch (error) {
+      if (destroyed) return;
+      entitlement = {
+        status: 'unavailable',
+        dto: null,
+        errorMessage: describeBridgeFailure(error, 'Loading usage'),
+      };
+    } finally {
+      meterLoadInFlight = false;
+    }
+    renderDynamic();
+  }
+
+  /**
+   * Derives the page-wide restriction context from the loaded meter.
+   * `restrictsLocation` is null whenever the covered-location list must not
+   * be trusted for restriction (no reading yet, or degraded coverage —
+   * enforcement fails open in that case, so restricting here would misstate
+   * what the rules actually enforce).
+   */
+  function entitlementContext(issuePaths) {
+    if (entitlement.status !== 'ready' || !entitlement.dto) {
+      return { ready: false, restrictsLocation: null, overLimit: false, issuePaths };
+    }
+    const { coverage } = entitlement.dto;
+    if (coverage.degraded === true) {
+      return { ready: true, restrictsLocation: null, overLimit: coverage.overLimit === true, issuePaths };
+    }
+    const allowed = new Set(coverage.allowedLocationIds);
+    return {
+      ready: true,
+      restrictsLocation: (id) => !allowed.has(id),
+      overLimit: coverage.overLimit === true,
+      issuePaths,
+    };
+  }
+
+  function locationIsRestricted(ctx, locationId) {
+    return (
+      ctx.ready === true &&
+      typeof ctx.restrictsLocation === 'function' &&
+      ctx.restrictsLocation(locationId)
+    );
+  }
+
+  /**
+   * Contract §7 upgrade entry point for the editor (mirrors the Locations
+   * usage page). Rendered only when coverage.overLimit holds AND both
+   * identifiers were provided validly — identifiers are never fabricated,
+   * so an unbuildable link degrades to the notice text alone.
+   */
+  function buildUpgradeCta() {
+    let href = null;
+    try {
+      href = buildUpgradeUrl(upgradeIdentifiers.appId, upgradeIdentifiers.instanceId);
+    } catch {
+      href = null;
+    }
+    if (href === null) return null;
+    return el('a', {
+      href,
+      target: '_blank',
+      rel: 'noopener noreferrer',
+      class: 'upgrade-cta',
+      'data-testid': 'editor-upgrade-cta',
+      'aria-label': 'Upgrade to manage more locations (opens in a new tab)',
+      text: 'Upgrade to manage more locations',
+    });
+  }
+
+  /**
+   * Page-level entitlement region: persistent fail-open warning banner
+   * (role="alert"), over-limit section with the upgrade CTA, or the
+   * non-blocking notices for the documented 404 n/a and typed load
+   * failures. Returns an array of nodes (empty while idle/loading — the
+   * editor stays interactive from the first paint either way).
+   */
+  function entitlementRegion() {
+    const nodes = [];
+    if (entitlement.status === 'ready' && entitlement.dto) {
+      const { meter, coverage } = entitlement.dto;
+      const lines = [];
+      if (coverage.degraded === true) {
+        lines.push(coverage.warning ?? COVERAGE_DEGRADED_DEFAULT_LINE);
+      } else if (typeof coverage.warning === 'string' && coverage.warning.length > 0) {
+        lines.push(coverage.warning);
+      }
+      if (meter.degraded === true) {
+        lines.push(METER_DEGRADED_LINE);
+      }
+      if (lines.length > 0) {
+        nodes.push(
+          el(
+            'div',
+            { role: 'alert', class: 'degraded-banner', 'data-testid': 'editor-degraded-banner' },
+            ...lines.map((line) => el('p', { 'data-testid': 'editor-degraded-banner-line', text: line })),
+          ),
+        );
+      }
+      if (coverage.overLimit === true) {
+        const cta = buildUpgradeCta();
+        nodes.push(
+          el(
+            'section',
+            { 'data-testid': 'editor-over-limit-section', 'aria-label': 'Over your plan’s location limit' },
+            el('h2', { text: 'Over your plan’s location limit' }),
+            el('p', {
+              'data-testid': 'editor-over-limit-explanation',
+              text:
+                'Locations beyond the plan’s managed set are not controlled by this app’s rules. Their settings are preserved — nothing was deleted — and upgrading adds them back to coverage.',
+            }),
+            el('p', { class: 'disclosure', 'data-testid': 'editor-ordering-note', text: COVERAGE_ORDERING_NOTE }),
+            ...(cta ? [cta] : []),
+          ),
+        );
+      }
+    } else if (entitlement.status === 'na') {
+      nodes.push(
+        el('p', {
+          role: 'status',
+          'aria-live': 'polite',
+          'data-testid': 'meter-na-notice',
+          text: METER_NA_NOTICE,
+        }),
+      );
+    } else if (entitlement.status === 'unavailable') {
+      nodes.push(
+        el('p', {
+          role: 'status',
+          'aria-live': 'polite',
+          'data-testid': 'meter-error-notice',
+          text: `${entitlement.errorMessage ?? 'Usage information could not be loaded.'} The editor stays fully editable.`,
+        }),
+      );
+    }
+    return nodes;
+  }
 
   function statusRegion(state) {
     const messages = [];
@@ -169,12 +402,31 @@ export function renderRulesEditorPage(options) {
     return container;
   }
 
-  function windowRow(scopeType, scopeId, weekday, index, row) {
+  /**
+   * One weekly-window row. `ctx` carries the entitlement restriction
+   * context (DASH-C5-1): for a location OUTSIDE the plan's covered set the
+   * row's time inputs are disabled (existing configuration stays rendered
+   * read-only, never deleted) and new rows cannot be added. Anti-trap rule:
+   * a row that currently contributes a validation issue (its own path, or a
+   * bucket-level issue such as an overlap, which does not identify the
+   * offending pair) keeps its Remove control enabled so the editor can
+   * always reach a clean, reviewable state; only valid existing
+   * configuration has no deletion path.
+   */
+  function windowRow(scopeType, scopeId, weekday, index, row, ctx) {
+    const restricted = scopeType === 'location' && locationIsRestricted(ctx, scopeId);
+    const rowPath = `${scopeType}s.${scopeId}.${weekday}[${index}]`;
+    const bucketPath = `${scopeType}s.${scopeId}.${weekday}`;
+    const rowContributesIssue = ctx.issuePaths.has(rowPath) || ctx.issuePaths.has(bucketPath);
+    const lockRemove = restricted && !rowContributesIssue;
+    const inputLockTitle = restricted ? READONLY_LOCK_TITLE : undefined;
     const rowNode = el('li', { 'data-testid': `window-row-${scopeType}-${scopeId}-${weekday}-${index}` });
     const startInput = el('input', {
       type: 'text',
       value: row.start ?? '',
       placeholder: 'HH:MM',
+      disabled: restricted,
+      title: inputLockTitle,
       'data-testid': `window-start-${scopeType}-${scopeId}-${weekday}-${index}`,
       'aria-label': `${scopeLabel(scopeType)} ${scopeId}, ${weekday}, window ${index + 1} start time`,
       onchange: (event) => {
@@ -192,6 +444,8 @@ export function renderRulesEditorPage(options) {
       type: 'text',
       value: row.end ?? '',
       placeholder: 'HH:MM',
+      disabled: restricted,
+      title: inputLockTitle,
       'data-testid': `window-end-${scopeType}-${scopeId}-${weekday}-${index}`,
       'aria-label': `${scopeLabel(scopeType)} ${scopeId}, ${weekday}, window ${index + 1} end time`,
       onchange: (event) => {
@@ -216,6 +470,8 @@ export function renderRulesEditorPage(options) {
           type: 'button',
           'data-testid': `window-remove-${scopeType}-${scopeId}-${weekday}-${index}`,
           'aria-label': `Remove ${weekday} window ${index + 1} for ${scopeLabel(scopeType)} ${scopeId}`,
+          disabled: lockRemove,
+          title: lockRemove ? REMOVE_LOCK_TITLE : undefined,
           onClick: () =>
             store.dispatch({ type: 'REMOVE_WEEK_WINDOW', scopeType, scopeId, weekday, index }),
         },
@@ -225,7 +481,7 @@ export function renderRulesEditorPage(options) {
     return rowNode;
   }
 
-  function windowsSection(scopeType, scopes, catalog) {
+  function windowsSection(scopeType, scopes, catalog, ctx) {
     const section = el(
       'section',
       { 'data-testid': `${scopeType}-windows-section`, 'aria-label': `${scopeLabel(scopeType)} booking hours` },
@@ -248,11 +504,32 @@ export function renderRulesEditorPage(options) {
     }
     for (const entry of catalog) {
       const bucket = scopes[entry.id] ?? {};
+      const restricted = scopeType === 'location' && locationIsRestricted(ctx, entry.id);
       const scopeBlock = el(
         'fieldset',
         { 'data-testid': `${scopeType}-scope-${entry.id}` },
         el('legend', { text: `${scopeLabel(scopeType)}: ${entry.label} (${entry.id})` }),
       );
+      if (restricted) {
+        // DASH-C5-1: visible plan restriction for NEW rule configuration.
+        // The note carries the stable-ordering phrase pinned by Contract §7
+        // ("default location first, then alphabetical") and the §7
+        // nothing-deleted reassurance for the read-only existing config.
+        scopeBlock.append(
+          el('span', {
+            class: 'coverage-badge',
+            'data-testid': `coverage-badge-${entry.id}`,
+            text: COVERAGE_BADGE,
+          }),
+          el(
+            'div',
+            { class: 'coverage-note', 'data-testid': `coverage-note-${entry.id}` },
+            el('p', { text: RESTRICTION_NOTE_MANAGED }),
+            el('p', { text: RESTRICTION_NOTE_PRESERVED }),
+            el('p', { text: COVERAGE_ORDERING_NOTE }),
+          ),
+        );
+      }
       for (const weekday of WEEKDAYS) {
         const rows = Array.isArray(bucket[weekday]) ? bucket[weekday] : [];
         const dayBlock = el(
@@ -261,7 +538,7 @@ export function renderRulesEditorPage(options) {
           el('h4', { text: weekday }),
         );
         const list = el('ul', { class: 'window-rows' });
-        rows.forEach((row, index) => list.append(windowRow(scopeType, entry.id, weekday, index, row)));
+        rows.forEach((row, index) => list.append(windowRow(scopeType, entry.id, weekday, index, row, ctx)));
         dayBlock.append(list);
         dayBlock.append(
           el(
@@ -269,6 +546,8 @@ export function renderRulesEditorPage(options) {
             {
               type: 'button',
               'data-testid': `add-window-${scopeType}-${entry.id}-${weekday}`,
+              disabled: restricted,
+              title: restricted ? NEW_RULES_LOCK_TITLE : undefined,
               onClick: () =>
                 store.dispatch({ type: 'ADD_WEEK_WINDOW', scopeType, scopeId: entry.id, weekday }),
             },
@@ -437,12 +716,14 @@ export function renderRulesEditorPage(options) {
     return section;
   }
 
-  function limitInput(dimension, targetId, current) {
+  function limitInput(dimension, targetId, current, lock = false) {
     return el('input', {
       type: 'text',
       inputmode: 'numeric',
       value: current === null || current === undefined ? '' : String(current),
       placeholder: 'No limit',
+      disabled: lock === true,
+      title: lock === true ? READONLY_LOCK_TITLE : undefined,
       'aria-label':
         targetId
           ? `Maximum bookings per ${dimension.toLowerCase()}${dimension !== 'DAY' ? ` for ${targetId}` : ''}`
@@ -458,7 +739,7 @@ export function renderRulesEditorPage(options) {
     });
   }
 
-  function capsSection(draft) {
+  function capsSection(draft, ctx) {
     const findLimit = (dimension, targetId) => {
       const found = draft.limits.find(
         (l) => l.dimension === dimension && (l.targetId ?? null) === (targetId ?? null),
@@ -494,12 +775,18 @@ export function renderRulesEditorPage(options) {
     if (options.locations && options.locations.length > 0) {
       const locationBlock = el('fieldset', { 'data-testid': 'cap-location-block' }, el('legend', { text: 'Per-location limits' }));
       for (const location of options.locations) {
+        // DASH-C5-1: a per-location cap is rule configuration for that
+        // location, so it locks under restriction too. Same anti-trap rule
+        // as window rows: a limit whose current value contributes a
+        // validation issue stays correctable.
+        const restricted = locationIsRestricted(ctx, location.id);
+        const lock = restricted && !ctx.issuePaths.has(`limits.LOCATION.${location.id}`);
         locationBlock.append(
           el(
             'div',
             {},
             el('label', { text: `${location.label} (${location.id})` }),
-            limitInput('LOCATION', location.id, findLimit('LOCATION', location.id)),
+            limitInput('LOCATION', location.id, findLimit('LOCATION', location.id), lock),
           ),
         );
       }
@@ -815,12 +1102,18 @@ export function renderRulesEditorPage(options) {
   function renderDynamic() {
     const state = store.getState();
     const draft = state.draft;
+    // Validation-issue paths drive the DASH-C5-1 anti-trap rule: controls
+    // whose current value contributes an issue stay correctable even under
+    // restriction, so the editor can always reach a clean reviewable state.
+    const issuePaths = new Set(state.issues.map((issueEntry) => issueEntry.path));
+    const ctx = entitlementContext(issuePaths);
     dynamic.replaceChildren(
+      ...entitlementRegion(),
       issuesRegion(state),
-      windowsSection('location', draft.locationWindows ?? {}, options.locations ?? []),
-      windowsSection('service', draft.serviceWindows ?? {}, options.services ?? []),
+      windowsSection('location', draft.locationWindows ?? {}, options.locations ?? [], ctx),
+      windowsSection('service', draft.serviceWindows ?? {}, options.services ?? [], ctx),
       exceptionsSection(draft),
-      capsSection(draft),
+      capsSection(draft, ctx),
       renderExplainPanel(options.explanations ?? [], { document: doc }),
       statusRegion(state),
       recoveryRegion(state),
@@ -831,9 +1124,20 @@ export function renderRulesEditorPage(options) {
 
   const unsubscribe = store.subscribe(() => renderDynamic());
   renderDynamic();
+  // Entitlement meter loads in the background (DASH-C5-1); the editor is
+  // fully interactive from the first paint regardless of the outcome.
+  void loadEntitlementMeter();
 
   return {
     root,
+    /**
+     * Host-facing refresh seam (e.g. returning from the upgrade tab):
+     * re-reads the entitlement meter through the same guarded path as the
+     * initial load; concurrent calls collapse into one bridge request.
+     */
+    reload() {
+      void loadEntitlementMeter();
+    },
     destroy() {
       destroyed = true;
       unsubscribe();

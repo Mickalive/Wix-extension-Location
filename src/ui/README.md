@@ -11,7 +11,7 @@ this cycle ships real, tested UI structure and behavior instead of a mockup.
 | Path | Role |
 |---|---|
 | `dom/kit.js` | Tiny DOM abstraction standing in for the deferred React mount; product code receives its document via options, never reads globals. |
-| `pages/rulesEditorPage.js` | Page assembly: windows by location/service, split rows, exceptions, caps, issues, statuses, actions. |
+| `pages/rulesEditorPage.js` | Page assembly: windows by location/service, split rows, exceptions, caps, issues, statuses, actions; plus the §7 management-side entitlement restriction (DASH-C5-1, decision 9). |
 | `pages/locationsUsagePage.js` | Billable-location meter page (DASH-C4-1a): count vs plan allowance, over-limit state, persistent degraded banner, floor note, upgrade CTA. |
 | `upgrade/upgradeUrl.js` | Dashboard-lane mirror of the contracted Contract §7 upgrade URL builder (see decisions below). |
 | `modals/diffPreviewModal.js` | Contract §9.2 informed-consent dialog. |
@@ -99,6 +99,43 @@ this cycle ships real, tested UI structure and behavior instead of a mockup.
    The parity ledger constraint is respected: `ruleDraftValidators.js` is
    byte-for-byte unchanged; R1–R4 decisions of record apply only at the future
    mirror repoint.
+9. **Management-side entitlement restriction in the editor (DASH-C5-1;
+   Contract §7 "restrict rule management/enforcement coverage to the plan
+   allowance"; Blueprint §4 flow 5).** `pages/rulesEditorPage.js` loads the
+   billable-location meter once at open through the typed bridge method
+   `getEntitlementMeter()` (pinned v1 DTO consumed verbatim — no DTO changes)
+   and exposes a host-facing `reload()` seam with the same in-flight guard.
+   Behavior contract:
+   - **Healthy coverage:** locations OUTSIDE `coverage.allowedLocationIds`
+     are visibly restricted for NEW rule configuration — a per-scope badge +
+     note (carrying the stable-ordering phrase "default location first, then
+     alphabetical"), disabled add-window buttons, read-only window inputs,
+     and a locked per-location limit input. EXISTING configuration for those
+     locations stays rendered read-only and is NEVER deleted or silently
+     dropped: valid rows have no deletion path (Remove disabled) and the
+     draft is never rewritten by the page.
+   - **Anti-trap corollary:** any control whose current value contributes a
+     validation issue (row path, bucket-level path such as an overlap, or
+     `limits.LOCATION.<id>`) stays correctable/removable under restriction,
+     so plan restriction can never trap the editor in a permanently invalid
+     draft. Restriction is a plan boundary, not a brick wall.
+   - **Degraded coverage fails OPEN exactly like enforcement (C5):** when
+     `coverage.degraded` is true the covered-location list is not trusted for
+     restriction (enforcement covers everything while failing open), so the
+     editor shows the persistent warning and restricts nobody off that list.
+   - **`meter.degraded`** renders the persistent fail-open warning banner
+     (`role="alert"`) inside the editor too — warn, never brick editing.
+   - **`coverage.overLimit`** surfaces the Contract §7 upgrade CTA (exact
+     `buildUpgradeUrl` contract URL, `target="_blank"`, `rel="noopener
+     noreferrer"`) alongside the Locations usage page. Identifiers are
+     host-injected via `options.upgrade` and never fabricated: without valid
+     ones the over-limit section still renders but no link can.
+   - **404/null meter** (endpoint may be absent pre-integration of newer
+     platform code) degrades to today's unrestricted editor behind a
+     non-blocking `role="status"` info notice; typed bridge failures behave
+     the same with honest wording. A bridge without the meter method (legacy
+     fakes/pre-meter builds) stays silently idle. Never a crash; late
+     resolutions after `destroy()` are dropped.
 
 ## Repair provenance (cycle 2, DASH-C2-1-REPAIR)
 

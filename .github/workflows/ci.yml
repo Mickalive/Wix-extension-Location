@@ -2,7 +2,7 @@ name: CI
 
 'on':
   push:
-    branches: ["lab/wix-rules"]
+    branches: ["main", "lab/wix-rules"]
   pull_request: {}
 
 permissions:
@@ -28,11 +28,12 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Verify constitution and workflow syntax
+      - name: Verify constitution, immutable roles and workflow syntax
         shell: bash
         run: |
           set -euo pipefail
           printf '%s  MAIN_PROMPT.md\n' "$MAIN_PROMPT_SHA256" | sha256sum --check --strict
+          sha256sum --check .opencode/job-descriptions/MANIFEST.sha256
           ruby -e 'require "yaml"; Dir[".github/workflows/*.{yml,yaml}"].each { |f| YAML.load_file(f); puts "valid yaml: #{f}" }'
 
       - name: Set up Node

@@ -1,0 +1,35 @@
+name: Wix Basic App AutoFlow Inspect
+
+on:
+  push:
+    branches: [main]
+    paths: [".github/workflows/wix-basic-autoflow-inspect.yml"]
+
+permissions:
+  contents: read
+
+jobs:
+  inspect:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 6
+    steps:
+      - uses: actions/setup-node@ae0d4ed08881f17d1511386f5be3e62356acd4a6
+        with:
+          node-version: 22.13.0
+      - name: Inspect command options and AutoFlow
+        shell: bash
+        run: |
+          set -euo pipefail
+          d=$(mktemp -d); cd "$d"
+          tgz=$(npm pack @wix/create-new@0.0.105 --silent); tar -xzf "$tgz"
+          f=package/build/index.js
+          for pat in 'parse-command-options' 'AutoFlow' 'templateFromOptions' 'appName' 'template:' 'extendAppId' 'mcpConfig'; do
+            echo "=== HITS $pat ==="
+            grep -nF "$pat" "$f" | head -30 || true
+          done
+          echo '=== OPTIONS AREA ==='
+          sed -n '80920,81190p' "$f"
+          echo '=== AUTOFLOW AREA ==='
+          sed -n '82580,82780p' "$f"
+          echo '=== APP COMMAND ENTRY AREA ==='
+          sed -n '82800,83050p' "$f"

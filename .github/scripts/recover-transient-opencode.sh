@@ -6,6 +6,17 @@ repository="${GITHUB_REPOSITORY:?}"
 workflow="${WIX_LOOP_WORKFLOW:?WIX_LOOP_WORKFLOW is required}"
 summary_file="${GITHUB_STEP_SUMMARY:-/dev/null}"
 
+# Long-lived supervisors can overlap briefly during a handoff or workflow update.
+# Only the newest watchdog run is allowed to mutate Factory state; older supervisors
+# become read-only/no-op as soon as they refresh this script from main.
+if [[ -n "${GITHUB_RUN_ID:-}" ]]; then
+  latest_watchdog=$(gh run list --repo "$repository" --workflow wix-watchdog.yml --limit 1 --json databaseId --jq '.[0].databaseId // 0' 2>/dev/null || echo 0)
+  if [[ "$latest_watchdog" =~ ^[0-9]+$ ]] && (( latest_watchdog > 0 )) && [[ "$GITHUB_RUN_ID" != "$latest_watchdog" ]]; then
+    echo "Supervisor run $GITHUB_RUN_ID is superseded by watchdog $latest_watchdog; no mutation this tick." >>"$summary_file"
+    exit 0
+  fi
+fi
+
 runs=$(gh run list --repo "$repository" --workflow "$workflow" --limit 30 \
   --json databaseId,status,conclusion,createdAt,url)
 
@@ -81,15 +92,12 @@ while IFS= read -r encoded_job; do
   log_file="$tmp_dir/$job_id.log"
 
   if ! gh run view "$run_id" --repo "$repository" --job "$job_id" --log >"$log_file" 2>&1; then
-    # Missing logs or runner/bootstrap failures are retryable infrastructure, not product defects.
     infra_jobs+=("$job_name")
     continue
   fi
 
   explicit_permanent=false
-  if grep -Eqi "$permanent_pattern" "$log_file"; then
-    explicit_permanent=true
-  fi
+  if grep -Eqi "$permanent_pattern" "$log_file"; then explicit_permanent=true; fi
 
   if grep -Fq 'WIX_OPENCODE_FAILURE_KIND=transient' "$log_file"; then
     transient_jobs+=("$job_name")
@@ -103,17 +111,12 @@ while IFS= read -r encoded_job; do
   elif grep -Eqi "couldn't find remote ref cycle/wix-build/|candidate branch found=false|candidate_found=false|missing candidate snapshot" "$log_file"; then
     dependent_jobs+=("$job_name")
   elif grep -Eqi "$governance_pattern" "$log_file"; then
-    # Fail closed. Product agents are never allowed to weaken or rewrite safety/governance.
     governance_jobs+=("$job_name")
   elif [[ "$explicit_permanent" == true ]] && grep -Fq 'WIX_OPENCODE_FAILURE_KIND=permanent' "$log_file"; then
-    # Authentication/model/permission/configuration prerequisites cannot be repaired by product code.
     external_jobs+=("$job_name")
   elif grep -Fq 'WIX_OPENCODE_FAILURE_KIND=permanent' "$log_file"; then
-    # Unknown OpenCode failures get periodic re-invocation rather than being mistaken for product defects.
     transient_jobs+=("$job_name (unclassified OpenCode failure)")
   else
-    # A deterministic/code/test/build/audit failure is product evidence. Do not replay the same
-    # immutable candidate forever: start a fresh repair cycle and feed the failure back to builders.
     repairable_jobs+=("$job_name")
     append_repair_excerpt "$job_name" "$log_file"
   fi
@@ -122,20 +125,16 @@ done < <(jq -r '.[] | @base64' <<<"$failed_jobs")
 transient_count=$(( ${#transient_jobs[@]} + ${#infra_jobs[@]} ))
 repairable_count=${#repairable_jobs[@]}
 
-# Root provider/runner outage: replay the failed jobs of the same immutable run.
-# Dependent failures are expected to replay automatically with their repaired prerequisites.
 if (( transient_count > 0 && repairable_count == 0 && ${#external_jobs[@]} == 0 && ${#governance_jobs[@]} == 0 )); then
   old_attempt=$(gh api "repos/$repository/actions/runs/$run_id" --jq '.run_attempt')
   gh api --method POST "repos/$repository/actions/runs/$run_id/rerun-failed-jobs" >/dev/null
 
   new_attempt=$((old_attempt + 1))
-  confirmed=false
   for _ in {1..15}; do
     state=$(gh api "repos/$repository/actions/runs/$run_id" --jq '[.status, .run_attempt] | @tsv')
     IFS=$'\t' read -r status observed_attempt <<<"$state"
     if [[ "$status" != completed || "$observed_attempt" -gt "$old_attempt" ]]; then
       new_attempt="$observed_attempt"
-      confirmed=true
       break
     fi
     sleep 2
@@ -147,7 +146,6 @@ if (( transient_count > 0 && repairable_count == 0 && ${#external_jobs[@]} == 0 
     echo "### Wix autonomous recovery"
     echo
     echo "Transient recovery triggered: $run_url"
-    echo
     echo "- GitHub attempt: $old_attempt -> $new_attempt"
     echo "- transient OX: ${transient_list:-none}"
     echo "- runner/bootstrap: ${infra_list:-none}"
@@ -155,8 +153,6 @@ if (( transient_count > 0 && repairable_count == 0 && ${#external_jobs[@]} == 0 
   exit 0
 fi
 
-# Product/candidate/deterministic failures must create new information, not merely replay the
-# same broken snapshot. Start a fresh Factory repair cycle from the last accepted product state.
 if (( repairable_count > 0 && ${#external_jobs[@]} == 0 && ${#governance_jobs[@]} == 0 )); then
   state_b64=$(gh api "repos/$repository/contents/docs/state.json?ref=lab/wix-rules" --jq '.content')
   current=$(printf '%s' "$state_b64" | tr -d '\n' | base64 -d | jq -r '.cycle // 0')
@@ -172,18 +168,14 @@ Failure evidence:
 $excerpts
 EOF
 )
-  # GitHub workflow inputs have practical size limits; keep the repair packet compact.
   note=$(printf '%s' "$note" | head -c 8000)
   gh workflow run "$workflow" --repo "$repository" --ref main \
-    -f cycle_index="$next" \
-    -f max_cycles="0" \
-    -f human_note="$note"
+    -f cycle_index="$next" -f max_cycles="0" -f human_note="$note"
 
   {
     echo "### Wix autonomous product repair"
     echo
     echo "Fresh repair cycle dispatched from accepted state."
-    echo
     echo "- source failure: $run_url"
     echo "- repair jobs: $repair_list"
     echo "- accepted-state cycle -> dispatched cycle: $current -> $next"
@@ -191,8 +183,6 @@ EOF
   exit 0
 fi
 
-# A trusted factory must fail closed on security/governance or true account/auth prerequisites.
-# It must not 'repair' those by deleting controls or broadening permissions.
 external_list=$(IFS=', '; echo "${external_jobs[*]:-}")
 governance_list=$(IFS=', '; echo "${governance_jobs[*]:-}")
 repair_list=$(IFS=', '; echo "${repairable_jobs[*]:-}")
@@ -200,7 +190,6 @@ repair_list=$(IFS=', '; echo "${repairable_jobs[*]:-}")
   echo "### Wix autonomous recovery — fail-closed"
   echo
   echo "No unsafe automatic mutation was attempted for $run_url."
-  echo
   echo "- genuine auth/model/account prerequisites: ${external_list:-none}"
   echo "- governance/safety integrity failures: ${governance_list:-none}"
   echo "- product-repair candidates blocked by the above: ${repair_list:-none}"

@@ -16,18 +16,24 @@ jobs:
       - uses: actions/setup-node@ae0d4ed08881f17d1511386f5be3e62356acd4a6
         with:
           node-version: 22.13.0
-      - name: Inspect app-project discovery APIs
+      - name: Inspect AppsService filter contracts
         shell: bash
         run: |
           set -euo pipefail
-          d=$(mktemp -d); cd "$d"
-          tgz=$(npm pack @wix/create-new@0.0.105 --silent); tar -xzf "$tgz"
-          f=package/build/index.js
-          echo '=== APP PROJECT HTTP FUNCTIONS ==='
-          grep -n -B15 -A40 -Ei 'queryAppProject|listAppProject|searchAppProject|app-projects/query|app-project/query|listProjects|queryProjects' "$f" | head -700 || true
-          echo '=== BACKEND AS A SERVICE CLIENT ==='
-          grep -n 'var BackendAsAServiceClient = class\|class BackendAsAServiceClient' "$f" | head -10 || true
-          n=$(grep -n 'var BackendAsAServiceClient = class\|class BackendAsAServiceClient' "$f" | head -1 | cut -d: -f1)
-          if [[ -n "$n" ]]; then start=$((n-30)); end=$((n+360)); sed -n "${start},${end}p" "$f"; fi
-          echo '=== APP PROJECT ROUTES ==='
-          grep -n -B8 -A20 -Ei 'appProjectId|app-project|app_project|AppProject' "$f" | grep -E 'url:|protoPath:|methodFqn:|function |var .* = class|getAppProject|createAppProject|query|list' | head -700 || true
+          d=$(mktemp -d)
+          npm install --prefix "$d" --no-audit --no-fund --ignore-scripts @wix/create-new@0.0.105 >/dev/null
+          pkg="$d/node_modules/@wix/ambassador-devcenter-apps-v1-app"
+          test -d "$pkg"
+          echo '=== PACKAGE VERSION ==='
+          node -e 'const p=require(process.argv[1]); console.log(p.version)' "$pkg/package.json"
+          echo '=== FILES ==='
+          find "$pkg" -maxdepth 4 -type f | sort | head -220
+          echo '=== QUERY CONTRACT HITS ==='
+          grep -RniE 'QueryApp|queryApp|filterable|filter.*field|createdDate|updatedDate|codeIdentifier|namespace' "$pkg" --exclude='*.map' | head -800 || true
+          echo '=== TYPES / DESCRIPTORS ==='
+          for f in $(find "$pkg" -type f \( -name '*.d.ts' -o -name '*.proto' -o -name '*.json' \) | sort); do
+            if grep -qiE 'QueryApp|createdDate|codeIdentifier|namespace' "$f"; then
+              echo "--- $f ---"
+              grep -ni -B12 -A45 -E 'QueryApp|createdDate|updatedDate|codeIdentifier|namespace' "$f" | head -260 || true
+            fi
+          done

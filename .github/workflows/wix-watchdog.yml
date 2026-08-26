@@ -76,7 +76,7 @@ jobs:
           echo "Preserved runs: $kept"
 
   launch:
-    name: Launch corrected Product Factory v2
+    name: Launch Product Factory from accepted state
     if: ${{ github.event_name == 'push' }}
     needs: cleanup
     runs-on: ubuntu-24.04

@@ -16,13 +16,18 @@ jobs:
       - uses: actions/setup-node@ae0d4ed08881f17d1511386f5be3e62356acd4a6
         with:
           node-version: 22.13.0
-      - name: Inspect public Dev Center client methods
+      - name: Inspect public Dev Center client package
         shell: bash
         run: |
-          set -euo pipefail
+          set -u
           d=$(mktemp -d)
           cd "$d"
           npm pack @wix/dev-center-client --silent >/tmp/pkgname
           pkg=$(cat /tmp/pkgname)
           tar -xzf "$pkg"
-          grep -RniE 'list[A-Za-z]*Apps|query[A-Za-z]*Apps|get[A-Za-z]*Apps|appDef|appId|custom apps|owned apps' package 2>/dev/null | head -n 300
+          echo '--- files ---'
+          find package -maxdepth 4 -type f | sort | head -n 200
+          echo '--- create method context ---'
+          grep -Rni 'createAppFromTemplate' package 2>/dev/null | head -n 50 || true
+          echo '--- declarations / methods ---'
+          grep -RniE 'class DevCenterClient|AppFromTemplate|Apps\(|App\(' package 2>/dev/null | head -n 300 || true

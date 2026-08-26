@@ -16,18 +16,20 @@ jobs:
       - uses: actions/setup-node@ae0d4ed08881f17d1511386f5be3e62356acd4a6
         with:
           node-version: 22.13.0
-      - name: Inspect public Dev Center client package
+      - name: Inspect installed Wix creator internals
         shell: bash
         run: |
           set -u
           d=$(mktemp -d)
           cd "$d"
-          npm pack @wix/dev-center-client --silent >/tmp/pkgname
-          pkg=$(cat /tmp/pkgname)
-          tar -xzf "$pkg"
-          echo '--- files ---'
-          find package -maxdepth 4 -type f | sort | head -n 200
-          echo '--- create method context ---'
-          grep -Rni 'createAppFromTemplate' package 2>/dev/null | head -n 50 || true
-          echo '--- declarations / methods ---'
-          grep -RniE 'class DevCenterClient|AppFromTemplate|Apps\(|App\(' package 2>/dev/null | head -n 300 || true
+          npm init -y >/dev/null 2>&1
+          npm install --ignore-scripts --no-audit --no-fund @wix/create-new@0.0.105 >/dev/null 2>&1 || true
+          echo '--- dev-center-client files ---'
+          find node_modules/@wix/dev-center-client -maxdepth 4 -type f 2>/dev/null | sort | head -n 200 || true
+          echo '--- createAppFromTemplate ---'
+          grep -Rni -C 8 'createAppFromTemplate' node_modules/@wix 2>/dev/null | head -n 300 || true
+          echo '--- wix config writers ---'
+          grep -Rni -C 6 -E 'wix\.config\.json|projectId|projectType|appId' node_modules/@wix/create-new-packages node_modules/@wix/dev-center-client 2>/dev/null | head -n 600 || true
+          echo '--- possible app lookup methods/endpoints ---'
+          grep -Rni -C 4 -E 'list.*app|query.*app|get.*app|my-app|app-def|app-definitions|dev-center.*app' node_modules/@wix/dev-center-client node_modules/@wix/create-new-packages 2>/dev/null | head -n 600 || true
+          exit 0

@@ -16,22 +16,20 @@ jobs:
       - uses: actions/setup-node@ae0d4ed08881f17d1511386f5be3e62356acd4a6
         with:
           node-version: 22.13.0
-      - name: Inspect actual Wix creator dependency layout
+      - name: Inspect exact DevCenter client
         shell: bash
         run: |
           set -u
           d=$(mktemp -d)
           cd "$d"
           npm init -y >/dev/null 2>&1
-          npm install --ignore-scripts --no-audit --no-fund @wix/create-new@0.0.105
-          echo '--- package tree ---'
-          npm ls --all 2>&1 | head -n 500 || true
-          echo '--- wix package paths ---'
-          find node_modules -path '*@wix*' -type f 2>/dev/null | head -n 600 || true
-          echo '--- dev-center-client hits anywhere ---'
-          find node_modules -type f \( -name 'dev-center-client.js' -o -name 'dev-center-client.d.ts' -o -name 'dev-center-client.ts' \) -print 2>/dev/null | head -n 100 || true
-          echo '--- createAppFromTemplate hits ---'
-          grep -Rni -C 12 'createAppFromTemplate' node_modules 2>/dev/null | head -n 500 || true
-          echo '--- app template service endpoints ---'
-          grep -Rni -C 8 -E 'app-templates-service|createAppFromTemplate|getAppInfo|app-definitions|dev-center' node_modules 2>/dev/null | head -n 1000 || true
+          npm install --ignore-scripts --no-audit --no-fund @wix/create-new@0.0.105 >/dev/null 2>&1
+          echo '--- dependency resolution ---'
+          npm ls @wix/dev-center-client --all 2>&1 || true
+          echo '--- exact files ---'
+          find node_modules -type f -path '*/@wix/dev-center-client/*' -print 2>/dev/null | head -n 100 || true
+          echo '--- createAppFromTemplate only ---'
+          grep -Rni -C 15 'createAppFromTemplate' node_modules/@wix node_modules/.pnpm 2>/dev/null | head -n 300 || true
+          echo '--- app lookup method names only ---'
+          grep -RniE 'getAppInfo|list[A-Za-z]*Apps|query[A-Za-z]*Apps|search[A-Za-z]*Apps|app-definitions|app-templates-service' node_modules/@wix node_modules/.pnpm 2>/dev/null | head -n 400 || true
           exit 0

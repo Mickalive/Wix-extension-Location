@@ -80,43 +80,18 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-
-          # wix login persists the account context locally. Read only accountId;
-          # never print or persist the token/auth store.
-          ACCOUNT_ID=$(node <<'NODE'
-          const fs = require('fs');
-          const path = require('path');
-          const os = require('os');
-          const roots = [path.join(os.homedir(), '.wix'), path.join(os.homedir(), '.config')];
-          const seen = new Set();
-          function walk(p, depth=0) {
-            if (depth > 5 || !fs.existsSync(p)) return;
-            let st; try { st = fs.statSync(p); } catch { return; }
-            if (st.isDirectory()) {
-              let xs=[]; try { xs=fs.readdirSync(p); } catch { return; }
-              for (const x of xs) walk(path.join(p,x), depth+1);
-              return;
-            }
-            if (st.size > 1024*1024) return;
-            let s; try { s=fs.readFileSync(p,'utf8'); } catch { return; }
-            for (const m of s.matchAll(/"accountId"\s*:\s*"([^"]+)"/g)) seen.add(m[1]);
-          }
-          roots.forEach(r => walk(r));
-          if (seen.size !== 1) process.exit(2);
-          process.stdout.write([...seen][0]);
-          NODE
-          ) || { echo "::error::Unable to resolve a unique Wix account context after successful login."; exit 1; }
-          test -n "$ACCOUNT_ID"
+          ACCOUNT_ID=$(jq -r '.accountId // .payload.accountId // empty' "$HOME/.wix/auth/api-key.json")
+          test -n "$ACCOUNT_ID" || { echo "::error::Wix login succeeded but accountId is absent from the API-key auth state."; exit 1; }
 
           body='{"query":{"paging":{"limit":500},"sort":[{"fieldName":"updatedDate","order":"DESC"}]}}'
           code=$(curl -sS -o /tmp/my-apps.json -w '%{http_code}' \
-            -X POST 'https://www.wixapis.com/v1/my-apps/query' \
+            -X POST 'https://manage.wix.com/v1/my-apps/query' \
             -H "Authorization: $WIX_API_KEY" \
             -H "wix-account-id: $ACCOUNT_ID" \
             -H 'Content-Type: application/json' \
             --data "$body")
           if [[ "$code" != 2* ]]; then
-            echo "::error::Wix QueryMyApps failed with HTTP $code."
+            echo "::error::Wix QueryMyApps failed with HTTP $code on the backoffice host."
             jq -r '{message,details}' /tmp/my-apps.json 2>/dev/null || true
             rm -f /tmp/my-apps.json
             exit 1
@@ -153,9 +128,6 @@ jobs:
           test -d "$blank" || { echo "::error::Pinned Wix package has no blank local template."; exit 1; }
 
           cd "$work"
-          # These flags are supported by the pinned Wix package itself. extend-app-id
-          # prevents registration of a duplicate app; template-path + app-name drive
-          # Wix's AutoFlow, and skip-git avoids the generator's irrelevant local commit.
           timeout 420s npm exec --yes --package=@wix/create-new@0.0.105 -- create-new app \
             --extend-app-id "$APP_ID" \
             --app-name "Advanced Booking Rules" \

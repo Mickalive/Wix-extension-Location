@@ -1,0 +1,164 @@
+name: One-shot V2 Recovery
+
+on:
+  push:
+    branches: [main]
+    paths: [".github/workflows/one-shot-v2-recovery.yml"]
+
+permissions:
+  contents: write
+  actions: write
+
+concurrency:
+  group: wix-one-shot-v2-recovery
+  cancel-in-progress: false
+
+jobs:
+  recover:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      BASE_SHA: fd480aadb3e9b980492f5ccd2a1c3f5efe7926dd
+      PREVIEW_SHA: fb4a9ac3b62dbb63283209dc4ffc449ef6027586
+      SOURCE_RUN: "32915633541"
+      LANE_BRANCH: lab/wix-rules
+    steps:
+      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+        with:
+          fetch-depth: 0
+          ref: main
+          persist-credentials: false
+
+      - name: Patch control-plane bug and retire this one-shot workflow
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          p=Path('.github/workflows/wix-build-loop.yml')
+          s=p.read_text()
+          old="jq -e '.gates|type==\"object\" and all(.gates[]; .status==\"OPEN\" or .status==\"PROVEN\" or .status==\"BLOCKED_EXTERNAL\")' docs/PRODUCT_GATES.json >/dev/null"
+          new="jq -e '(.gates|type==\"object\") and all(.gates[]; .status==\"OPEN\" or .status==\"PROVEN\" or .status==\"BLOCKED_EXTERNAL\")' docs/PRODUCT_GATES.json >/dev/null"
+          if old not in s:
+              raise SystemExit('expected Director gate validator expression not found')
+          s=s.replace(old,new,1)
+          s=s.replace('The integrated product has no real `wix.config.json`. It is not yet registered as a testable Wix CLI app, so empirical Wix/dev-site claims cannot be made.',
+                      'The integrated product has no real wix.config.json. It is not yet registered as a testable Wix CLI app, so empirical Wix/dev-site claims cannot be made.')
+          p.write_text(s)
+          PY
+          rm .github/workflows/one-shot-v2-recovery.yml
+          ruby -e 'require "yaml"; YAML.load_file(".github/workflows/wix-build-loop.yml")'
+          git config user.name wix-v2-recovery
+          git config user.email wix-v2-recovery@users.noreply.github.com
+          git add .github/workflows/wix-build-loop.yml .github/workflows/one-shot-v2-recovery.yml
+          git commit -m "factory v2: fix Director gate validator"
+          auth=$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)
+          git -c "http.extraheader=AUTHORIZATION: basic $auth" push origin HEAD:main
+
+      - name: Recover exactly the accepted cycle-6 preview and current governance
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          auth=$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)
+          git -c "http.extraheader=AUTHORIZATION: basic $auth" fetch origin \
+            "$LANE_BRANCH:refs/remotes/origin/$LANE_BRANCH" \
+            "cycle/wix-build/$SOURCE_RUN/preview:refs/remotes/origin/cycle/wix-build/$SOURCE_RUN/preview" \
+            "cycle/wix-build/$SOURCE_RUN/audit-integrated:refs/remotes/origin/cycle/wix-build/$SOURCE_RUN/audit-integrated" \
+            "cycle/wix-build/$SOURCE_RUN/audit-wix-live:refs/remotes/origin/cycle/wix-build/$SOURCE_RUN/audit-wix-live"
+          test "$(git rev-parse origin/$LANE_BRANCH)" = "$BASE_SHA"
+          test "$(git rev-parse origin/cycle/wix-build/$SOURCE_RUN/preview)" = "$PREVIEW_SHA"
+          test "$(git merge-base "$BASE_SHA" "$PREVIEW_SHA")" = "$BASE_SHA"
+
+          git worktree add --detach /tmp/wix_recovered "$PREVIEW_SHA"
+
+          # Overlay the current immutable agent governance and the runtime pieces that OX actually loads.
+          rm -rf /tmp/wix_recovered/.opencode/agents /tmp/wix_recovered/.opencode/job-descriptions
+          mkdir -p /tmp/wix_recovered/.opencode/agents /tmp/wix_recovered/.opencode/job-descriptions
+          cp -a .opencode/agents/. /tmp/wix_recovered/.opencode/agents/
+          cp -a .opencode/job-descriptions/. /tmp/wix_recovered/.opencode/job-descriptions/
+          cp AGENTS.md /tmp/wix_recovered/AGENTS.md
+          mkdir -p /tmp/wix_recovered/.github/actions/setup-opencode /tmp/wix_recovered/.github/scripts
+          cp .github/actions/setup-opencode/action.yml /tmp/wix_recovered/.github/actions/setup-opencode/action.yml
+          cp .github/scripts/run-opencode-with-retry.sh /tmp/wix_recovered/.github/scripts/run-opencode-with-retry.sh
+
+          # Preserve the independent cross-lane and Wix Live evidence that lived on audit branches.
+          mkdir -p /tmp/wix_recovered/reports/audits /tmp/wix_recovered/reports/wix-live /tmp/wix_recovered/reports/director
+          git show "origin/cycle/wix-build/$SOURCE_RUN/audit-integrated:reports/audits/CYCLE_${SOURCE_RUN}_INTEGRATED.md" > "/tmp/wix_recovered/reports/audits/CYCLE_${SOURCE_RUN}_INTEGRATED.md"
+          git show "origin/cycle/wix-build/$SOURCE_RUN/audit-wix-live:reports/wix-live/CYCLE_${SOURCE_RUN}.md" > "/tmp/wix_recovered/reports/wix-live/CYCLE_${SOURCE_RUN}.md"
+
+          cat > /tmp/wix_recovered/docs/NEXT_CYCLE.json <<'JSON'
+          {
+            "cycle": 6,
+            "phase": "build",
+            "generated_by": "deterministic-recovery-of-director-plan",
+            "date": "2026-08-26",
+            "decision_record": "reports/wix-live/CYCLE_32915633541.md",
+            "authority": {"contract":"docs/WIX_TECHNICAL_CONTRACT.md","blueprint":"docs/BUILD_BLUEPRINT.md"},
+            "decision": "continue",
+            "objective": "Establish the supported real non-secret Wix CLI scaffold/registration required by the accepted Wix Live finding, without fabricating account-specific identifiers.",
+            "repair_lanes": ["integration"],
+            "lanes": {
+              "integration": {
+                "status": "active",
+                "task_id": "INT-C6-R1",
+                "task": "Establish the supported non-secret unified Wix CLI app scaffold and registration surface. Create the real documented project/scaffold files including wix.config.json only where values are derivable without secrets or fabricated account identifiers; add the platform registration module required by the Blueprint; wire the documented Bookings validation-extension registration shape; record any account-authenticated value that cannot be derived in CI as an explicit live prerequisite rather than inventing it. Keep all existing accepted product behavior intact.",
+                "why_needed": "Cycle 6 passed all lane audits, deterministic preview checks and independent cross-lane audit, but Wix Live QA returned FIX_BEFORE_INTEGRATION because no real wix.config.json exists and the product is not yet registered as a testable Wix CLI app.",
+                "source_evidence": ["reports/wix-live/CYCLE_32915633541.md","reports/audits/CYCLE_32915633541_INTEGRATED.md","docs/runbooks/T_VP0_SCAFFOLD.md","docs/WIX_TECHNICAL_CONTRACT.md","docs/BUILD_BLUEPRINT.md"],
+                "acceptance_criteria": ["npm ci --ignore-scripts --no-audit --no-fund && npm run check && npm run build pass","wix.config.json and registration files contain no secrets and no fabricated Wix/account/site identifiers","the real Wix Live job reaches authentication/build/dev-site probing instead of the missing-scaffold branch, or returns a narrowly evidenced BLOCKED_EXTERNAL prerequisite","existing accepted domain/platform/dashboard/billing behavior remains green","fresh independent Integration audit ends VERDICT: ACCEPT"],
+                "out_of_scope": "publishing/releasing the app, broad account administration, fabricated IDs, unrelated feature work",
+                "blocker": null,
+                "completion_evidence": null
+              },
+              "rules": {"status":"complete","task":"","why_needed":"","source_evidence":[],"acceptance_criteria":[],"out_of_scope":null,"blocker":null,"completion_evidence":"Cycle 6 Rules candidate independently ACCEPT; accepted in preview fb4a9ac with full deterministic gate green."},
+              "dashboard": {"status":"complete","task":"","why_needed":"","source_evidence":[],"acceptance_criteria":[],"out_of_scope":null,"blocker":null,"completion_evidence":"Cycle 6 Dashboard candidate independently ACCEPT; accepted in preview fb4a9ac with full deterministic gate green."},
+              "billing": {"status":"complete","task":"","why_needed":"","source_evidence":[],"acceptance_criteria":[],"out_of_scope":null,"blocker":null,"completion_evidence":"Billing was already complete and its deterministic no-op audit ACCEPT in cycle 6."}
+            },
+            "critical_external_blocker": null
+          }
+          JSON
+          cat > /tmp/wix_recovered/docs/NEXT_CYCLE.md <<'MD'
+          # Next cycle — Wix real scaffold
+
+          Cycle 6 product changes were accepted by every lane audit, the deterministic preview gate, and the independent cross-lane audit. Wix Live then found one concrete blocker: the repository is not yet a real Wix CLI app because the supported scaffold/registration surface is absent.
+
+          Only Integration is active. It must establish the documented non-secret Wix CLI scaffold without fabricating account-specific identifiers. Rules, Dashboard and Billing stay complete unless new empirical Wix evidence falsifies them.
+          MD
+
+          # Conservative gate bootstrap: do not promote anything during recovery; the next Director may promote only from persisted evidence.
+          cat > /tmp/wix_recovered/docs/PRODUCT_GATES.json <<'JSON'
+          {"schema_version":1,"policy":"PROVEN requires concrete persisted evidence; human/Wix prerequisites may be BLOCKED_EXTERNAL.","gates":{"rules_domain":{"required":true,"status":"OPEN","evidence":[],"owner":"rules"},"dashboard_rule_editor":{"required":true,"status":"OPEN","evidence":[],"owner":"dashboard"},"booking_time_enforcement":{"required":true,"status":"OPEN","evidence":[],"owner":"integration"},"schedule_mutation_rollback_recovery":{"required":true,"status":"OPEN","evidence":[],"owner":"integration"},"billing_entitlement_reconciliation":{"required":true,"status":"OPEN","evidence":[],"owner":"billing"},"cross_lane_contract_parity":{"required":true,"status":"OPEN","evidence":[],"owner":"director"},"accessibility":{"required":true,"status":"OPEN","evidence":[],"owner":"dashboard"},"credential_free_build_and_tests":{"required":true,"status":"OPEN","evidence":[],"owner":"director"},"real_wix_scaffold_registration":{"required":true,"status":"OPEN","evidence":[],"owner":"integration"},"empirical_wix_validation":{"required":true,"status":"OPEN","evidence":[],"owner":"integration"},"real_wix_build_release":{"required":true,"status":"OPEN","evidence":[],"owner":"integration"}}}
+          JSON
+          [[ -f /tmp/wix_recovered/docs/LOOP_HEALTH.json ]] || printf '%s\n' '{"schema_version":1,"last_cycle":6,"last_task_fingerprint":"recovered-cycle-6","stagnant_cycles":0,"same_task_cycles":0,"last_accepted_product_changes":4,"stalled":false,"reason":null}' > /tmp/wix_recovered/docs/LOOP_HEALTH.json
+          jq '.cycle=6 | .last_accepted_run="32915633541" | .release_candidate=false' /tmp/wix_recovered/docs/state.json > /tmp/state.json
+          mv /tmp/state.json /tmp/wix_recovered/docs/state.json
+
+          sha256sum --check /tmp/wix_recovered/.opencode/job-descriptions/MANIFEST.sha256
+          npm --prefix /tmp/wix_recovered ci --ignore-scripts --no-audit --no-fund
+          npm --prefix /tmp/wix_recovered run check
+          npm --prefix /tmp/wix_recovered run build
+
+          git -C /tmp/wix_recovered config user.name wix-v2-recovery
+          git -C /tmp/wix_recovered config user.email wix-v2-recovery@users.noreply.github.com
+          git -C /tmp/wix_recovered add -A
+          git -C /tmp/wix_recovered commit -m "Wix build $SOURCE_RUN: recover audited v2 state and route real scaffold"
+          test "$(git -C /tmp/wix_recovered merge-base "$BASE_SHA" HEAD)" = "$BASE_SHA"
+          remote=$(git -c "http.extraheader=AUTHORIZATION: basic $auth" ls-remote origin "refs/heads/$LANE_BRANCH" | awk '{print $1}')
+          test "$remote" = "$BASE_SHA"
+          git -C /tmp/wix_recovered -c "http.extraheader=AUTHORIZATION: basic $auth" push origin "HEAD:refs/heads/$LANE_BRANCH"
+
+      - name: Dispatch the repaired autonomous loop once
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          active=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow wix-build-loop.yml --limit 20 --json status | jq '[.[]|select(.status!="completed")]|length')
+          if (( active == 0 )); then
+            gh workflow run wix-build-loop.yml --repo "$GITHUB_REPOSITORY" --ref main -f cycle_index=7 -f max_cycles=0 -f human_note=""
+          else
+            echo "Factory already active; no duplicate dispatch."
+          fi

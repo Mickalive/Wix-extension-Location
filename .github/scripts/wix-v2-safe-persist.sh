@@ -3,7 +3,9 @@ set -euo pipefail
 : "${GH_TOKEN:?}" "${BASE_SHA:?}" "${GATE:?}" "${PLAN_DECISION:?}" "${STALLED:?}" "${CYCLE_INDEX:?}" "${LANE_BRANCH:?}" "${GITHUB_RUN_ID:?}"
 decision="$PLAN_DECISION"
 [[ "$GATE" == failed ]] && decision=continue
-[[ "$STALLED" == true ]] && decision=stalled
+# Stagnation is evidence that the strategy must change; it is never permission
+# to terminate an unfinished product. The persistent supervisor will escalate it.
+[[ "$STALLED" == true ]] && decision=continue
 
 if [[ "$GATE" == failed ]]; then
   rm -rf /tmp/wix-cycle-evidence && mkdir -p /tmp/wix-cycle-evidence

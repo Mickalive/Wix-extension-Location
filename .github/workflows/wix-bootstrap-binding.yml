@@ -11,15 +11,17 @@ permissions:
   actions: write
 
 concurrency:
-  group: wix-one-shot-app-binding-final
+  group: wix-one-shot-app-binding-exact
   cancel-in-progress: true
 
 jobs:
   bind:
-    name: Recover existing Wix app and persist real binding
+    name: Bind exact Wix app and verify real build
     if: ${{ github.repository == 'Mickalive/Wix-extension-Location' && !github.event.repository.fork }}
     runs-on: ubuntu-24.04
     timeout-minutes: 18
+    env:
+      TARGET_WIX_APP_ID: 3e9ec3af-001b-4684-a197-a5133677844d
     steps:
       - name: Cancel obsolete Wix bootstrap experiments
         env:
@@ -49,15 +51,21 @@ jobs:
         run: |
           set -euo pipefail
           echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
-          [[ -f wix.config.json ]] && echo "already_bound=true" >> "$GITHUB_OUTPUT" || echo "already_bound=false" >> "$GITHUB_OUTPUT"
+          if [[ -f wix.config.json ]]; then
+            jq -e --arg id "$TARGET_WIX_APP_ID" '.appId == $id' wix.config.json >/dev/null || {
+              echo "::error::Existing wix.config.json is bound to a different app ID."
+              exit 1
+            }
+            echo "already_bound=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "already_bound=false" >> "$GITHUB_OUTPUT"
+          fi
 
       - uses: actions/setup-node@ae0d4ed08881f17d1511386f5be3e62356acd4a6
-        if: ${{ steps.base.outputs.already_bound != 'true' }}
         with:
           node-version: 22.13.0
 
       - name: Authenticate Wix CLI from protected repository secret
-        if: ${{ steps.base.outputs.already_bound != 'true' }}
         env:
           WIX_API_KEY: ${{ secrets.WIX_API_KEY }}
         shell: bash
@@ -72,124 +80,34 @@ jobs:
           }
           rm -f /tmp/wix-login.log
 
-      - name: Discover existing app by its known registration window
-        id: app
-        if: ${{ steps.base.outputs.already_bound != 'true' }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          root=$(mktemp -d)
-          npm install --prefix "$root" --no-audit --no-fund --ignore-scripts @wix/create-new@0.0.105 >/dev/null
-          entry="$root/node_modules/@wix/create-new/build/index.js"
-          test -f "$entry" || { echo "::error::Pinned Wix create-new entrypoint not found."; exit 1; }
-
-          ENTRY="$entry" node <<'NODE'
-          const fs = require('fs');
-          const p = process.env.ENTRY;
-          let s = fs.readFileSync(p, 'utf8');
-          const needle = 'try {\n  await program2.parseAsync();';
-          const hits = s.split(needle).length - 1;
-          if (hits !== 1) {
-            console.error(`Expected one Wix command entrypoint, found ${hits}`);
-            process.exit(2);
-          }
-          const direct = `if (process.env.WIX_QUERY_EXISTING_APP === "1") {
-            const authState = await apiKeyAuthStrategy.isLoggedIn();
-            if (!authState) {
-              console.error("WIX_DIRECT_AUTH_MISSING");
-              process.exit(2);
-            }
-            const directHttpClient = createHttpClient({
-              type: "backoffice",
-              getAppToken: () => authState.getAccessToken(),
-              createHeaders: () => authState.getRequestHeaders()
-            });
-            let lastError;
-            for (let attempt = 1; attempt <= 3; attempt++) {
-              try {
-                const result = await directHttpClient.request(queryApp({
-                  query: {
-                    filter: {
-                      createdDate: {
-                        $gte: "2026-08-26T13:45:00.000Z",
-                        $lt: "2026-08-26T13:51:00.000Z"
-                      }
-                    },
-                    paging: { limit: 20 },
-                    sort: [{ fieldName: "createdDate", order: "DESC" }]
-                  }
-                }));
-                console.log("WIX_QUERY_APP_JSON=" + JSON.stringify(result.data));
-                process.exit(0);
-              } catch (error) {
-                lastError = error;
-                const status = error?.response?.status;
-                console.error("WIX_QUERY_APP_ATTEMPT=" + attempt + " STATUS=" + (status ?? "unknown"));
-                if (status && status !== 504 && status !== 502 && status !== 503 && status !== 429) throw error;
-                await new Promise((resolve) => setTimeout(resolve, attempt * 1200));
-              }
-            }
-            throw lastError;
-          }
-          `;
-          s = s.replace(needle, direct + needle);
-          fs.writeFileSync(p, s);
-          NODE
-
-          set +e
-          (
-            cd "$root"
-            WIX_QUERY_EXISTING_APP=1 timeout 90s npm exec -- create-new
-          ) >/tmp/wix-app-discovery.out 2>&1
-          rc=$?
-          set -e
-          marker=$(grep -a 'WIX_QUERY_APP_JSON=' /tmp/wix-app-discovery.out | tail -1 | tr -d '\r' || true)
-          if [[ -z "$marker" ]]; then
-            echo "::error::Wix AppsService.QueryApp could not resolve the registration window (exit $rc)."
-            sed -E 's/[A-Za-z0-9_=-]{24,}/[REDACTED]/g' /tmp/wix-app-discovery.out | tail -140 >&2
-            rm -rf "$root" /tmp/wix-app-discovery.out
-            exit 1
-          fi
-          json=${marker#*WIX_QUERY_APP_JSON=}
-          APP_ID=$(printf '%s' "$json" | jq -r '[.apps[]? | select(.name == "Advanced Booking Rules")][0].id // empty')
-          MATCHES=$(printf '%s' "$json" | jq '[.apps[]? | select(.name == "Advanced Booking Rules")] | length')
-          rm -rf "$root" /tmp/wix-app-discovery.out
-
-          test -n "$APP_ID" || { echo "::error::No Advanced Booking Rules app was returned in the known registration window."; exit 1; }
-          [[ "$APP_ID" =~ ^[0-9a-fA-F-]{36}$ ]] || { echo "::error::Wix returned a malformed app id."; exit 1; }
-          if (( MATCHES > 1 )); then
-            echo "::error::Multiple exact-name apps were created in the registration window; refusing to guess."
-            exit 1
-          fi
-          echo "app_id=$APP_ID" >> "$GITHUB_OUTPUT"
-          echo "AppsService.QueryApp resolved the already-registered Advanced Booking Rules app by creation window; no new app was created."
-
-      - name: Scaffold that exact existing app without creating a duplicate
+      - name: Scaffold the exact existing Wix app
         id: create
         if: ${{ steps.base.outputs.already_bound != 'true' }}
-        env:
-          APP_ID: ${{ steps.app.outputs.app_id }}
         shell: bash
         run: |
           set -euo pipefail
-          test -n "$APP_ID"
+          [[ "$TARGET_WIX_APP_ID" =~ ^[0-9a-fA-F-]{36}$ ]]
           root=$(mktemp -d)
           pkg="$root/pkg"
           work="$root/work"
           mkdir -p "$pkg" "$work"
+
           cd "$pkg"
           tgz=$(npm pack @wix/create-new@0.0.105 --silent)
           tar -xzf "$tgz"
           blank="$pkg/package/templates/app/blank"
           test -d "$blank" || { echo "::error::Pinned Wix package has no blank local template."; exit 1; }
 
+          git config --global user.name wix-binding-bootstrap
+          git config --global user.email wix-binding-bootstrap@users.noreply.github.com
+
           cd "$work"
           timeout 420s npm exec --yes --package=@wix/create-new@0.0.105 -- create-new app \
-            --extend-app-id "$APP_ID" \
+            --extend-app-id "$TARGET_WIX_APP_ID" \
             --app-name "Advanced Booking Rules" \
             --template-path "$blank" \
             --skip-git >/tmp/wix-extend.log 2>&1 || {
-              sed -E 's/[A-Za-z0-9_=-]{24,}/[REDACTED]/g' /tmp/wix-extend.log | tail -180 >&2
+              sed -E 's/[A-Za-z0-9_=-]{40,}/[REDACTED]/g' /tmp/wix-extend.log | tail -180 >&2
               rm -f /tmp/wix-extend.log
               exit 1
             }
@@ -197,7 +115,7 @@ jobs:
 
           config=$(find "$work" -mindepth 2 -maxdepth 4 -type f -name wix.config.json -print -quit)
           test -n "$config" || { echo "::error::Existing-app scaffold completed without wix.config.json"; exit 1; }
-          jq -e --arg id "$APP_ID" 'type=="object" and .appId==$id and (.projectId|type=="string" and length>0) and (.projectType|type=="string" and length>0)' "$config" >/dev/null
+          jq -e --arg id "$TARGET_WIX_APP_ID" 'type=="object" and .appId==$id and (.projectId|type=="string" and length>0) and (.projectType|type=="string" and length>0)' "$config" >/dev/null
           if jq -e 'paths(scalars) as $p | ($p|map(tostring)|join(".")) | test("secret|token|password|api.?key";"i")' "$config" >/dev/null; then
             echo "::error::Generated wix.config.json contains a secret-like field"
             exit 1
@@ -205,21 +123,25 @@ jobs:
           cp "$config" "$GITHUB_WORKSPACE/wix.config.json"
           echo "project_dir=$(dirname "$config")" >> "$GITHUB_OUTPUT"
 
-      - name: Verify Wix-generated project with real Wix build
-        if: ${{ steps.base.outputs.already_bound != 'true' }}
+      - name: Verify exact binding with real Wix build
+        id: realbuild
         env:
           PROJECT_DIR: ${{ steps.create.outputs.project_dir }}
         shell: bash
         run: |
           set -euo pipefail
+          if [[ "${{ steps.base.outputs.already_bound }}" == "true" ]]; then
+            PROJECT_DIR="$GITHUB_WORKSPACE"
+          fi
+          test -n "$PROJECT_DIR"
           cd "$PROJECT_DIR"
-          timeout 180s npx -y @wix/cli@1.1.238 build >/tmp/wix-build.log 2>&1 || {
-            sed -E 's/[A-Za-z0-9_=-]{24,}/[REDACTED]/g' /tmp/wix-build.log | tail -120 >&2
+          timeout 240s npx -y @wix/cli@1.1.238 build >/tmp/wix-build.log 2>&1 || {
+            sed -E 's/[A-Za-z0-9_=-]{40,}/[REDACTED]/g' /tmp/wix-build.log | tail -160 >&2
             rm -f /tmp/wix-build.log
             exit 1
           }
           rm -f /tmp/wix-build.log
-          echo "Real wix build passed for the recovered existing app binding."
+          echo "REAL_WIX_BUILD=SUCCESS"
 
       - name: Record non-secret binding evidence
         if: ${{ steps.base.outputs.already_bound != 'true' }}
@@ -231,14 +153,16 @@ jobs:
           cat > reports/wix-live/BOOTSTRAP_BINDING.md <<EOF
           # Authenticated Wix app binding
 
-          GitHub Actions authenticated with the protected Wix API key, resolved the already-registered **Advanced Booking Rules** app through Wix AppsService.QueryApp using its known creation window, scaffolded that exact existing app without registering a duplicate, and passed a real \`wix build\` against Wix's generated project.
+          GitHub Actions authenticated with the protected Wix API key and bound the product to the explicitly selected existing Wix app **Advanced Booking Rules** (App ID: $TARGET_WIX_APP_ID). No app was created by this run.
+
+          Wix generated a real wix.config.json for that exact app and a real \`wix build\` completed successfully before the binding was persisted.
 
           Persisted wix.config.json fields: $keys
 
           No API key, account auth store, token, password, patched Wix package, or other credential was persisted.
           EOF
 
-      - name: Persist only the Wix-generated binding to accepted product branch
+      - name: Persist Wix binding to accepted product branch
         if: ${{ steps.base.outputs.already_bound != 'true' }}
         env:
           GH_TOKEN: ${{ github.token }}
@@ -249,12 +173,12 @@ jobs:
           git config user.name wix-binding-bootstrap
           git config user.email wix-binding-bootstrap@users.noreply.github.com
           git add -f wix.config.json reports/wix-live/BOOTSTRAP_BINDING.md
-          git commit -m "wix: persist authenticated existing-app binding"
+          git commit -m "wix: persist verified existing-app binding"
           auth=$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)
           remote=$(git -c "http.extraheader=AUTHORIZATION: basic $auth" ls-remote origin refs/heads/lab/wix-rules | awk '{print $1}')
           test "$remote" = "$BASE_SHA" || { echo "::error::lab/wix-rules moved during Wix bootstrap"; exit 1; }
           git -c "http.extraheader=AUTHORIZATION: basic $auth" push origin HEAD:refs/heads/lab/wix-rules
 
-      - name: Existing binding
+      - name: Existing verified binding
         if: ${{ steps.base.outputs.already_bound == 'true' }}
-        run: echo "Real Wix binding already exists; no bootstrap needed."
+        run: echo "Exact Wix binding already exists and real wix build passed."

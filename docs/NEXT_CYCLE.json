@@ -1,38 +1,41 @@
 {
-  "cycle": 6,
+  "cycle": 7,
   "phase": "build",
-  "generated_by": "deterministic-recovery-of-cycle-6-director-plan",
+  "generated_by": "deterministic-recovery-of-cycle-7-and-authenticated-wix-bootstrap",
   "date": "2026-08-26",
-  "decision_record": "reports/wix-live/CYCLE_32915633541.md",
+  "decision_record": "reports/wix-live/CYCLE_32920420147.md",
   "authority": {
     "contract": "docs/WIX_TECHNICAL_CONTRACT.md",
     "blueprint": "docs/BUILD_BLUEPRINT.md"
   },
-  "repair_priority_rule": "Negative empirical Wix evidence is routed to its owning lane before unrelated work. Never fabricate Wix identifiers or claim live readiness without live evidence.",
+  "repair_priority_rule": "Use persisted Wix Live evidence. Never fabricate Wix identifiers. The WIX_API_KEY secret is consumed only by the privileged Wix CI step, never by OX.",
   "decision": "continue",
-  "repair_lanes": ["integration"],
-  "objective": "Establish the supported real non-secret Wix CLI scaffold and registration required by the accepted Wix Live finding while preserving every cycle-6 accepted product change.",
+  "repair_lanes": [
+    "integration"
+  ],
+  "objective": "Complete the real authenticated Wix app binding, then let Wix Live execute build/dev-site/MCP evidence against the accepted product.",
   "lanes": {
     "integration": {
       "status": "active",
-      "task_id": "INT-C6-R1",
-      "task": "Establish the supported non-secret unified Wix CLI app scaffold and registration surface. Create the documented project/scaffold files, including wix.config.json only with values that are legitimately derivable without secrets or fabricated account identifiers; add the platform registration module required by the Blueprint; wire the documented Wix Bookings validation-extension registration shape; explicitly record account-authenticated values or steps that cannot be derived in CI rather than inventing them. Keep all existing accepted product behavior intact.",
-      "why_needed": "Cycle 6 passed every lane audit, the deterministic preview gate and the independent cross-lane audit, but Wix Live QA returned FIX_BEFORE_INTEGRATION because no real wix.config.json exists and the product is not yet registered as a testable Wix CLI app.",
+      "task_id": "INT-C7-LIVE",
+      "task": "Consume the real Wix binding once the privileged CI bootstrap has generated wix.config.json. Validate the generated project metadata, adapt only the integration/registration surface required for the unified Wix CLI project, and repair any real wix build/dev-site findings without fabricating identifiers or weakening accepted behavior.",
+      "why_needed": "Run 32920420147 independently ACCEPTed the complete CI-derivable registration/scaffold surface, but Wix Live stopped before authentication because no real wix.config.json existed. The repository secret WIX_API_KEY is now available to the privileged CI bootstrap that owns app registration/binding.",
       "source_evidence": [
-        "reports/wix-live/CYCLE_32915633541.md",
-        "reports/audits/CYCLE_32915633541_INTEGRATED.md",
+        "reports/audits/CYCLE_32920420147_INTEGRATION.md",
+        "reports/audits/CYCLE_32920420147_INTEGRATED.md",
+        "reports/wix-live/CYCLE_32920420147.md",
         "docs/runbooks/T_VP0_SCAFFOLD.md",
         "docs/WIX_TECHNICAL_CONTRACT.md",
         "docs/BUILD_BLUEPRINT.md"
       ],
       "acceptance_criteria": [
-        "npm ci --ignore-scripts --no-audit --no-fund && npm run check && npm run build pass",
-        "wix.config.json and registration files contain no secrets and no fabricated Wix/account/site identifiers",
-        "the real Wix Live job gets past the missing-scaffold branch into authentication/build/dev-site probing, or returns a narrowly evidenced BLOCKED_EXTERNAL prerequisite",
-        "all previously accepted domain/platform/dashboard/billing behavior remains green",
-        "fresh independent Integration audit ends VERDICT: ACCEPT"
+        "A real Wix-generated wix.config.json exists and contains no secret material.",
+        "npm ci --ignore-scripts --no-audit --no-fund && npm run check && npm run build pass.",
+        "Wix CLI authentication succeeds using the GitHub Actions WIX_API_KEY secret without exposing it to OX.",
+        "Wix Live proceeds through wix build and Development Site resolution, or returns a narrowly evidenced BLOCKED_EXTERNAL result from Wix itself.",
+        "Fresh independent Integration audit ends VERDICT: ACCEPT."
       ],
-      "out_of_scope": "publishing/releasing the app, broad account administration, fabricated IDs, unrelated feature work",
+      "out_of_scope": "publishing/releasing, broad account administration, fabricated identifiers, unrelated features",
       "blocker": null,
       "completion_evidence": null
     },
@@ -44,7 +47,7 @@
       "acceptance_criteria": [],
       "out_of_scope": null,
       "blocker": null,
-      "completion_evidence": "Run 32915633541 Rules candidate was independently ACCEPT and included in preview fb4a9ac; integrated deterministic and cross-lane gates passed."
+      "completion_evidence": "Run 32920420147 no-op audit ACCEPT; integrated audit ACCEPT."
     },
     "dashboard": {
       "status": "complete",
@@ -54,7 +57,7 @@
       "acceptance_criteria": [],
       "out_of_scope": null,
       "blocker": null,
-      "completion_evidence": "Run 32915633541 Dashboard candidate was independently ACCEPT and included in preview fb4a9ac; integrated deterministic and cross-lane gates passed."
+      "completion_evidence": "Run 32920420147 no-op audit ACCEPT; integrated audit ACCEPT."
     },
     "billing": {
       "status": "complete",
@@ -64,7 +67,7 @@
       "acceptance_criteria": [],
       "out_of_scope": null,
       "blocker": null,
-      "completion_evidence": "Billing was already complete; run 32915633541 deterministic no-op candidate/audit ACCEPT and integrated gates passed."
+      "completion_evidence": "Run 32920420147 no-op audit ACCEPT; integrated audit ACCEPT."
     }
   },
   "critical_external_blocker": null

@@ -104,14 +104,26 @@ jobs:
               getAppToken: () => authState.getAccessToken(),
               createHeaders: () => authState.getRequestHeaders()
             });
-            const result = await directHttpClient.request(queryApp({
-              query: {
-                filter: { name: "Advanced Booking Rules" },
-                paging: { limit: 50 }
+            let lastError;
+            for (let attempt = 1; attempt <= 5; attempt++) {
+              try {
+                const result = await directHttpClient.request(queryApp({
+                  query: {
+                    filter: { name: "Advanced Booking Rules" },
+                    paging: { limit: 10 }
+                  }
+                }));
+                console.log("WIX_QUERY_APP_JSON=" + JSON.stringify(result.data));
+                process.exit(0);
+              } catch (error) {
+                lastError = error;
+                const status = error?.response?.status;
+                console.error("WIX_QUERY_APP_ATTEMPT=" + attempt + " STATUS=" + (status ?? "unknown"));
+                if (status && status !== 504 && status !== 502 && status !== 503 && status !== 429) throw error;
+                await new Promise((resolve) => setTimeout(resolve, attempt * 1500));
               }
-            }));
-            console.log("WIX_QUERY_APP_JSON=" + JSON.stringify(result.data));
-            process.exit(0);
+            }
+            throw lastError;
           }
           `;
           s = s.replace(needle, direct + needle);
@@ -121,14 +133,14 @@ jobs:
           set +e
           (
             cd "$root"
-            WIX_QUERY_EXISTING_APP=1 timeout 90s npm exec -- create-new
+            WIX_QUERY_EXISTING_APP=1 timeout 120s npm exec -- create-new
           ) >/tmp/wix-app-discovery.out 2>&1
           rc=$?
           set -e
           marker=$(grep -a 'WIX_QUERY_APP_JSON=' /tmp/wix-app-discovery.out | tail -1 | tr -d '\r' || true)
           if [[ -z "$marker" ]]; then
-            echo "::error::Wix AppsService.QueryApp failed under API-key auth (exit $rc)."
-            sed -E 's/[A-Za-z0-9_=-]{24,}/[REDACTED]/g' /tmp/wix-app-discovery.out | tail -120 >&2
+            echo "::error::Wix AppsService.QueryApp did not return the existing app (exit $rc)."
+            sed -E 's/[A-Za-z0-9_=-]{24,}/[REDACTED]/g' /tmp/wix-app-discovery.out | tail -140 >&2
             rm -rf "$root" /tmp/wix-app-discovery.out
             exit 1
           fi

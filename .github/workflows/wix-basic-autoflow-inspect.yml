@@ -16,18 +16,18 @@ jobs:
       - uses: actions/setup-node@ae0d4ed08881f17d1511386f5be3e62356acd4a6
         with:
           node-version: 22.13.0
-      - name: Locate direct DevCenter client entrypoint
+      - name: Inspect direct HTTP client construction
         shell: bash
         run: |
           set -euo pipefail
           d=$(mktemp -d); cd "$d"
           tgz=$(npm pack @wix/create-new@0.0.105 --silent); tar -xzf "$tgz"
           f=package/build/index.js
-          echo '=== DEV CENTER CLASS ==='
-          grep -n 'var DevCenterClient = class\|class DevCenterClient' "$f" | head -10 || true
-          echo '=== CREATE HTTP CLIENT DEFINITIONS ==='
-          grep -n 'function createHttpClient\|var createHttpClient\|createHttpClient =' "$f" | head -30 || true
-          echo '=== APP COMMAND INVOCATIONS ==='
-          grep -nE 'render\(|runApp|AppCommand|process\.argv|command\.parse|program\.parse|parseAsync' "$f" | tail -100 || true
-          echo '=== FILE TAIL ==='
-          tail -220 "$f"
+          echo '=== CREATE HTTP CLIENT ==='
+          sed -n '49045,49155p' "$f"
+          echo '=== USE HTTP CLIENT ==='
+          grep -n 'function useHttpClient\|var useHttpClient' "$f" | head -10
+          n=$(grep -n 'function useHttpClient\|var useHttpClient' "$f" | head -1 | cut -d: -f1)
+          if [[ -n "$n" ]]; then start=$((n-20)); end=$((n+70)); sed -n "${start},${end}p" "$f"; fi
+          echo '=== AUTH STRATEGY / CREATE CLIENT CALLERS ==='
+          grep -nE 'createHttpClient\(\{|createApiKeyAuthState|isLoggedIn\(' "$f" | tail -100

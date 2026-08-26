@@ -349,7 +349,7 @@ jobs:
         run: |
           cat > "reports/wix-live/CYCLE_${GITHUB_RUN_ID}.md" <<EOF
           # Wix Live QA
-          The integrated product has no real `wix.config.json`. It is not yet registered as a testable Wix CLI app, so empirical Wix/dev-site claims cannot be made.
+          The integrated product has no real wix.config.json. It is not yet registered as a testable Wix CLI app, so empirical Wix/dev-site claims cannot be made.
           Owning lane: integration.
           Required repair: establish the supported non-secret Wix CLI app scaffold/registration and prove it with this live job.
           VERDICT: FIX_BEFORE_INTEGRATION
@@ -562,7 +562,7 @@ jobs:
           for role in integration rules dashboard billing; do
             jq -e --arg r "$role" '.lanes[$r] and (.lanes[$r].status=="active" or .lanes[$r].status=="blocked" or .lanes[$r].status=="complete")' docs/NEXT_CYCLE.json >/dev/null
           done
-          jq -e '.gates|type=="object" and all(.gates[]; .status=="OPEN" or .status=="PROVEN" or .status=="BLOCKED_EXTERNAL")' docs/PRODUCT_GATES.json >/dev/null
+          jq -e '(.gates|type=="object") and all(.gates[]; .status=="OPEN" or .status=="PROVEN" or .status=="BLOCKED_EXTERNAL")' docs/PRODUCT_GATES.json >/dev/null
           jq -e 'all(.gates[]; (.status=="OPEN") or ((.status=="PROVEN" or .status=="BLOCKED_EXTERNAL") and (.evidence|type=="array" and length>0)))' docs/PRODUCT_GATES.json >/dev/null
           while IFS= read -r p; do
             [[ -z "$p" ]] && continue

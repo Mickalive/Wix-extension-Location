@@ -11,14 +11,17 @@ permissions:
 
 concurrency:
   group: wix-one-shot-app-binding
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   bind:
     name: Register real Wix app and persist binding
     if: ${{ github.repository == 'Mickalive/Wix-extension-Location' && !github.event.repository.fork }}
     runs-on: ubuntu-24.04
-    timeout-minutes: 45
+    timeout-minutes: 15
+    env:
+      CI: "true"
+      npm_config_yes: "true"
     steps:
       - name: Checkout accepted product state
         uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
@@ -54,8 +57,6 @@ jobs:
             exit 1
           }
           rm -f /tmp/wix-login.log
-          npx -y @wix/cli@1.1.237 whoami >/tmp/wix-whoami.log 2>&1 || true
-          rm -f /tmp/wix-whoami.log
 
       - name: Try every currently documented Wix app template
         id: create
@@ -77,7 +78,11 @@ jobs:
             work="$root/$template"
             mkdir -p "$work"
             echo "Trying documented Wix template ${template:0:8}…"
-            if (cd "$work" && npm create @wix/new@latest app -- --app-name "Advanced Booking Rules" --template "$template" >create.log 2>&1); then
+            set +e
+            (cd "$work" && timeout 50s npm create @wix/new@latest app -- --app-name "Advanced Booking Rules" --template "$template" >create.log 2>&1)
+            rc=$?
+            set -e
+            if (( rc == 0 )); then
               found=$(find "$work" -type f -name wix.config.json -print -quit)
               if [[ -n "$found" ]] && jq -e 'type=="object" and (.appId|type=="string" and length>0) and (.projectId|type=="string" and length>0) and (.projectType|type=="string" and length>0)' "$found" >/dev/null; then
                 chosen="$template"
@@ -87,11 +92,12 @@ jobs:
             else
               code=$(grep -Eo 'Code: [A-Z_]+' "$work/create.log" | tail -1 | cut -d' ' -f2- || true)
               status=$(grep -Eo 'status code [0-9]+' "$work/create.log" | tail -1 | awk '{print $3}' || true)
+              if (( rc == 124 )); then code="TIMEOUT_OR_HIDDEN_PROMPT"; fi
               echo "Template ${template:0:8} failed: ${code:-unknown}/${status:-unknown}"
             fi
           done
           if [[ -z "$config" ]]; then
-            echo "::error::All currently documented Wix app templates failed to register under the authenticated CI session."
+            echo "::error::All currently documented Wix app templates failed under authenticated CI."
             exit 1
           fi
           if jq -e 'paths(scalars) as $p | ($p|map(tostring)|join(".")) | test("secret|token|password|api.?key";"i")' "$config" >/dev/null; then
@@ -108,7 +114,7 @@ jobs:
         shell: bash
         run: |
           set +e
-          npx -y @wix/cli@1.1.237 build >/tmp/wix-build.log 2>&1
+          timeout 60s npx -y @wix/cli@1.1.237 build >/tmp/wix-build.log 2>&1
           rc=$?
           rm -f /tmp/wix-build.log
           if (( rc == 0 )); then echo "result=passed" >> "$GITHUB_OUTPUT"; else echo "result=needs_integration_repair" >> "$GITHUB_OUTPUT"; fi

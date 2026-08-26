@@ -1,0 +1,194 @@
+name: Wix App Binding Wizard v5
+
+on:
+  push:
+    branches: [main]
+    paths: [".github/workflows/wix-bootstrap-wizard-v5.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions: write
+
+concurrency:
+  group: wix-app-binding-wizard-v5
+  cancel-in-progress: true
+
+jobs:
+  bind:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Cancel older Wix bootstrap experiments
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          for wf in wix-bootstrap-binding.yml wix-bootstrap-wizard-v4.yml wix-bootstrap-wizard-v5.yml; do
+            gh run list --repo "$GITHUB_REPOSITORY" --workflow "$wf" --limit 20 --json databaseId,status 2>/dev/null \
+              | jq -r --arg current "$GITHUB_RUN_ID" '.[] | select((.status=="in_progress" or .status=="queued" or .status=="pending") and (.databaseId|tostring)!=$current) | .databaseId' \
+              | while read -r id; do
+                  [[ -z "$id" ]] && continue
+                  gh api --method POST "repos/$GITHUB_REPOSITORY/actions/runs/$id/cancel" >/dev/null 2>&1 || true
+                done
+          done
+
+      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+        with:
+          ref: lab/wix-rules
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Pin accepted state
+        id: base
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          [[ -f wix.config.json ]] && echo "bound=true" >> "$GITHUB_OUTPUT" || echo "bound=false" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/setup-node@ae0d4ed08881f17d1511386f5be3e62356acd4a6
+        if: ${{ steps.base.outputs.bound != 'true' }}
+        with:
+          node-version: 22.13.0
+
+      - name: Authenticate Wix CLI
+        if: ${{ steps.base.outputs.bound != 'true' }}
+        env:
+          WIX_API_KEY: ${{ secrets.WIX_API_KEY }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$WIX_API_KEY"
+          npx -y @wix/cli@1.1.238 logout >/dev/null 2>&1 || true
+          npx -y @wix/cli@1.1.238 login --api-key "$WIX_API_KEY" >/tmp/wix-login.log 2>&1 || {
+            sed -E 's/[A-Za-z0-9_=-]{24,}/[REDACTED]/g' /tmp/wix-login.log >&2
+            exit 1
+          }
+          rm -f /tmp/wix-login.log
+
+      - name: Install pseudo-terminal driver
+        if: ${{ steps.base.outputs.bound != 'true' }}
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq expect >/dev/null
+
+      - name: Drive official basic-app flow under npm
+        id: create
+        if: ${{ steps.base.outputs.bound != 'true' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          root=$(mktemp -d)
+          mkdir -p "$root/work"
+          cat > "$root/wix.exp" <<'EXPECT'
+          #!/usr/bin/expect -f
+          set timeout 120
+          log_user 1
+          cd [lindex $argv 0]
+          spawn npm exec --yes --package=@wix/create-new@0.0.105 -- create-new app
+          set new_done 0
+          set basic_done 0
+          set name_done 0
+          set folder_done 0
+          set mcp_done 0
+          set ns_done 0
+          set code_done 0
+          expect {
+            -re {(?i)(what would you like to do|create a new wix app)} {
+              if {!$new_done} { send "\r"; set new_done 1 }
+              exp_continue
+            }
+            -re {(?i)(how would you like to start|create a basic app)} {
+              if {!$basic_done} { send "\r"; set basic_done 1 }
+              exp_continue
+            }
+            -re {(?i)(name of.*app|name for your app|app name)} {
+              if {!$name_done} { send "Advanced Booking Rules\r"; set name_done 1 }
+              exp_continue
+            }
+            -re {(?i)(folder name|project folder|confirm.*path)} {
+              if {!$folder_done} { send "\r"; set folder_done 1 }
+              exp_continue
+            }
+            -re {(?i)(choose.*ide.*mcp|configure.*mcp|wix mcp)} {
+              if {!$mcp_done} { send "\033\[B\033\[B\033\[B\r"; set mcp_done 1 }
+              exp_continue
+            }
+            -re {(?i)namespace} {
+              if {!$ns_done} { send "\r"; set ns_done 1 }
+              exp_continue
+            }
+            -re {(?i)code identifier} {
+              if {!$code_done} { send "\r"; set code_done 1 }
+              exp_continue
+            }
+            -re {(?i)(failed to register|entity not found|forbidden|unauthorized)} {
+              send_user "\nWIX_REGISTRATION_ERROR\n"
+              exp_continue
+            }
+            eof {
+              catch wait result
+              exit [lindex $result 3]
+            }
+            timeout {
+              send_user "\nWIX_WIZARD_TIMEOUT\n"
+              exit 124
+            }
+          }
+          EXPECT
+          chmod +x "$root/wix.exp"
+          set +e
+          timeout 150s "$root/wix.exp" "$root/work" >/tmp/wix-v5.log 2>&1
+          rc=$?
+          set -e
+          echo '--- Wix wizard transcript (sanitized) ---'
+          sed -E 's/[A-Za-z0-9_=-]{24,}/[REDACTED]/g' /tmp/wix-v5.log | tail -180
+          (( rc == 0 )) || { echo "::error::Wizard exit $rc"; exit 1; }
+          config=$(find "$root/work" -type f -name wix.config.json -print -quit)
+          test -n "$config" || { echo "::error::Wizard generated no wix.config.json"; exit 1; }
+          jq -e 'type=="object" and (.appId|type=="string" and length>0) and (.projectId|type=="string" and length>0) and (.projectType|type=="string" and length>0)' "$config" >/dev/null
+          if jq -e 'paths(scalars) as $p | ($p|map(tostring)|join(".")) | test("secret|token|password|api.?key";"i")' "$config" >/dev/null; then exit 1; fi
+          cp "$config" "$GITHUB_WORKSPACE/wix.config.json"
+          echo "project_dir=$(dirname "$config")" >> "$GITHUB_OUTPUT"
+
+      - name: Verify Wix-generated project
+        if: ${{ steps.base.outputs.bound != 'true' }}
+        env:
+          PROJECT_DIR: ${{ steps.create.outputs.project_dir }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$PROJECT_DIR"
+          timeout 120s npx -y @wix/cli@1.1.238 build >/tmp/wix-build.log 2>&1 || {
+            sed -E 's/[A-Za-z0-9_=-]{24,}/[REDACTED]/g' /tmp/wix-build.log | tail -100 >&2
+            exit 1
+          }
+
+      - name: Persist real binding
+        if: ${{ steps.base.outputs.bound != 'true' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BASE_SHA: ${{ steps.base.outputs.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p reports/wix-live
+          cat > reports/wix-live/BOOTSTRAP_BINDING.md <<'EOF'
+          # Authenticated Wix app binding
+
+          The official Wix basic-app flow registered this app under authenticated GitHub Actions and generated the real project binding. The generated Wix scaffold passed `wix build`. Only the non-secret `wix.config.json` binding is retained.
+          EOF
+          git config user.name wix-binding-bootstrap
+          git config user.email wix-binding-bootstrap@users.noreply.github.com
+          git add -f wix.config.json reports/wix-live/BOOTSTRAP_BINDING.md
+          git commit -m "wix: persist authenticated app binding"
+          auth=$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)
+          remote=$(git -c "http.extraheader=AUTHORIZATION: basic $auth" ls-remote origin refs/heads/lab/wix-rules | awk '{print $1}')
+          test "$remote" = "$BASE_SHA"
+          git -c "http.extraheader=AUTHORIZATION: basic $auth" push origin HEAD:refs/heads/lab/wix-rules
+
+      - name: Existing binding
+        if: ${{ steps.base.outputs.bound == 'true' }}
+        run: echo 'Real Wix binding already present.'

@@ -8,9 +8,10 @@ on:
 
 permissions:
   contents: write
+  actions: write
 
 concurrency:
-  group: wix-one-shot-app-binding
+  group: wix-one-shot-app-binding-v2
   cancel-in-progress: true
 
 jobs:
@@ -23,6 +24,20 @@ jobs:
       CI: "true"
       npm_config_yes: "true"
     steps:
+      - name: Cancel stale bootstrap attempts
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh run list --repo "$GITHUB_REPOSITORY" --workflow wix-bootstrap-binding.yml --limit 20 --json databaseId,status \
+            | jq -r --arg current "$GITHUB_RUN_ID" '.[] | select((.status=="in_progress" or .status=="queued" or .status=="pending") and (.databaseId|tostring)!=$current) | .databaseId' \
+            | while read -r id; do
+                [[ -z "$id" ]] && continue
+                echo "Cancelling stale Wix bootstrap run $id"
+                gh api --method POST "repos/$GITHUB_REPOSITORY/actions/runs/$id/cancel" >/dev/null 2>&1 || true
+              done
+
       - name: Checkout accepted product state
         uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
         with:

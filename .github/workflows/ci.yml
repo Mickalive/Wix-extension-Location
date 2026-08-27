@@ -44,6 +44,21 @@ jobs:
           ! test -f .opencode/agents/lane-auditor.md
           ! test -f .opencode/agents/wix-simulation-auditor.md
 
+          grep -Fq 'OX_BUILDER_MODELS: "opencode/deepseek-v4-flash-free opencode/north-mini-code-free opencode/laguna-s-2.1-free"' .github/workflows/wix-build-loop.yml
+          grep -Fq 'OX_REVIEW_MODELS: "opencode/laguna-s-2.1-free opencode/deepseek-v4-flash-free opencode/mimo-v2.5-free"' .github/workflows/wix-build-loop.yml
+          grep -Fq 'is_builder_agent' .github/scripts/wix-factory-cycle.sh
+          grep -Fq 'trying next configured model' .github/scripts/wix-factory-cycle.sh
+          if grep -R -Fq 'opencode/x-preview-f-free' .github .opencode/agents; then
+            echo '::error::Retired x-preview model reference found in active orchestration or agent definitions.'
+            exit 1
+          fi
+          for f in billing-builder dashboard-builder rules-engine-builder wix-integration-builder; do
+            grep -Fq 'model: opencode/deepseek-v4-flash-free' ".opencode/agents/$f.md"
+          done
+          for f in integration-auditor rules-auditor dashboard-auditor billing-auditor integrated-auditor wix-live-auditor release-readiness-auditor wix-build-director; do
+            grep -Fq 'model: opencode/laguna-s-2.1-free' ".opencode/agents/$f.md"
+          done
+
       - name: Set up Node
         uses: actions/setup-node@ae0d4ed08881f17d1511386f5be3e62356acd4a6
         with:

@@ -1,7 +1,7 @@
 ---
 description: Exact-scope billing and entitlement builder with no Wix/platform side effects.
 mode: primary
-model: opencode/x-preview-f-free
+model: opencode/deepseek-v4-flash-free
 temperature: 0.01
 permission:
   edit:

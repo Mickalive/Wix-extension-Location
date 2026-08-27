@@ -1,7 +1,7 @@
 ---
 description: Pure deterministic domain-rules builder with strict lane isolation.
 mode: primary
-model: opencode/x-preview-f-free
+model: opencode/deepseek-v4-flash-free
 temperature: 0.01
 permission:
   edit:

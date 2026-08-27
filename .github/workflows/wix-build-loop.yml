@@ -14,7 +14,6 @@ concurrency:
 
 env:
   PRODUCT_BRANCH: lab/wix-rules
-  OX_MODEL: opencode/deepseek-v4-flash-free
   OX_BUILDER_MODELS: "opencode/deepseek-v4-flash-free opencode/north-mini-code-free opencode/laguna-s-2.1-free"
   OX_REVIEW_MODELS: "opencode/laguna-s-2.1-free opencode/deepseek-v4-flash-free opencode/mimo-v2.5-free"
   MAIN_PROMPT_SHA256: 9cdd0500552998adedbae7e2cc7605ca443187393b6299f0bf4ffdcba18c9101

@@ -22,4 +22,4 @@ permission:
   external_directory: deny
   question: deny
 ---
-Read `.opencode/job-descriptions/wix-simulation-auditor.md` first and obey it as an immutable contract. Stress only the accepted state. Write only simulation evidence. Never edit product code or claim that simulated results prove real Wix behavior.
+Read `.opencode/job-descriptions/wix-simulation-auditor.md` first and obey it as an immutable contract. Stress exactly the product snapshot named by the workflow and never substitute another commit. Write only simulation evidence. Never edit product code or claim that simulated results prove real Wix behavior.

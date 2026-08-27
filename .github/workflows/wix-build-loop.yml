@@ -43,6 +43,15 @@ jobs:
           curl -fsSL https://opencode.ai/install | bash
           echo "$HOME/.opencode/bin" >> "$GITHUB_PATH"
 
+      - name: Start a fresh evidence chain for each new candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "$(jq -r '.phase' .factory/state.json)" == BUILD ]]; then
+            rm -rf .factory/evidence
+            mkdir -p .factory/evidence
+          fi
+
       - name: Execute exactly one factory transition
         shell: bash
         env:

@@ -4,6 +4,11 @@ on:
   workflow_run:
     workflows: ["Wix Autonomous Product Factory"]
     types: [completed]
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/wix-watchdog.yml"
+      - ".github/workflows/wix-build-loop.yml"
   workflow_dispatch: {}
   schedule:
     - cron: "*/5 * * * *"
@@ -13,7 +18,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: wix-recovery-watchdog-v5
+  group: wix-recovery-watchdog-v6
   cancel-in-progress: true
 
 env:
@@ -23,11 +28,11 @@ env:
 
 jobs:
   recover:
-    name: Ensure product progression
+    name: Backstop product progression and prune obsolete automation
     runs-on: ubuntu-24.04
-    timeout-minutes: 12
+    timeout-minutes: 15
     steps:
-      - name: Recover or continue until READY
+      - name: Ensure exactly one healthy Product Factory until READY
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
@@ -37,72 +42,46 @@ jobs:
 
           read_file() {
             local path="$1"
-            gh api "repos/$repo/contents/$path?ref=$LANE_BRANCH" --jq '.content' 2>/dev/null \
-              | tr -d '\n' | base64 -d 2>/dev/null || true
+            gh api "repos/$repo/contents/$path?ref=$LANE_BRANCH" --jq '.content' 2>/dev/null | tr -d '\n' | base64 -d 2>/dev/null || true
           }
 
-          state="$(read_file docs/state.json)"
-          [[ -n "$state" ]] || state='{}'
-          cycle="$(jq -r '.cycle // 0' <<<"$state")"
-          [[ "$cycle" =~ ^[0-9]+$ ]] || cycle=0
-
           ready="$(read_file reports/release/READY.json)"
-          if [[ -n "$ready" ]] \
-             && [[ "$(jq -r '.verdict // empty' <<<"$ready")" == READY ]] \
-             && [[ "$(jq -r '.app_id // empty' <<<"$ready")" == "$EXPECTED_WIX_APP_ID" ]]; then
-            echo "READY is proven for the bound Wix app. No recovery action needed."
+          if [[ -n "$ready" ]] && [[ "$(jq -r '.verdict // empty' <<<"$ready")" == READY ]] && [[ "$(jq -r '.app_id // empty' <<<"$ready")" == "$EXPECTED_WIX_APP_ID" ]]; then
+            echo "READY is proven for the bound Wix app."
             exit 0
           fi
 
-          runs="$(gh run list --repo "$repo" --workflow "$FACTORY_WORKFLOW" --limit 30 \
-            --json databaseId,status,conclusion,createdAt,updatedAt,url 2>/dev/null || echo '[]')"
+          state="$(read_file docs/state.json)"; [[ -n "$state" ]] || state='{}'
+          cycle="$(jq -r '.cycle // 0' <<<"$state")"; [[ "$cycle" =~ ^[0-9]+$ ]] || cycle=0
+          runs="$(gh run list --repo "$repo" --workflow "$FACTORY_WORKFLOW" --limit 30 --json databaseId,status,conclusion,createdAt,updatedAt,url 2>/dev/null || echo '[]')"
 
+          mapfile -t active_ids < <(jq -r '[.[] | select(.status != "completed")] | sort_by(.createdAt) | reverse | .[].databaseId' <<<"$runs")
+          if (( ${#active_ids[@]} > 1 )); then
+            keeper="${active_ids[0]}"
+            for id in "${active_ids[@]:1}"; do echo "Cancelling duplicate Factory run $id; keeping $keeper."; gh api --method POST "repos/$repo/actions/runs/$id/cancel" >/dev/null 2>&1 || true; done
+          fi
+
+          runs="$(gh run list --repo "$repo" --workflow "$FACTORY_WORKFLOW" --limit 30 --json databaseId,status,conclusion,createdAt,updatedAt,url 2>/dev/null || echo '[]')"
           active="$(jq -c '[.[] | select(.status != "completed")] | sort_by(.createdAt) | last // empty' <<<"$runs")"
           if [[ -n "$active" ]]; then
-            run_id="$(jq -r '.databaseId' <<<"$active")"
-            status="$(jq -r '.status' <<<"$active")"
-            created="$(jq -r '.createdAt' <<<"$active")"
-            now="$(date -u +%s)"
-            created_epoch="$(date -u -d "$created" +%s 2>/dev/null || echo "$now")"
-            age=$((now - created_epoch))
-
+            run_id="$(jq -r '.databaseId' <<<"$active")"; status="$(jq -r '.status' <<<"$active")"; created="$(jq -r '.createdAt' <<<"$active")"
+            now="$(date -u +%s)"; created_epoch="$(date -u -d "$created" +%s 2>/dev/null || echo "$now")"; age=$((now - created_epoch))
             jobs="$(gh api "repos/$repo/actions/runs/$run_id/jobs?filter=latest&per_page=100" 2>/dev/null || echo '{"jobs":[]}')"
-            count="$(jq '(.jobs // []) | length' <<<"$jobs")"
-            running="$(jq '[.jobs[]? | select(.status == "in_progress")] | length' <<<"$jobs")"
-            queued="$(jq '[.jobs[]? | select(.status == "queued" or .status == "pending")] | length' <<<"$jobs")"
-
-            if (( age > 900 && count == 0 )); then
-              echo "Factory $run_id is a scheduler zombie: $status for ${age}s with zero jobs."
-              gh api --method POST "repos/$repo/actions/runs/$run_id/cancel" >/dev/null 2>&1 || true
-            elif (( age > 1800 && running == 0 && queued > 0 )); then
-              echo "Factory $run_id is queue-stalled: ${age}s, queued=$queued, running=0."
-              gh api --method POST "repos/$repo/actions/runs/$run_id/cancel" >/dev/null 2>&1 || true
-            else
-              echo "Factory $run_id is active ($status); watchdog leaves it alone."
-              exit 0
-            fi
+            count="$(jq '(.jobs // []) | length' <<<"$jobs")"; running="$(jq '[.jobs[]? | select(.status=="in_progress")] | length' <<<"$jobs")"; queued="$(jq '[.jobs[]? | select(.status=="queued" or .status=="pending")] | length' <<<"$jobs")"
+            if (( age > 900 && count == 0 )); then echo "Cancelling scheduler-zombie Factory $run_id."; gh api --method POST "repos/$repo/actions/runs/$run_id/cancel" >/dev/null 2>&1 || true
+            elif (( age > 1800 && running == 0 && queued > 0 )); then echo "Cancelling queue-stalled Factory $run_id."; gh api --method POST "repos/$repo/actions/runs/$run_id/cancel" >/dev/null 2>&1 || true
+            else echo "Healthy Factory $run_id is active ($status)."; exit 0; fi
+            sleep 5
           fi
 
-          sleep 5
-          active_count="$(gh run list --repo "$repo" --workflow "$FACTORY_WORKFLOW" --limit 20 \
-            --json status --jq '[.[] | select(.status != "completed")] | length' 2>/dev/null || echo 0)"
-          if [[ "$active_count" =~ ^[0-9]+$ ]] && (( active_count > 0 )); then
-            echo "A Product Factory is active after recovery; no duplicate dispatched."
-            exit 0
-          fi
+          active_count="$(gh run list --repo "$repo" --workflow "$FACTORY_WORKFLOW" --limit 20 --json status --jq '[.[] | select(.status != "completed")] | length' 2>/dev/null || echo 0)"
+          if [[ "$active_count" =~ ^[0-9]+$ ]] && (( active_count > 0 )); then echo "A Factory became active during recovery."; exit 0; fi
 
           next=$((cycle + 1))
-          last="$(jq -c '[.[] | select(.status == "completed")] | sort_by(.createdAt) | last // {}' <<<"$runs")"
-          last_id="$(jq -r '.databaseId // 0' <<<"$last")"
-          last_conclusion="$(jq -r '.conclusion // "none"' <<<"$last")"
-          note="WATCHDOG RECOVERY. READY is not proven. Previous factory run=${last_id}, conclusion=${last_conclusion}. Start a fresh cycle from the current accepted lab/wix-rules state. Preserve accepted progress. Diagnose current evidence, repair any product or orchestration-visible defect through the owning lane, then continue through lane audit, integrated simulation/audit, authenticated Wix build/dev-site/MCP QA and independent release audit. Do not stop for NOT_READY, BLOCKED_EXTERNAL, stagnation, max cycles, or provider outages; recheck/repair and continue."
+          gh workflow run "$FACTORY_WORKFLOW" --repo "$repo" --ref main -f cycle_index="$next" -f recovery_note="WATCHDOG BACKSTOP. READY is not proven and no healthy Product Factory is active. Start a fresh cycle from the current accepted state. Preserve accepted progress and continue through repair, audits, simulation, authenticated Wix Live/dev-site/MCP and independent release audit. Do not stop for provider outages, NOT_READY, BLOCKED_EXTERNAL, or stagnation."
+          echo "Dispatched Product Factory cycle $next."
 
-          gh workflow run "$FACTORY_WORKFLOW" --repo "$repo" --ref main \
-            -f cycle_index="$next" \
-            -f recovery_note="$note"
-          echo "Dispatched fresh Product Factory cycle $next."
-
-      - name: Best-effort garbage collection
+      - name: Prune obsolete runs and ephemeral branches
         if: always()
         env:
           GH_TOKEN: ${{ github.token }}
@@ -110,26 +89,19 @@ jobs:
         run: |
           set +e
           repo="$GITHUB_REPOSITORY"
-          active_ids="$(gh run list --repo "$repo" --workflow "$FACTORY_WORKFLOW" --limit 20 \
-            --json databaseId,status --jq '[.[] | select(.status != "completed") | (.databaseId|tostring)] | join(" ")' 2>/dev/null)"
+          all="$(gh api --paginate "repos/$repo/actions/runs?per_page=100" --jq '.workflow_runs[]' 2>/dev/null | jq -s '.')"
+          keep="$(mktemp)"; : > "$keep"
+          for path_count in ".github/workflows/wix-build-loop.yml:5" ".github/workflows/wix-watchdog.yml:3" ".github/workflows/ci.yml:3"; do
+            path="${path_count%:*}"; count="${path_count##*:}"
+            jq -r --arg p "$path" --argjson n "$count" '[.[] | select(.path==$p and .status=="completed")] | sort_by(.created_at) | reverse | .[:$n] | .[].id' <<<"$all" >> "$keep"
+          done
+          jq -r '.[] | select(.status!="completed") | .id' <<<"$all" >> "$keep"; sort -u "$keep" -o "$keep"
+          while IFS=$'\t' read -r id status path name; do [[ "$status" == completed ]] || continue; grep -qx "$id" "$keep" && continue; echo "Deleting obsolete Actions run $id | $name | $path"; gh api --method DELETE "repos/$repo/actions/runs/$id" >/dev/null 2>&1 || true; done < <(jq -r '.[] | [.id,.status,.path,.name] | @tsv' <<<"$all")
+          rm -f "$keep"
 
-          git ls-remote --heads "https://x-access-token:${GH_TOKEN}@github.com/${repo}.git" \
-            'refs/heads/cycle/wix-build/*' 'refs/heads/qa/wix-sim/*' 2>/dev/null \
-            | awk '{print $2}' | sed 's#refs/heads/##' | while read -r branch; do
-                [[ -n "$branch" ]] || continue
-                keep=false
-                for id in $active_ids; do
-                  [[ "$branch" == cycle/wix-build/"$id"/* ]] && keep=true
-                done
-                if [[ "$keep" == false ]]; then
-                  git push "https://x-access-token:${GH_TOKEN}@github.com/${repo}.git" --delete "$branch" >/dev/null 2>&1 || true
-                fi
-              done
-
-          gh run list --repo "$repo" --limit 100 \
-            --json databaseId,status,workflowName,createdAt \
-            --jq '.[] | select(.status == "completed") | [.databaseId,.workflowName,.createdAt] | @tsv' 2>/dev/null \
-            | awk 'NR>30 {print $1}' | while read -r id; do
-                [[ "$id" == "$GITHUB_RUN_ID" ]] && continue
-                gh api --method DELETE "repos/$repo/actions/runs/$id" >/dev/null 2>&1 || true
-              done
+          active_ids="$(gh run list --repo "$repo" --workflow "$FACTORY_WORKFLOW" --limit 30 --json databaseId,status --jq '[.[] | select(.status!="completed") | (.databaseId|tostring)] | join(" ")' 2>/dev/null)"
+          git ls-remote --heads "https://x-access-token:${GH_TOKEN}@github.com/${repo}.git" 'refs/heads/cycle/wix-build/*' 'refs/heads/cycle/wix-recon/*' 'refs/heads/qa/wix-sim/*' 'refs/heads/qa/wix-sim-latest' 2>/dev/null | awk '{print $2}' | sed 's#refs/heads/##' | while read -r branch; do
+            [[ -n "$branch" ]] || continue; keep_branch=false
+            case "$branch" in cycle/wix-build/*) run_id="$(awk -F/ '{print $3}' <<<"$branch")"; for id in $active_ids; do [[ "$run_id" == "$id" ]] && keep_branch=true; done ;; esac
+            if [[ "$keep_branch" == false ]]; then echo "Deleting obsolete ephemeral branch $branch"; git push "https://x-access-token:${GH_TOKEN}@github.com/${repo}.git" --delete "$branch" >/dev/null 2>&1 || true; fi
+          done

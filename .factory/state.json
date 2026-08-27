@@ -1,16 +1,16 @@
 {
   "architecture": "lane-machine/1",
-  "generation": 2,
-  "phase": "WIX_QA",
+  "generation": 3,
+  "phase": "BUILD",
   "lane": "integration",
   "accepted_base": "e5dda6b17e901db62c9a3a6daf8e9ed5284b02db",
   "candidate": null,
-  "repair_feedback": null,
+  "repair_feedback": "Real Wix CLI build failed; inspect factory evidence.",
   "lease": null,
-  "last_run": 33114471931,
+  "last_run": 33124891469,
   "last_transition": {
-    "reason": "integrated_audit_accept",
-    "run_id": 33114471931
+    "reason": "wix_build_failed",
+    "run_id": 33124891469
   },
   "last_operational_failure": null
 }

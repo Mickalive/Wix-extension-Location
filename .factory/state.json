@@ -1,7 +1,7 @@
 {
   "architecture": "lane-machine/1",
   "generation": 1,
-  "phase": "WIX_QA",
+  "phase": "INTEGRATED_AUDIT",
   "lane": "integration",
   "accepted_base": "e5dda6b17e901db62c9a3a6daf8e9ed5284b02db",
   "candidate": null,
@@ -9,7 +9,7 @@
   "lease": null,
   "last_run": null,
   "last_transition": {
-    "reason": "bootstrap_from_benchmarked_accepted_product_and_verified_wix_binding",
+    "reason": "bootstrap_from_benchmarked_accepted_product_with_fresh_cross_system_revalidation",
     "run_id": null
   },
   "last_operational_failure": null

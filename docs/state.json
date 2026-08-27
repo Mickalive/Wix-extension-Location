@@ -1,9 +1,9 @@
 {
   "phase": "build",
-  "cycle": 9,
+  "cycle": 10,
   "protocol": "4",
   "control_sha": "86873e5e5bbcff1694ea9f0e356f6f1f1f9d30eb",
-  "last_factory_run": 33070140476,
+  "last_factory_run": 33070370701,
   "last_result": "NOT_READY",
   "last_reason": "final_auditor_unavailable_or_failed",
   "product_promoted": false

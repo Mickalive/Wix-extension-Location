@@ -16,7 +16,7 @@ name: Wix Factory Watchdog
 
 permissions:
   actions: write
-  contents: read
+  contents: write
 
 concurrency:
   group: wix-factory-watchdog-v7
@@ -152,13 +152,16 @@ jobs:
           repo="$GITHUB_REPOSITORY"
 
           # Protocol v4 never creates ephemeral branches, so every legacy branch is disposable.
-          git ls-remote --heads "https://x-access-token:${GH_TOKEN}@github.com/${repo}.git" \
-            'refs/heads/cycle/*' 'refs/heads/qa/wix-sim/*' 'refs/heads/qa/wix-sim-latest' 2>/dev/null |
-            awk '{print $2}' | sed 's#refs/heads/##' | while read -r branch; do
-              [[ -n "$branch" ]] || continue
-              echo "Deleting retired branch $branch"
-              git push "https://x-access-token:${GH_TOKEN}@github.com/${repo}.git" --delete "$branch" >/dev/null 2>&1 || true
-            done
+          legacy_refs="$(gh api --paginate "repos/$repo/git/matching-refs/heads/cycle/" --jq '.[].ref' 2>/dev/null; \
+                         gh api --paginate "repos/$repo/git/matching-refs/heads/qa/wix-sim" --jq '.[].ref' 2>/dev/null)"
+          while IFS= read -r ref; do
+            [[ -n "$ref" ]] || continue
+            branch="${ref#refs/heads/}"
+            echo "Deleting retired branch $branch"
+            if ! gh api --method DELETE "repos/$repo/git/refs/heads/$branch" >/dev/null 2>&1; then
+              echo "::warning::Failed to delete retired branch $branch"
+            fi
+          done <<<"$legacy_refs"
 
           all="$(gh api --paginate "repos/$repo/actions/runs?per_page=100" --jq '.workflow_runs[]' 2>/dev/null | jq -s '.')"
           keep="$(mktemp)"

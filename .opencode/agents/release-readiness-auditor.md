@@ -1,7 +1,7 @@
 ---
 description: Final independent release-readiness auditor with sole READY authority.
 mode: primary
-model: opencode/x-preview-f-free
+model: opencode/laguna-s-2.1-free
 temperature: 0.01
 permission:
   edit:

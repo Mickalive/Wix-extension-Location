@@ -85,14 +85,24 @@ run_agent() {
   for attempt in 1 2; do
     echo "OpenCode $label attempt $attempt/2."
     overlay_control "$cwd"
-    set +e
-    (cd "$cwd" && opencode run --model "$OX_MODEL" --agent "$agent" "$prompt") 2>&1 | tee "$log"
-    rc=${PIPESTATUS[0]}
-    set -e
+    # The pipeline is deliberately the condition of an if statement: bash therefore
+    # does not apply errexit to a provider failure, and this function never changes
+    # the caller's `set -e` state. Provider failure is data, not control flow.
+    if (cd "$cwd" && opencode run --model "$OX_MODEL" --agent "$agent" "$prompt") 2>&1 | tee "$log"; then
+      rc=0
+    else
+      rc=${PIPESTATUS[0]}
+    fi
     restore_control "$cwd"
-    (( rc == 0 )) && return 0
-    grep -Eqi 'Unexpected server error|UnknownError|err_[A-Za-z0-9_-]+|network error|temporarily unavailable|service unavailable|provider unavailable|ECONNRESET|ETIMEDOUT|timed out|rate.?limit|HTTP[^0-9]*(429|500|502|503|504)' "$log" || return "$rc"
-    (( attempt == 2 )) || sleep 45
+    if (( rc == 0 )); then
+      return 0
+    fi
+    if ! grep -Eqi 'Unexpected server error|UnknownError|err_[A-Za-z0-9_-]+|network error|temporarily unavailable|service unavailable|provider unavailable|ECONNRESET|ETIMEDOUT|timed out|rate.?limit|HTTP[^0-9]*(429|500|502|503|504)' "$log"; then
+      return "$rc"
+    fi
+    if (( attempt < 2 )); then
+      sleep 45
+    fi
   done
   return 75
 }
@@ -283,7 +293,6 @@ EOF
       return 0
     fi
 
-    # Capture all builder changes, including untracked files, as an immutable local patch.
     (cd "$PRODUCT" && git add -A && git diff --cached --binary > "$ROOT/candidate.patch")
     git -C "$GITHUB_WORKSPACE" worktree add --detach "$ROOT/audit" "$base" >/dev/null
     if [[ -s "$ROOT/candidate.patch" ]]; then
@@ -530,7 +539,6 @@ finish() {
   local base remote_before rc report final_verdict next_cycle current_cycle final_reason
   base="$(cat "$BASE_FILE")"
 
-  # Only a candidate that passed every deterministic, adversarial, integrated and Wix-live gate may advance product code.
   if [[ "$(promote)" != true ]]; then
     reset_product_to_base
   fi
@@ -548,7 +556,6 @@ finish() {
   if (( rc != 0 )); then
     record_reason "director_unavailable_or_failed"
   else
-    # The Director may plan, but it cannot create another parallel lane machine.
     if [[ -f "$PRODUCT/docs/NEXT_CYCLE.json" ]]; then
       local active_count
       active_count="$(jq '[.lanes | to_entries[] | select(.value.status=="active")] | length' "$PRODUCT/docs/NEXT_CYCLE.json" 2>/dev/null || echo 99)"
@@ -584,7 +591,6 @@ finish() {
 
   git -C "$PRODUCT" add -A "$report" 2>/dev/null || true
 
-  # A final auditor may produce READY; deterministic code can only reject an unsupported READY, never manufacture one.
   if [[ "$final_verdict" == READY && "$(promote)" == true && "$(wix_state)" == ACCEPT && "$(gate)" == WIX_ELIGIBLE ]]; then
     jq -n \
       --arg verdict READY \
@@ -632,7 +638,6 @@ finish() {
     '{protocol:$protocol,run_id:$run,base_sha:$base_sha,control_sha:$control_sha,role:$role,pre_wix_gate:$gate,wix_live:$wix,product_promoted:($promoted=="true"),final:$final,reason:$reason}' \
     > "$PRODUCT/reports/factory/CYCLE_${GITHUB_RUN_ID}.json"
 
-  # Single compare-and-swap persistence. No force push and no ephemeral branch.
   fetch_product
   remote_before="$(git -C "$GITHUB_WORKSPACE" rev-parse "refs/remotes/origin/${PRODUCT_BRANCH}")"
   if [[ "$remote_before" != "$base" ]]; then

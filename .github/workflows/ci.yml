@@ -28,13 +28,32 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Verify constitution, immutable roles and workflow syntax
+      - name: Verify constitution, immutable roles and orchestration invariants
         shell: bash
         run: |
           set -euo pipefail
           printf '%s  MAIN_PROMPT.md\n' "$MAIN_PROMPT_SHA256" | sha256sum --check --strict
           sha256sum --check .opencode/job-descriptions/MANIFEST.sha256
           ruby -e 'require "yaml"; Dir[".github/workflows/*.{yml,yaml}"].each { |f| YAML.load_file(f); puts "valid yaml: #{f}" }'
+          bash -n .github/scripts/wix-factory-cycle.sh
+
+          # Protocol v4 deliberately has one critical cycle runner and no lane DAG/matrix.
+          if grep -Eq '^[[:space:]]+(matrix|strategy):' .github/workflows/wix-build-loop.yml; then
+            echo "::error::Factory protocol v4 must not reintroduce a matrix/strategy lane DAG."
+            exit 1
+          fi
+
+          # These files implemented retired parallel/retry state machines and must not return.
+          retired="$(find .github/scripts -maxdepth 1 -type f \
+            \( -name 'wix-v2-*' -o -name 'recover-transient-opencode.sh' -o -name 'run-opencode-with-retry.sh' \) -print)"
+          if [[ -n "$retired" ]]; then
+            echo "::error::Retired orchestration scripts reappeared:"
+            printf '%s\n' "$retired"
+            exit 1
+          fi
+
+          grep -q 'CONTROL_PROTOCOL: "4"' .github/workflows/wix-build-loop.yml
+          grep -q 'CONTROL_PROTOCOL: "4"' .github/workflows/wix-watchdog.yml
 
       - name: Set up Node
         uses: actions/setup-node@ae0d4ed08881f17d1511386f5be3e62356acd4a6

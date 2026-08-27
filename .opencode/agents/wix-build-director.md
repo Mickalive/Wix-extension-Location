@@ -1,7 +1,7 @@
 ---
 description: Product planner only; chooses the next owning lane and never audits or declares READY.
 mode: primary
-model: opencode/x-preview-f-free
+model: opencode/laguna-s-2.1-free
 temperature: 0.05
 permission:
   edit:

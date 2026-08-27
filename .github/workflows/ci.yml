@@ -38,8 +38,8 @@ jobs:
           test "$(find .github/workflows -maxdepth 1 -type f | wc -l)" -eq 3
           test "$(find .github/scripts -maxdepth 1 -type f | wc -l)" -eq 1
           jq -e '.architecture=="lane-machine/1" and .generation>=1 and .accepted_base and .phase' .factory/state.json >/dev/null
-          grep -q 'wix-product-factory-authoritative' .github/workflows/wix-build-loop.yml
-          grep -q "cron: '*/5 \* \* \* \*'" .github/workflows/wix-watchdog.yml
+          grep -Fq 'wix-product-factory-authoritative' .github/workflows/wix-build-loop.yml
+          grep -Fq "cron: '*/5 * * * *'" .github/workflows/wix-watchdog.yml
           for f in integration-auditor rules-auditor dashboard-auditor billing-auditor integrated-auditor wix-live-auditor release-readiness-auditor; do test -f ".opencode/agents/$f.md"; done
           ! test -f .opencode/agents/lane-auditor.md
           ! test -f .opencode/agents/wix-simulation-auditor.md

@@ -1,14 +1,51 @@
-name: Wix Product Factory [PAUSED]
+name: Wix Product Factory
 
 'on':
   workflow_dispatch: {}
 
 permissions:
-  contents: read
+  contents: write
+  id-token: write
+  actions: read
+
+concurrency:
+  group: wix-product-factory-authoritative
+  cancel-in-progress: false
+
+env:
+  PRODUCT_BRANCH: lab/wix-rules
+  OX_MODEL: opencode/x-preview-f-free
+  MAIN_PROMPT_SHA256: 9cdd0500552998adedbae7e2cc7605ca443187393b6299f0bf4ffdcba18c9101
+  EXPECTED_WIX_APP_ID: 3e9ec3af-001b-4684-a197-a5133677844d
+  WIX_CLI_VERSION: 1.1.238
 
 jobs:
-  paused:
-    name: Factory paused for architecture benchmark
+  transition:
+    name: One authoritative state transition
     runs-on: ubuntu-24.04
+    timeout-minutes: 90
     steps:
-      - run: echo "Wix Product Factory is intentionally paused. No product mutation, agent execution, Wix call, persistence, or handoff is performed."
+      - name: Checkout control plane
+        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Node
+        uses: actions/setup-node@ae0d4ed08881f17d1511386f5be3e62356acd4a6
+        with:
+          node-version: 22.13.0
+
+      - name: Install OpenCode CLI
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fsSL https://opencode.ai/install | bash
+          echo "$HOME/.opencode/bin" >> "$GITHUB_PATH"
+
+      - name: Execute exactly one factory transition
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          WIX_API_KEY: ${{ secrets.WIX_API_KEY }}
+        run: bash .github/scripts/wix-factory-cycle.sh

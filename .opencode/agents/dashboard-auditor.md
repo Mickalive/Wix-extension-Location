@@ -1,7 +1,7 @@
 ---
 description: Independent auditor for the dashboard lane. Never builds or repairs.
 mode: primary
-model: opencode/x-preview-f-free
+model: opencode/laguna-s-2.1-free
 temperature: 0.01
 permission:
   edit:

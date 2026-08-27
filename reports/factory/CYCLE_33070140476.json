@@ -1,0 +1,12 @@
+{
+  "protocol": "4",
+  "run_id": 33070140476,
+  "base_sha": "f40aaaff8db0236721fca0a4a3746eb2efa2cf18",
+  "control_sha": "86873e5e5bbcff1694ea9f0e356f6f1f1f9d30eb",
+  "role": "integration",
+  "pre_wix_gate": "CLOSED",
+  "wix_live": "NOT_RUN",
+  "product_promoted": false,
+  "final": "NOT_READY",
+  "reason": "final_auditor_unavailable_or_failed"
+}

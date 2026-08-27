@@ -1,16 +1,16 @@
 {
   "architecture": "lane-machine/1",
-  "generation": 1,
-  "phase": "INTEGRATED_AUDIT",
+  "generation": 2,
+  "phase": "WIX_QA",
   "lane": "integration",
   "accepted_base": "e5dda6b17e901db62c9a3a6daf8e9ed5284b02db",
   "candidate": null,
   "repair_feedback": null,
   "lease": null,
-  "last_run": null,
+  "last_run": 33114471931,
   "last_transition": {
-    "reason": "bootstrap_from_benchmarked_accepted_product_with_fresh_cross_system_revalidation",
-    "run_id": null
+    "reason": "integrated_audit_accept",
+    "run_id": 33114471931
   },
   "last_operational_failure": null
 }

@@ -3,28 +3,23 @@ name: Wix Autonomous Product Factory
 on:
   workflow_dispatch:
     inputs:
-      human_note:
-        description: "Optional note subordinate to MAIN_PROMPT"
-        required: false
-        type: string
-        default: ""
       cycle_index:
-        description: "Build cycle index"
+        description: "Monotonic product cycle index"
         required: false
         type: number
         default: 1
-      max_cycles:
-        description: "Maximum cycles; 0 = continue until deterministic stop"
+      recovery_note:
+        description: "Failure/recovery evidence from the previous cycle"
         required: false
-        type: number
-        default: 0
+        type: string
+        default: ""
 
 permissions:
   contents: write
   actions: write
 
 concurrency:
-  group: wix-autonomous-product-factory
+  group: wix-autonomous-product-factory-v3
   cancel-in-progress: false
 
 env:
@@ -32,40 +27,43 @@ env:
   LANE_BRANCH: lab/wix-rules
   MAIN_PROMPT_SHA256: 9cdd0500552998adedbae7e2cc7605ca443187393b6299f0bf4ffdcba18c9101
   CI: "true"
-  WIX_CLI_VERSION: "1.1.237"
+  WIX_CLI_VERSION: "1.1.238"
   WIX_MCP_VERSION: "1.0.71"
+  EXPECTED_WIX_APP_ID: 3e9ec3af-001b-4684-a197-a5133677844d
 
 jobs:
   prepare:
-    name: Prepare immutable accepted state
+    name: Pin accepted product state
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    timeout-minutes: 12
     outputs:
-      accepted_sha: ${{ steps.validate.outputs.accepted_sha }}
-      cycle_index: ${{ steps.validate.outputs.cycle_index }}
-      max_cycles: ${{ steps.validate.outputs.max_cycles }}
+      accepted_sha: ${{ steps.pin.outputs.accepted_sha }}
+      cycle_index: ${{ steps.pin.outputs.cycle_index }}
     steps:
       - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
         with:
           fetch-depth: 0
           ref: lab/wix-rules
           persist-credentials: false
-      - name: Load pinned control helper
-        env:
-          GH_TOKEN: ${{ github.token }}
+      - name: Validate accepted state and Wix binding
+        id: pin
         shell: bash
+        env:
+          CYCLE_INPUT: ${{ inputs.cycle_index }}
         run: |
           set -euo pipefail
-          auth=$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)
-          git -c "http.extraheader=AUTHORIZATION: basic $auth" fetch origin "$GITHUB_SHA"
-          git show "$GITHUB_SHA:.github/scripts/wix-v2-validate-queue.sh" > /tmp/validate.sh
-          chmod +x /tmp/validate.sh
-      - name: Validate queue and pin base
-        id: validate
-        env:
-          CYCLE_INDEX: ${{ inputs.cycle_index }}
-          MAX_CYCLES: ${{ inputs.max_cycles }}
-        run: /tmp/validate.sh
+          printf '%s  MAIN_PROMPT.md\n' "$MAIN_PROMPT_SHA256" | sha256sum --check --strict
+          sha256sum --check --strict .opencode/job-descriptions/MANIFEST.sha256
+          test -f wix.config.json
+          test "$(jq -r '.appId // empty' wix.config.json)" = "$EXPECTED_WIX_APP_ID"
+          test -n "$(jq -r '.projectId // empty' wix.config.json)"
+          test "$(jq -r '.projectType // empty' wix.config.json)" = "App"
+          unexpected="$(find .github/workflows -maxdepth 1 -type f ! -name ci.yml -print 2>/dev/null || true)"
+          test -z "$unexpected" || { echo "::error::Accepted product branch contains orchestration workflows: $unexpected"; exit 1; }
+          cycle="${CYCLE_INPUT:-1}"
+          [[ "$cycle" =~ ^[0-9]+$ ]] || cycle=1
+          echo "accepted_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          echo "cycle_index=$cycle" >> "$GITHUB_OUTPUT"
 
   build:
     name: Build — ${{ matrix.label }}
@@ -91,20 +89,21 @@ jobs:
             agent: billing-builder
             directive: directives/BILLING.md
     runs-on: ubuntu-24.04
-    timeout-minutes: 240
+    timeout-minutes: 150
     steps:
       - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
         with:
           fetch-depth: 0
           ref: ${{ needs.prepare.outputs.accepted_sha }}
           persist-credentials: false
-      - name: Resolve immutable task
+      - name: Resolve lane state
         id: plan
         env:
           ROLE: ${{ matrix.role }}
+        shell: bash
         run: |
           set -euo pipefail
-          status=$(jq -er --arg r "$ROLE" '.lanes[$r].status|select(.=="active" or .=="blocked" or .=="complete")' docs/NEXT_CYCLE.json)
+          status="$(jq -er --arg r "$ROLE" '.lanes[$r].status | select(.=="active" or .=="blocked" or .=="complete")' docs/NEXT_CYCLE.json)"
           echo "status=$status" >> "$GITHUB_OUTPUT"
       - uses: actions/setup-node@ae0d4ed08881f17d1511386f5be3e62356acd4a6
         if: ${{ steps.plan.outputs.status == 'active' }}
@@ -116,9 +115,10 @@ jobs:
       - name: Set up reviewed OpenCode
         if: ${{ steps.plan.outputs.status == 'active' }}
         uses: ./.github/actions/setup-opencode
-      - name: Load pinned builder helper
+      - name: Load current trusted builder helper
         env:
           GH_TOKEN: ${{ github.token }}
+        shell: bash
         run: |
           set -euo pipefail
           auth=$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)
@@ -134,7 +134,10 @@ jobs:
           AGENT: ${{ matrix.agent }}
           DIRECTIVE: ${{ matrix.directive }}
           CYCLE_INDEX: ${{ needs.prepare.outputs.cycle_index }}
-          HUMAN_NOTE: ${{ inputs.human_note }}
+          HUMAN_NOTE: ${{ inputs.recovery_note }}
+          OPENCODE_MAX_ATTEMPTS: "6"
+          OPENCODE_RETRY_DELAY_SECONDS: "60"
+          OPENCODE_FAST_RETRY_DELAY_SECONDS: "60"
         run: /tmp/build.sh
 
   audit:
@@ -157,7 +160,7 @@ jobs:
             label: Billing & Entitlements
             directive: directives/BILLING.md
     runs-on: ubuntu-24.04
-    timeout-minutes: 180
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
         with:
@@ -170,6 +173,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           ROLE: ${{ matrix.role }}
           BASE_SHA: ${{ needs.prepare.outputs.accepted_sha }}
+        shell: bash
         run: |
           set -euo pipefail
           branch="cycle/wix-build/${GITHUB_RUN_ID}/${ROLE}"
@@ -189,15 +193,17 @@ jobs:
         if: ${{ steps.candidate.outputs.status == 'active' }}
         env:
           ROLE: ${{ matrix.role }}
+        shell: bash
         run: |
           target="/tmp/wix_${ROLE}_candidate"
           if [[ -f "$target/package-lock.json" ]]; then npm --prefix "$target" ci --ignore-scripts --no-audit --no-fund; fi
       - name: Set up reviewed OpenCode
         if: ${{ steps.candidate.outputs.status == 'active' }}
         uses: ./.github/actions/setup-opencode
-      - name: Load pinned audit helper
+      - name: Load current trusted audit helper
         env:
           GH_TOKEN: ${{ github.token }}
+        shell: bash
         run: |
           set -euo pipefail
           auth=$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)
@@ -213,13 +219,16 @@ jobs:
           CANDIDATE_SHA: ${{ steps.candidate.outputs.sha }}
           DIRECTIVE: ${{ matrix.directive }}
           CYCLE_INDEX: ${{ needs.prepare.outputs.cycle_index }}
+          OPENCODE_MAX_ATTEMPTS: "6"
+          OPENCODE_RETRY_DELAY_SECONDS: "60"
+          OPENCODE_FAST_RETRY_DELAY_SECONDS: "60"
         run: /tmp/audit.sh
 
   preview:
-    name: Assemble audited integration preview
+    name: Assemble accepted candidates
     needs: [prepare, audit]
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 35
     outputs:
       preview_sha: ${{ steps.assemble.outputs.preview_sha }}
       accepted_changes: ${{ steps.assemble.outputs.accepted_changes }}
@@ -230,16 +239,17 @@ jobs:
           fetch-depth: 0
           ref: ${{ needs.prepare.outputs.accepted_sha }}
           persist-credentials: false
-      - name: Load pinned integration helper
+      - name: Load trusted deterministic integrator
         env:
           GH_TOKEN: ${{ github.token }}
+        shell: bash
         run: |
           set -euo pipefail
           auth=$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)
           git -c "http.extraheader=AUTHORIZATION: basic $auth" fetch origin "$GITHUB_SHA"
           git show "$GITHUB_SHA:.github/scripts/wix-v2-assemble-preview.sh" > /tmp/assemble.sh
           chmod +x /tmp/assemble.sh
-      - name: Assemble only ACCEPT candidates
+      - name: Assemble only independently ACCEPTed candidates
         id: assemble
         env:
           GH_TOKEN: ${{ github.token }}
@@ -248,74 +258,21 @@ jobs:
       - uses: actions/setup-node@ae0d4ed08881f17d1511386f5be3e62356acd4a6
         with:
           node-version: 22.13.0
-      - name: Deterministic preview check
+      - name: Strong deterministic preview gate
         env:
           PREVIEW_SHA: ${{ steps.assemble.outputs.preview_sha }}
+        shell: bash
         run: |
           set -euo pipefail
           git reset --hard "$PREVIEW_SHA"
           npm ci --ignore-scripts --no-audit --no-fund
           npm run check
           npm run build
+          test "$(jq -r '.appId // empty' wix.config.json)" = "$EXPECTED_WIX_APP_ID"
 
-  integration_audit:
-    name: Independent cross-lane integration audit
+  simulation:
+    name: Adversarial simulated Wix acceptance
     needs: [prepare, preview]
-    runs-on: ubuntu-24.04
-    timeout-minutes: 180
-    outputs:
-      verdict: ${{ steps.persist.outputs.verdict }}
-      audit_sha: ${{ steps.persist.outputs.audit_sha }}
-    steps:
-      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
-        with:
-          fetch-depth: 0
-          ref: ${{ needs.prepare.outputs.accepted_sha }}
-          persist-credentials: false
-      - name: Mount exact preview
-        env:
-          PREVIEW_SHA: ${{ needs.preview.outputs.preview_sha }}
-        run: |
-          set -euo pipefail
-          git worktree add --detach /tmp/wix_integrated_preview "$PREVIEW_SHA"
-      - uses: actions/setup-node@ae0d4ed08881f17d1511386f5be3e62356acd4a6
-        with:
-          node-version: 22.13.0
-      - run: npm --prefix /tmp/wix_integrated_preview ci --ignore-scripts --no-audit --no-fund
-      - uses: ./.github/actions/setup-opencode
-      - name: Adversarial cross-lane audit
-        env:
-          OPENCODE_RETRY_LABEL: audit-integrated
-          CYCLE_INDEX: ${{ needs.prepare.outputs.cycle_index }}
-        run: |
-          set -euo pipefail
-          mkdir -p reports/audits
-          bash .github/scripts/run-opencode-with-retry.sh opencode run --model "$OX_MODEL" --agent lane-auditor "Audit the exact integrated Wix preview at /tmp/wix_integrated_preview for cycle $CYCLE_INDEX. Read your immutable fiche, MAIN_PROMPT.md, AGENTS.md, the binding Technical Contract/Blueprint, all current lane audits and the integration manifest. Attack cross-lane semantics, DTO/type compatibility, target-aware CREATE/CANCEL/RESCHEDULE behavior, dashboard/platform contract parity, billing/enforcement composition, rollback, failure posture and scope. Do not modify product code. Write only reports/audits/CYCLE_${GITHUB_RUN_ID}_INTEGRATED.md. End exactly VERDICT: ACCEPT, VERDICT: FIX_BEFORE_INTEGRATION, or VERDICT: REJECT."
-      - name: Persist integrated audit evidence
-        id: persist
-        env:
-          GH_TOKEN: ${{ github.token }}
-          BASE_SHA: ${{ needs.prepare.outputs.accepted_sha }}
-        run: |
-          set -euo pipefail
-          report="reports/audits/CYCLE_${GITHUB_RUN_ID}_INTEGRATED.md"
-          test -f "$report"
-          verdict=$(tail -n 1 "$report" | sed -n 's/^VERDICT: //p')
-          [[ "$verdict" == ACCEPT || "$verdict" == FIX_BEFORE_INTEGRATION || "$verdict" == REJECT ]]
-          git config user.name wix-integration-auditor
-          git config user.email wix-integration-auditor@users.noreply.github.com
-          git switch -C "cycle/wix-build/${GITHUB_RUN_ID}/audit-integrated" "$BASE_SHA"
-          git add "$report"
-          git commit -m "Wix build $GITHUB_RUN_ID: integrated audit"
-          test "$(git rev-parse HEAD^)" = "$BASE_SHA"
-          auth=$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)
-          git -c "http.extraheader=AUTHORIZATION: basic $auth" push --force origin "HEAD:refs/heads/cycle/wix-build/${GITHUB_RUN_ID}/audit-integrated"
-          echo "verdict=$verdict" >> "$GITHUB_OUTPUT"
-          echo "audit_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
-
-  wix_live_qa:
-    name: Wix Live QA — real dev environment
-    needs: [prepare, preview, integration_audit]
     runs-on: ubuntu-24.04
     timeout-minutes: 120
     outputs:
@@ -329,155 +286,255 @@ jobs:
       - uses: actions/setup-node@ae0d4ed08881f17d1511386f5be3e62356acd4a6
         with:
           node-version: 22.13.0
-      - name: Prepare evidence directory
-        run: mkdir -p reports/wix-live
-      - name: Reject live execution of rejected preview
-        if: ${{ needs.integration_audit.outputs.verdict != 'ACCEPT' }}
+      - name: Deterministic simulation baseline
         run: |
-          cat > "reports/wix-live/CYCLE_${GITHUB_RUN_ID}.md" <<EOF
-          # Wix Live QA
-          The integrated preview was not accepted by the independent cross-lane audit, so no real Wix operation was attempted.
-          VERDICT: FIX_BEFORE_INTEGRATION
-          EOF
-      - name: Detect real Wix scaffold
-        id: scaffold
-        if: ${{ needs.integration_audit.outputs.verdict == 'ACCEPT' }}
-        run: |
-          if [[ -f wix.config.json ]]; then echo "ready=true" >> "$GITHUB_OUTPUT"; else echo "ready=false" >> "$GITHUB_OUTPUT"; fi
-      - name: Record missing real scaffold
-        if: ${{ needs.integration_audit.outputs.verdict == 'ACCEPT' && steps.scaffold.outputs.ready != 'true' }}
-        run: |
-          cat > "reports/wix-live/CYCLE_${GITHUB_RUN_ID}.md" <<EOF
-          # Wix Live QA
-          The integrated product has no real wix.config.json. It is not yet registered as a testable Wix CLI app, so empirical Wix/dev-site claims cannot be made.
-          Owning lane: integration.
-          Required repair: establish the supported non-secret Wix CLI app scaffold/registration and prove it with this live job.
-          VERDICT: FIX_BEFORE_INTEGRATION
-          EOF
-      - name: Authenticate Wix CLI without exposing the secret to OX
-        id: auth
-        if: ${{ needs.integration_audit.outputs.verdict == 'ACCEPT' && steps.scaffold.outputs.ready == 'true' }}
+          set -euo pipefail
+          npm ci --ignore-scripts --no-audit --no-fund
+          npm run check
+          npm run build
+      - name: Set up reviewed OpenCode
+        uses: ./.github/actions/setup-opencode
+      - name: Run independent simulation auditor
         env:
-          WIX_API_KEY: ${{ secrets.WIX_API_KEY }}
+          OPENCODE_RETRY_LABEL: wix-simulation
+          OPENCODE_MAX_ATTEMPTS: "6"
+          OPENCODE_RETRY_DELAY_SECONDS: "60"
+          OPENCODE_FAST_RETRY_DELAY_SECONDS: "60"
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p reports/simulation
+          bash .github/scripts/run-opencode-with-retry.sh opencode run --model "$OX_MODEL" --agent wix-simulation-auditor "Audit the exact integrated preview at SHA ${{ needs.preview.outputs.preview_sha }} for Product Factory run $GITHUB_RUN_ID. Stress advanced booking rules by location, CREATE/CANCEL/RESCHEDULE behavior, rollback/idempotency, dashboard-contract parity, billing location limits, failure posture and cross-lane edge cases. Use temporary fixtures only. Simulation is not Wix proof. Write reports/simulation/CYCLE_${GITHUB_RUN_ID}.md and reports/simulation/CYCLE_${GITHUB_RUN_ID}.json. JSON must contain source_run_id as a string, combined_candidate=true, verdict PASS|FAIL|INCONCLUSIVE, arrays scenarios, blockers, live_wix_gates and commands. Do not edit product code."
+      - name: Validate and persist simulation evidence
+        id: persist
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BASE_SHA: ${{ needs.prepare.outputs.accepted_sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          json="reports/simulation/CYCLE_${GITHUB_RUN_ID}.json"
+          md="reports/simulation/CYCLE_${GITHUB_RUN_ID}.md"
+          test -f "$json" && test -f "$md"
+          verdict=$(jq -er '.verdict | select(.=="PASS" or .=="FAIL" or .=="INCONCLUSIVE")' "$json")
+          jq -e --arg r "$GITHUB_RUN_ID" '.source_run_id==$r and .combined_candidate==true and (.scenarios|type=="array") and (.blockers|type=="array") and (.live_wix_gates|type=="array") and (.commands|type=="array")' "$json" >/dev/null
+          cp "$json" /tmp/sim.json; cp "$md" /tmp/sim.md
+          git reset --hard "$BASE_SHA"; git clean -fd
+          mkdir -p reports/simulation
+          cp /tmp/sim.json "$json"; cp /tmp/sim.md "$md"
+          git config user.name wix-simulation-auditor
+          git config user.email wix-simulation-auditor@users.noreply.github.com
+          git switch -C "cycle/wix-build/${GITHUB_RUN_ID}/audit-simulation" "$BASE_SHA"
+          git add reports/simulation
+          git commit -m "Wix build $GITHUB_RUN_ID: simulation evidence"
+          auth=$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)
+          git -c "http.extraheader=AUTHORIZATION: basic $auth" push --force origin "HEAD:refs/heads/cycle/wix-build/${GITHUB_RUN_ID}/audit-simulation"
+          echo "verdict=$verdict" >> "$GITHUB_OUTPUT"
+
+  integration_audit:
+    name: Independent cross-lane integration audit
+    needs: [prepare, preview]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    outputs:
+      verdict: ${{ steps.persist.outputs.verdict }}
+    steps:
+      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+        with:
+          fetch-depth: 0
+          ref: ${{ needs.prepare.outputs.accepted_sha }}
+          persist-credentials: false
+      - name: Mount exact integrated preview
+        env:
+          PREVIEW_SHA: ${{ needs.preview.outputs.preview_sha }}
+        run: git worktree add --detach /tmp/wix_integrated_preview "$PREVIEW_SHA"
+      - uses: actions/setup-node@ae0d4ed08881f17d1511386f5be3e62356acd4a6
+        with:
+          node-version: 22.13.0
+      - run: npm --prefix /tmp/wix_integrated_preview ci --ignore-scripts --no-audit --no-fund
+      - name: Set up reviewed OpenCode
+        uses: ./.github/actions/setup-opencode
+      - name: Adversarial cross-lane audit
+        env:
+          OPENCODE_RETRY_LABEL: audit-integrated
+          OPENCODE_MAX_ATTEMPTS: "6"
+          OPENCODE_RETRY_DELAY_SECONDS: "60"
+          OPENCODE_FAST_RETRY_DELAY_SECONDS: "60"
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p reports/audits
+          bash .github/scripts/run-opencode-with-retry.sh opencode run --model "$OX_MODEL" --agent lane-auditor "Audit the exact immutable integrated preview at /tmp/wix_integrated_preview for cycle ${{ needs.prepare.outputs.cycle_index }}. Attack cross-lane semantics, DTO compatibility, target-aware CREATE/CANCEL/RESCHEDULE behavior, dashboard/platform parity, billing/enforcement composition, rollback, idempotency, failure posture and scope. Do not modify product code. Write only reports/audits/CYCLE_${GITHUB_RUN_ID}_INTEGRATED.md. End exactly VERDICT: ACCEPT, VERDICT: FIX_BEFORE_INTEGRATION, or VERDICT: REJECT."
+      - name: Persist integrated audit evidence
+        id: persist
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BASE_SHA: ${{ needs.prepare.outputs.accepted_sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          report="reports/audits/CYCLE_${GITHUB_RUN_ID}_INTEGRATED.md"
+          test -f "$report"
+          verdict=$(tail -n 1 "$report" | sed -n 's/^VERDICT: //p')
+          [[ "$verdict" == ACCEPT || "$verdict" == FIX_BEFORE_INTEGRATION || "$verdict" == REJECT ]]
+          git config user.name wix-integration-auditor
+          git config user.email wix-integration-auditor@users.noreply.github.com
+          git switch -C "cycle/wix-build/${GITHUB_RUN_ID}/audit-integrated" "$BASE_SHA"
+          git add "$report"
+          git commit -m "Wix build $GITHUB_RUN_ID: integrated audit"
+          auth=$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)
+          git -c "http.extraheader=AUTHORIZATION: basic $auth" push --force origin "HEAD:refs/heads/cycle/wix-build/${GITHUB_RUN_ID}/audit-integrated"
+          echo "verdict=$verdict" >> "$GITHUB_OUTPUT"
+
+  wix_live_qa:
+    name: Wix Live QA — authenticated dev environment
+    needs: [prepare, preview, simulation, integration_audit]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    outputs:
+      verdict: ${{ steps.persist.outputs.verdict }}
+    steps:
+      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+        with:
+          fetch-depth: 0
+          ref: ${{ needs.preview.outputs.preview_sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@ae0d4ed08881f17d1511386f5be3e62356acd4a6
+        with:
+          node-version: 22.13.0
+      - name: Prepare Wix Live evidence
+        run: mkdir -p reports/wix-live
+      - name: Refuse live execution of a rejected integrated preview
+        if: ${{ needs.integration_audit.outputs.verdict != 'ACCEPT' }}
+        shell: bash
+        run: |
+          cat > "reports/wix-live/CYCLE_${GITHUB_RUN_ID}.md" <<EOF
+          # Wix Live QA
+          Integrated audit verdict: ${{ needs.integration_audit.outputs.verdict }}
+          Real Wix operations were not attempted against a rejected preview.
+          Owning action: repair the negative integrated findings.
+          VERDICT: FIX_BEFORE_INTEGRATION
+          EOF
+      - name: Validate exact registered app binding
+        id: binding
+        if: ${{ needs.integration_audit.outputs.verdict == 'ACCEPT' }}
+        shell: bash
         run: |
           set +e
-          if [[ -z "$WIX_API_KEY" ]]; then
-            echo "ready=false" >> "$GITHUB_OUTPUT"
-            echo "reason=missing_secret" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          npx -y "@wix/cli@${WIX_CLI_VERSION}" login --api-key "$WIX_API_KEY" >/tmp/wix-login.log 2>&1
-          rc=$?
-          rm -f /tmp/wix-login.log
-          if (( rc == 0 )); then
-            echo "ready=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "ready=false" >> "$GITHUB_OUTPUT"
-            echo "reason=authentication_failed" >> "$GITHUB_OUTPUT"
-          fi
-      - name: Record Wix authentication blocker
-        if: ${{ steps.scaffold.outputs.ready == 'true' && steps.auth.outputs.ready != 'true' }}
+          test -f wix.config.json; rc=$?
+          if (( rc == 0 )); then test "$(jq -r '.appId // empty' wix.config.json)" = "$EXPECTED_WIX_APP_ID"; rc=$?; fi
+          if (( rc == 0 )); then echo "ready=true" >> "$GITHUB_OUTPUT"; else echo "ready=false" >> "$GITHUB_OUTPUT"; fi
+      - name: Record binding repair
+        if: ${{ needs.integration_audit.outputs.verdict == 'ACCEPT' && steps.binding.outputs.ready != 'true' }}
         run: |
           cat > "reports/wix-live/CYCLE_${GITHUB_RUN_ID}.md" <<EOF
           # Wix Live QA
-          The real Wix CLI scaffold exists, but the dedicated CI authentication step could not establish a Wix session. The API key itself was never exposed to OX or persisted.
-          Required external action: verify the GitHub Actions secret and its Wix account/site permissions.
+          The candidate is not bound to the expected existing Wix app $EXPECTED_WIX_APP_ID.
+          Owning lane: integration.
+          VERDICT: FIX_BEFORE_INTEGRATION
+          EOF
+      - name: Authenticate Wix CLI without exposing secret to OX
+        id: auth
+        if: ${{ steps.binding.outputs.ready == 'true' }}
+        env:
+          WIX_API_KEY: ${{ secrets.WIX_API_KEY }}
+        shell: bash
+        run: |
+          set +e
+          if [[ -z "$WIX_API_KEY" ]]; then echo "ready=false" >> "$GITHUB_OUTPUT"; echo "reason=missing_secret" >> "$GITHUB_OUTPUT"; exit 0; fi
+          npx -y "@wix/cli@${WIX_CLI_VERSION}" login --api-key "$WIX_API_KEY" >/tmp/wix-login.log 2>&1
+          rc=$?; rm -f /tmp/wix-login.log
+          if (( rc == 0 )); then echo "ready=true" >> "$GITHUB_OUTPUT"; else echo "ready=false" >> "$GITHUB_OUTPUT"; echo "reason=authentication_failed" >> "$GITHUB_OUTPUT"; fi
+      - name: Record authentication recheck
+        if: ${{ steps.binding.outputs.ready == 'true' && steps.auth.outputs.ready != 'true' }}
+        env:
+          REASON: ${{ steps.auth.outputs.reason }}
+        run: |
+          cat > "reports/wix-live/CYCLE_${GITHUB_RUN_ID}.md" <<EOF
+          # Wix Live QA
+          Wix CLI authentication prerequisite is currently unavailable: $REASON.
+          The secret was not exposed to OX or persisted. This is non-terminal and must be rechecked.
           VERDICT: BLOCKED_EXTERNAL
           EOF
-      - name: Build and resolve Development Site
+      - name: Real wix build and Development Site resolution
         id: wix
         if: ${{ steps.auth.outputs.ready == 'true' }}
+        shell: bash
         run: |
           set +e
           npx -y "@wix/cli@${WIX_CLI_VERSION}" build >/tmp/wix-build.log 2>&1
           build_rc=$?
-          if (( build_rc != 0 )); then
-            echo "ready=false" >> "$GITHUB_OUTPUT"
-            echo "reason=build_failed" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
+          if (( build_rc != 0 )); then echo "ready=false" >> "$GITHUB_OUTPUT"; echo "reason=build_failed" >> "$GITHUB_OUTPUT"; exit 0; fi
           npx -y "@wix/cli@${WIX_CLI_VERSION}" dev-site list >/tmp/wix-dev-sites.jsonl 2>/tmp/wix-dev-sites.err
           list_rc=$?
-          if (( list_rc != 0 )); then
-            echo "ready=false" >> "$GITHUB_OUTPUT"
-            echo "reason=dev_site_list_failed" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
+          if (( list_rc != 0 )); then echo "ready=false" >> "$GITHUB_OUTPUT"; echo "reason=dev_site_list_failed" >> "$GITHUB_OUTPUT"; exit 0; fi
           npx -y "@wix/cli@${WIX_CLI_VERSION}" dev-site current >/tmp/wix-current.jsonl 2>/tmp/wix-current.err
           current_rc=$?
           if (( current_rc != 0 )); then
             npx -y "@wix/cli@${WIX_CLI_VERSION}" dev-site create --select >/tmp/wix-current.jsonl 2>/tmp/wix-create.err
             create_rc=$?
-            if (( create_rc != 0 )); then
-              echo "ready=false" >> "$GITHUB_OUTPUT"
-              echo "reason=dev_site_unavailable" >> "$GITHUB_OUTPUT"
-              exit 0
-            fi
+            if (( create_rc != 0 )); then echo "ready=false" >> "$GITHUB_OUTPUT"; echo "reason=dev_site_unavailable" >> "$GITHUB_OUTPUT"; exit 0; fi
           fi
-          echo "ready=true" >> "$GITHUB_OUTPUT"
-          echo "reason=ready" >> "$GITHUB_OUTPUT"
-      - name: Record deterministic Wix CLI blocker
+          echo "ready=true" >> "$GITHUB_OUTPUT"; echo "reason=ready" >> "$GITHUB_OUTPUT"
+      - name: Record deterministic Wix CLI finding
         if: ${{ steps.auth.outputs.ready == 'true' && steps.wix.outputs.ready != 'true' }}
         env:
           REASON: ${{ steps.wix.outputs.reason }}
+        shell: bash
         run: |
-          if [[ "$REASON" == build_failed ]]; then
-            verdict=FIX_BEFORE_INTEGRATION
-            action="The registered Wix CLI project does not pass a real Wix build. Owning lane: integration. Repair the scaffold/build failure and rerun live QA."
-          else
-            verdict=BLOCKED_EXTERNAL
-            action="The Wix CLI authenticated, but no usable Development Site could be listed/selected/created with the granted account permissions. Do not broaden account permissions automatically; resolve the dedicated dev-site prerequisite."
-          fi
+          if [[ "$REASON" == build_failed ]]; then verdict=FIX_BEFORE_INTEGRATION; action="Real wix build failed. Owning lane: integration. Repair the actual build error."; source=/tmp/wix-build.log; else verdict=BLOCKED_EXTERNAL; action="Development Site resolution is currently unavailable. Recheck safely; do not broaden permissions or operate on production."; source=/tmp/wix-current.err; [[ -s "$source" ]] || source=/tmp/wix-create.err; [[ -s "$source" ]] || source=/tmp/wix-dev-sites.err; fi
+          excerpt="$(tail -n 40 "$source" 2>/dev/null | sed -E 's/(token|secret|password|api[_ -]?key)[=: ][^ ]+/\1=[REDACTED]/Ig' | head -c 5000)"
           cat > "reports/wix-live/CYCLE_${GITHUB_RUN_ID}.md" <<EOF
           # Wix Live QA
           Reason: $REASON
           $action
+
+          Sanitized CLI evidence:
+          \`\`\`
+          $excerpt
+          \`\`\`
           VERDICT: $verdict
           EOF
       - name: Set up reviewed OpenCode
         if: ${{ steps.wix.outputs.ready == 'true' }}
         uses: ./.github/actions/setup-opencode
-      - name: Run OX against real Wix through MCP
+      - name: Audit real Wix through authenticated MCP
         if: ${{ steps.wix.outputs.ready == 'true' }}
         env:
           OPENCODE_CONFIG_CONTENT: >-
             {"mcp":{"wix":{"type":"local","command":["npx","-y","@wix/mcp@1.0.71","--wixCliAuth"],"enabled":true,"timeout":30000}}}
           OPENCODE_RETRY_LABEL: wix-live
+          OPENCODE_MAX_ATTEMPTS: "6"
+          OPENCODE_RETRY_DELAY_SECONDS: "60"
+          OPENCODE_FAST_RETRY_DELAY_SECONDS: "60"
+        shell: bash
         run: |
           set -euo pipefail
-          bash .github/scripts/run-opencode-with-retry.sh opencode run --model "$OX_MODEL" --agent release-readiness-auditor "WIX LIVE MODE. Read your immutable fiche and binding contracts. The workflow authenticated Wix CLI before this process without exposing the API key to you. Never inspect ~/.wix, environment secrets, auth files or credentials. Use Wix MCP only for empirical evidence. Prefer read-only List/Get/query/API operations. Never publish/release/submit, delete sites/apps, manage Premium/billing/domains/team/organization, upload arbitrary content, or use ManageWixSite. You may execute a reversible mutation probe only on a positively identified Development Site and only if required to test this app, isolated with OX_QA_ naming. Verify real scaffold recognition, wix build, dev-site context, Wix Bookings/location/service assumptions, required extension/permission/API behavior, and any currently implemented live-testable paths. Do not modify product code. Write only reports/wix-live/CYCLE_${GITHUB_RUN_ID}.md ending exactly VERDICT: ACCEPT, VERDICT: FIX_BEFORE_INTEGRATION, or VERDICT: BLOCKED_EXTERNAL."
+          bash .github/scripts/run-opencode-with-retry.sh opencode run --model "$OX_MODEL" --agent release-readiness-auditor "WIX LIVE MODE for Product Factory run $GITHUB_RUN_ID. The workflow already authenticated Wix CLI and selected or created a Development Site without exposing the API key to you. Never inspect ~/.wix, environment secrets or auth files. Use Wix MCP for empirical evidence. Prefer reads. Never publish/release/submit, delete sites/apps, manage Premium/billing/domains/team/organization, upload arbitrary content, or operate on a non-development site. Reversible OX_QA_ mutation probes are allowed only on a positively identified Development Site when required for a product gate. Verify scaffold recognition, real wix build, dev-site context, Wix Bookings locations/services/schedules contracts, validation-extension assumptions, dashboard compatibility, auth/permissions, entitlement inputs, webhooks where testable, mutation/rollback safety, and secret isolation. Do not modify product code. Write only reports/wix-live/CYCLE_${GITHUB_RUN_ID}.md ending exactly VERDICT: ACCEPT, VERDICT: FIX_BEFORE_INTEGRATION, or VERDICT: BLOCKED_EXTERNAL."
       - name: Persist Wix Live evidence
         id: persist
         env:
           GH_TOKEN: ${{ github.token }}
           BASE_SHA: ${{ needs.prepare.outputs.accepted_sha }}
+        shell: bash
         run: |
           set -euo pipefail
-          report="reports/wix-live/CYCLE_${GITHUB_RUN_ID}.md"
-          test -f "$report"
+          report="reports/wix-live/CYCLE_${GITHUB_RUN_ID}.md"; test -f "$report"
           verdict=$(tail -n 1 "$report" | sed -n 's/^VERDICT: //p')
           [[ "$verdict" == ACCEPT || "$verdict" == FIX_BEFORE_INTEGRATION || "$verdict" == BLOCKED_EXTERNAL ]]
-          cp "$report" /tmp/wix-live-report.md
-          git reset --hard "$BASE_SHA"
-          git clean -fd
-          mkdir -p reports/wix-live
-          cp /tmp/wix-live-report.md "$report"
-          git config user.name wix-live-auditor
-          git config user.email wix-live-auditor@users.noreply.github.com
+          cp "$report" /tmp/wix-live.md; git reset --hard "$BASE_SHA"; git clean -fd; mkdir -p reports/wix-live; cp /tmp/wix-live.md "$report"
+          git config user.name wix-live-auditor; git config user.email wix-live-auditor@users.noreply.github.com
           git switch -C "cycle/wix-build/${GITHUB_RUN_ID}/audit-wix-live" "$BASE_SHA"
-          git add "$report"
-          git commit -m "Wix build $GITHUB_RUN_ID: Wix Live QA"
-          test "$(git rev-parse HEAD^)" = "$BASE_SHA"
+          git add "$report"; git commit -m "Wix build $GITHUB_RUN_ID: Wix Live QA"
           auth=$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)
           git -c "http.extraheader=AUTHORIZATION: basic $auth" push --force origin "HEAD:refs/heads/cycle/wix-build/${GITHUB_RUN_ID}/audit-wix-live"
           echo "verdict=$verdict" >> "$GITHUB_OUTPUT"
 
   director:
-    name: Planning director and safe accepted-state gate
-    needs: [prepare, preview, integration_audit, wix_live_qa]
-    if: ${{ always() && needs.prepare.result == 'success' && needs.preview.result == 'success' && needs.integration_audit.result == 'success' && needs.wix_live_qa.result == 'success' }}
+    name: Evidence planner and safe accepted-state persistence
+    needs: [prepare, preview, simulation, integration_audit, wix_live_qa]
     runs-on: ubuntu-24.04
-    timeout-minutes: 180
+    timeout-minutes: 120
     outputs:
       decision: ${{ steps.persist.outputs.decision }}
       gate: ${{ steps.persist.outputs.gate }}
@@ -488,121 +545,82 @@ jobs:
           fetch-depth: 0
           ref: ${{ needs.prepare.outputs.accepted_sha }}
           persist-credentials: false
-      - name: Assemble Director evidence and adopt only accepted preview
+      - name: Assemble all current evidence and adopt only cross-lane ACCEPT preview
         env:
           GH_TOKEN: ${{ github.token }}
           BASE_SHA: ${{ needs.prepare.outputs.accepted_sha }}
           PREVIEW_SHA: ${{ needs.preview.outputs.preview_sha }}
           INTEGRATED_VERDICT: ${{ needs.integration_audit.outputs.verdict }}
+        shell: bash
         run: |
           set -euo pipefail
           auth=$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)
-          git -c "http.extraheader=AUTHORIZATION: basic $auth" fetch origin \
-            "cycle/wix-build/${GITHUB_RUN_ID}/audit-integrated:refs/remotes/origin/cycle/wix-build/${GITHUB_RUN_ID}/audit-integrated" \
-            "cycle/wix-build/${GITHUB_RUN_ID}/audit-wix-live:refs/remotes/origin/cycle/wix-build/${GITHUB_RUN_ID}/audit-wix-live"
-          if [[ "$INTEGRATED_VERDICT" == ACCEPT ]]; then
-            git reset --hard "$PREVIEW_SHA"
-          else
-            git reset --hard "$BASE_SHA"
-            git checkout "$PREVIEW_SHA" -- reports/audits reports/integration
-          fi
-          ia=$(git rev-parse "origin/cycle/wix-build/${GITHUB_RUN_ID}/audit-integrated")
-          wa=$(git rev-parse "origin/cycle/wix-build/${GITHUB_RUN_ID}/audit-wix-live")
+          git -c "http.extraheader=AUTHORIZATION: basic $auth" fetch origin "cycle/wix-build/${GITHUB_RUN_ID}/audit-integrated:refs/remotes/origin/cycle/wix-build/${GITHUB_RUN_ID}/audit-integrated" "cycle/wix-build/${GITHUB_RUN_ID}/audit-simulation:refs/remotes/origin/cycle/wix-build/${GITHUB_RUN_ID}/audit-simulation" "cycle/wix-build/${GITHUB_RUN_ID}/audit-wix-live:refs/remotes/origin/cycle/wix-build/${GITHUB_RUN_ID}/audit-wix-live"
+          if [[ "$INTEGRATED_VERDICT" == ACCEPT ]]; then git reset --hard "$PREVIEW_SHA"; else git reset --hard "$BASE_SHA"; git checkout "$PREVIEW_SHA" -- reports/audits reports/integration; fi
+          ia=$(git rev-parse "origin/cycle/wix-build/${GITHUB_RUN_ID}/audit-integrated"); sa=$(git rev-parse "origin/cycle/wix-build/${GITHUB_RUN_ID}/audit-simulation"); wa=$(git rev-parse "origin/cycle/wix-build/${GITHUB_RUN_ID}/audit-wix-live")
+          mkdir -p reports/audits reports/simulation reports/wix-live
           git show "$ia:reports/audits/CYCLE_${GITHUB_RUN_ID}_INTEGRATED.md" > "reports/audits/CYCLE_${GITHUB_RUN_ID}_INTEGRATED.md"
-          mkdir -p reports/wix-live
+          git show "$sa:reports/simulation/CYCLE_${GITHUB_RUN_ID}.md" > "reports/simulation/CYCLE_${GITHUB_RUN_ID}.md"
+          git show "$sa:reports/simulation/CYCLE_${GITHUB_RUN_ID}.json" > "reports/simulation/CYCLE_${GITHUB_RUN_ID}.json"
           git show "$wa:reports/wix-live/CYCLE_${GITHUB_RUN_ID}.md" > "reports/wix-live/CYCLE_${GITHUB_RUN_ID}.md"
-      - name: Migrate immutable active governance from pinned workflow SHA
+      - name: Migrate current immutable governance from workflow SHA
         env:
           GH_TOKEN: ${{ github.token }}
+        shell: bash
         run: |
           set -euo pipefail
           auth=$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)
           git -c "http.extraheader=AUTHORIZATION: basic $auth" fetch origin "$GITHUB_SHA"
-          rm -rf .opencode/agents .opencode/job-descriptions
-          mkdir -p .opencode/agents .opencode/job-descriptions
+          rm -rf .opencode/agents .opencode/job-descriptions; mkdir -p .opencode/agents .opencode/job-descriptions
           roles=(wix-integration-builder rules-engine-builder dashboard-builder billing-builder lane-auditor wix-simulation-auditor wix-build-director release-readiness-auditor)
-          for role in "${roles[@]}"; do
-            git show "$GITHUB_SHA:.opencode/agents/${role}.md" > ".opencode/agents/${role}.md"
-            git show "$GITHUB_SHA:.opencode/job-descriptions/${role}.md" > ".opencode/job-descriptions/${role}.md"
-          done
+          for role in "${roles[@]}"; do git show "$GITHUB_SHA:.opencode/agents/${role}.md" > ".opencode/agents/${role}.md"; git show "$GITHUB_SHA:.opencode/job-descriptions/${role}.md" > ".opencode/job-descriptions/${role}.md"; done
           git show "$GITHUB_SHA:.opencode/job-descriptions/MANIFEST.sha256" > .opencode/job-descriptions/MANIFEST.sha256
           git show "$GITHUB_SHA:AGENTS.md" > AGENTS.md
-          sha256sum --check .opencode/job-descriptions/MANIFEST.sha256
-          for helper in wix-v2-bootstrap-gates.sh wix-v2-loop-health.sh wix-v2-safe-persist.sh; do
-            git show "$GITHUB_SHA:.github/scripts/$helper" > "/tmp/$helper"
-            chmod +x "/tmp/$helper"
-          done
-      - name: Bootstrap product gates and loop health
-        run: /tmp/wix-v2-bootstrap-gates.sh
+          sha256sum --check --strict .opencode/job-descriptions/MANIFEST.sha256
+          for helper in wix-v2-bootstrap-gates.sh wix-v2-loop-health.sh wix-v2-safe-persist.sh; do git show "$GITHUB_SHA:.github/scripts/$helper" > "/tmp/$helper"; chmod +x "/tmp/$helper"; done
+          /tmp/wix-v2-bootstrap-gates.sh
       - uses: actions/setup-node@ae0d4ed08881f17d1511386f5be3e62356acd4a6
         with:
           node-version: 22.13.0
-      - name: Install dependencies
-        run: npm ci --ignore-scripts --no-audit --no-fund
-      - uses: ./.github/actions/setup-opencode
-      - name: Plan next evidence-backed work only
+      - run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Set up reviewed OpenCode
+        uses: ./.github/actions/setup-opencode
+      - name: Plan next evidence-backed work
         env:
           OPENCODE_RETRY_LABEL: director
+          OPENCODE_MAX_ATTEMPTS: "6"
+          OPENCODE_RETRY_DELAY_SECONDS: "60"
+          OPENCODE_FAST_RETRY_DELAY_SECONDS: "60"
           CYCLE_INDEX: ${{ needs.prepare.outputs.cycle_index }}
           INTEGRATED_VERDICT: ${{ needs.integration_audit.outputs.verdict }}
+          SIMULATION_VERDICT: ${{ needs.simulation.outputs.verdict }}
           WIX_LIVE_VERDICT: ${{ needs.wix_live_qa.outputs.verdict }}
           NEGATIVE_LANES: ${{ needs.preview.outputs.negative_lanes }}
+          RECOVERY_NOTE: ${{ inputs.recovery_note }}
+        shell: bash
         run: |
           set -euo pipefail
-          bash .github/scripts/run-opencode-with-retry.sh opencode run --model "$OX_MODEL" --agent wix-build-director "Plan cycle $CYCLE_INDEX from the exact persisted evidence. Read your immutable fiche first. Current lane audits and integration manifest are under reports/. Integrated verdict=$INTEGRATED_VERDICT. Wix Live verdict=$WIX_LIVE_VERDICT. Negative individual lanes=$NEGATIVE_LANES. Treat every negative audit/live finding as evidence to route to the owning lane. A missing real wix.config.json or registration is Integration work, not permission to fake readiness. Do not edit product code, tests, config, governance, workflows, directives, or contracts. Update only NEXT_CYCLE, PRODUCT_GATES and Director reports. Real Wix gates may become PROVEN only from concrete reports/wix-live evidence."
-      - name: Validate Director boundaries and evidence
+          bash .github/scripts/run-opencode-with-retry.sh opencode run --model "$OX_MODEL" --agent wix-build-director "Plan the next Wix product state after cycle $CYCLE_INDEX. READY is the only terminal state and you never emit stop. Current integrated verdict=$INTEGRATED_VERDICT; simulation=$SIMULATION_VERDICT; Wix Live=$WIX_LIVE_VERDICT; negative lane audits=$NEGATIVE_LANES. Recovery evidence from prior cycle: $RECOVERY_NOTE. Read the exact current reports under reports/. Route every negative finding to its owning lane. BLOCKED_EXTERNAL means safe recheck, not shutdown. Stagnation means materially change the repair hypothesis, not shutdown. Only choose release_candidate when all required gates are directly PROVEN, simulation is PASS, Wix Live is ACCEPT, and no repair lane remains. Update only NEXT_CYCLE, PRODUCT_GATES and Director reports."
+      - name: Validate Director output and compute adoption gate
+        id: gate
         env:
           INTEGRATED_VERDICT: ${{ needs.integration_audit.outputs.verdict }}
+          SIMULATION_VERDICT: ${{ needs.simulation.outputs.verdict }}
           WIX_LIVE_VERDICT: ${{ needs.wix_live_qa.outputs.verdict }}
           NEGATIVE_LANES: ${{ needs.preview.outputs.negative_lanes }}
+        shell: bash
         run: |
           set -euo pipefail
-          sha256sum --check .opencode/job-descriptions/MANIFEST.sha256
-          decision=$(jq -er '.decision|select(.=="continue" or .=="stop" or .=="release_candidate")' docs/NEXT_CYCLE.json)
-          for role in integration rules dashboard billing; do
-            jq -e --arg r "$role" '.lanes[$r] and (.lanes[$r].status=="active" or .lanes[$r].status=="blocked" or .lanes[$r].status=="complete")' docs/NEXT_CYCLE.json >/dev/null
-          done
+          sha256sum --check --strict .opencode/job-descriptions/MANIFEST.sha256
+          decision=$(jq -er '.decision | select(.=="continue" or .=="release_candidate")' docs/NEXT_CYCLE.json)
+          for role in integration rules dashboard billing; do jq -e --arg r "$role" '.lanes[$r] and (.lanes[$r].status=="active" or .lanes[$r].status=="blocked" or .lanes[$r].status=="complete")' docs/NEXT_CYCLE.json >/dev/null; done
           jq -e '(.gates|type=="object") and all(.gates[]; .status=="OPEN" or .status=="PROVEN" or .status=="BLOCKED_EXTERNAL")' docs/PRODUCT_GATES.json >/dev/null
-          jq -e 'all(.gates[]; (.status=="OPEN") or ((.status=="PROVEN" or .status=="BLOCKED_EXTERNAL") and (.evidence|type=="array" and length>0)))' docs/PRODUCT_GATES.json >/dev/null
-          while IFS= read -r p; do
-            [[ -z "$p" ]] && continue
-            test -f "$p" || { echo "::error::Product gate evidence does not exist: $p"; exit 1; }
-          done < <(jq -r '.gates[]|select(.status=="PROVEN" or .status=="BLOCKED_EXTERNAL")|.evidence[]' docs/PRODUCT_GATES.json)
-          while IFS= read -r p; do
-            case "$p" in
-              docs/NEXT_CYCLE.md|docs/NEXT_CYCLE.json|docs/PRODUCT_GATES.json|docs/LOOP_HEALTH.json|reports/director/*|reports/director/**|reports/audits/*|reports/integration/*|reports/wix-live/*|AGENTS.md|.opencode/agents/*|.opencode/job-descriptions/*) ;;
-              *) echo "::error::Unauthorized Director/governance edit: $p"; exit 1 ;;
-            esac
-          done < <(git diff --name-only)
-          IFS=',' read -ra negative_roles <<< "$NEGATIVE_LANES"
-          for role in "${negative_roles[@]}"; do
-            [[ -z "$role" ]] && continue
-            test "$(jq -r --arg r "$role" '.lanes[$r].status' docs/NEXT_CYCLE.json)" = active
-            audit_path="reports/audits/CYCLE_${GITHUB_RUN_ID}_${role^^}.md"
-            jq -e --arg r "$role" --arg p "$audit_path" '.lanes[$r].source_evidence|index($p)!=null' docs/NEXT_CYCLE.json >/dev/null
-          done
-          if [[ "$INTEGRATED_VERDICT" != ACCEPT || "$WIX_LIVE_VERDICT" == FIX_BEFORE_INTEGRATION ]]; then
-            test "$decision" = continue
-          fi
-          if [[ "$decision" == continue ]]; then
-            test "$(jq '[.lanes[]|select(.status=="active")]|length' docs/NEXT_CYCLE.json)" -gt 0
-          fi
-          if [[ "$decision" == release_candidate ]]; then
-            test "$(jq '[.lanes[]|select(.status=="active")]|length' docs/NEXT_CYCLE.json)" -eq 0
-            test "$(jq '[.gates[]|select(.required==true and .status=="OPEN")]|length' docs/PRODUCT_GATES.json)" -eq 0
-          fi
-      - name: Deterministic final product gate
-        id: final
-        continue-on-error: true
-        run: |
-          set -euo pipefail
-          npm run check
-          npm run build
-      - name: Resolve deterministic gate
-        id: gate
-        run: |
-          if [[ "${{ steps.final.outcome }}" == success ]]; then echo "gate=passed" >> "$GITHUB_OUTPUT"; else echo "gate=failed" >> "$GITHUB_OUTPUT"; fi
-      - name: Update no-progress circuit breaker
+          while IFS= read -r p; do [[ -z "$p" ]] && continue; test -f "$p" || { echo "::error::Evidence path does not exist: $p"; exit 1; }; done < <(jq -r '.gates[] | select(.status=="PROVEN" or .status=="BLOCKED_EXTERNAL") | .evidence[]?' docs/PRODUCT_GATES.json)
+          if [[ "$INTEGRATED_VERDICT" != ACCEPT || "$SIMULATION_VERDICT" != PASS || "$WIX_LIVE_VERDICT" != ACCEPT || -n "$NEGATIVE_LANES" ]]; then test "$decision" = continue; fi
+          if [[ "$decision" == release_candidate ]]; then test "$(jq '[.lanes[] | select(.status=="active" or .status=="blocked")] | length' docs/NEXT_CYCLE.json)" -eq 0; test "$(jq '[.gates[] | select(.required==true and .status!="PROVEN")] | length' docs/PRODUCT_GATES.json)" -eq 0; fi
+          gate=failed; [[ "$INTEGRATED_VERDICT" == ACCEPT ]] && gate=passed
+          echo "decision=$decision" >> "$GITHUB_OUTPUT"; echo "gate=$gate" >> "$GITHUB_OUTPUT"
+      - name: Update loop-health as non-terminal escalation signal
         id: health
         env:
           CYCLE_INDEX: ${{ needs.prepare.outputs.cycle_index }}
@@ -610,27 +628,24 @@ jobs:
           ADOPTED: ${{ needs.integration_audit.outputs.verdict == 'ACCEPT' }}
           FINAL_GATE: ${{ steps.gate.outputs.gate }}
         run: /tmp/wix-v2-loop-health.sh
-      - name: Safely persist accepted state or evidence
+      - name: Persist accepted progress and current evidence safely
         id: persist
         env:
           GH_TOKEN: ${{ github.token }}
           BASE_SHA: ${{ needs.prepare.outputs.accepted_sha }}
           GATE: ${{ steps.gate.outputs.gate }}
-          PLAN_DECISION: continue
+          PLAN_DECISION: ${{ steps.gate.outputs.decision }}
           STALLED: ${{ steps.health.outputs.stalled }}
           CYCLE_INDEX: ${{ needs.prepare.outputs.cycle_index }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          export PLAN_DECISION="$(jq -r '.decision' docs/NEXT_CYCLE.json)"
-          /tmp/wix-v2-safe-persist.sh
+          LANE_BRANCH: lab/wix-rules
+        run: /tmp/wix-v2-safe-persist.sh
 
   release_audit:
-    name: Final release-readiness audit
+    name: Independent final release-readiness audit
     needs: director
-    if: ${{ needs.director.outputs.decision == 'release_candidate' && needs.director.outputs.gate == 'passed' && needs.director.outputs.stalled != 'true' }}
+    if: ${{ needs.director.outputs.decision == 'release_candidate' && needs.director.outputs.gate == 'passed' }}
     runs-on: ubuntu-24.04
-    timeout-minutes: 180
+    timeout-minutes: 120
     outputs:
       verdict: ${{ steps.verdict.outputs.verdict }}
     steps:
@@ -642,82 +657,89 @@ jobs:
       - uses: actions/setup-node@ae0d4ed08881f17d1511386f5be3e62356acd4a6
         with:
           node-version: 22.13.0
-      - run: npm ci --ignore-scripts --no-audit --no-fund
-      - uses: ./.github/actions/setup-opencode
+      - name: Final deterministic release gate
+        shell: bash
+        run: |
+          set -euo pipefail
+          printf '%s  MAIN_PROMPT.md\n' "$MAIN_PROMPT_SHA256" | sha256sum --check --strict
+          sha256sum --check --strict .opencode/job-descriptions/MANIFEST.sha256
+          test "$(jq -r '.appId // empty' wix.config.json)" = "$EXPECTED_WIX_APP_ID"
+          npm ci --ignore-scripts --no-audit --no-fund
+          npm run check
+          npm run build
+      - name: Set up reviewed OpenCode
+        uses: ./.github/actions/setup-opencode
       - name: Final adversarial release audit
         env:
           OPENCODE_RETRY_LABEL: release
+          OPENCODE_MAX_ATTEMPTS: "6"
+          OPENCODE_RETRY_DELAY_SECONDS: "60"
+          OPENCODE_FAST_RETRY_DELAY_SECONDS: "60"
+        shell: bash
         run: |
           set -euo pipefail
-          bash .github/scripts/run-opencode-with-retry.sh opencode run --model "$OX_MODEL" --agent release-readiness-auditor "FINAL RELEASE MODE. Read your immutable fiche and all current product gates, accepted code, current audits, simulation and Wix Live evidence. Do not infer readiness from gate labels alone. Write only reports/release/READINESS_${GITHUB_RUN_ID}.md ending exactly VERDICT: READY, VERDICT: NOT_READY, or VERDICT: BLOCKED_EXTERNAL."
-      - name: Read verdict
+          mkdir -p reports/release
+          bash .github/scripts/run-opencode-with-retry.sh opencode run --model "$OX_MODEL" --agent release-readiness-auditor "FINAL RELEASE MODE. Independently audit the accepted product, current deterministic gates, lane audits, cross-lane audit, current simulation evidence and current Wix Live evidence. Do not trust labels without direct evidence. READY requires the bound app $EXPECTED_WIX_APP_ID, real Wix build/dev-site empirical evidence, no unresolved critical/high blocker, correct location-based rules, tiers differing only by number of locations, safe mutation/rollback behavior, dashboard/billing parity, and no secret leakage. Do not modify product code. Write only reports/release/READINESS_${GITHUB_RUN_ID}.md ending exactly VERDICT: READY, VERDICT: NOT_READY, or VERDICT: BLOCKED_EXTERNAL."
+      - name: Persist verdict and terminal sentinel only for READY
         id: verdict
-        run: |
-          report="reports/release/READINESS_${GITHUB_RUN_ID}.md"
-          verdict=$(tail -n 1 "$report" | sed -n 's/^VERDICT: //p')
-          [[ "$verdict" == READY || "$verdict" == NOT_READY || "$verdict" == BLOCKED_EXTERNAL ]]
-          echo "verdict=$verdict" >> "$GITHUB_OUTPUT"
-      - name: Persist final release evidence without overwriting product progress
         env:
           GH_TOKEN: ${{ github.token }}
+        shell: bash
         run: |
           set -euo pipefail
+          report="reports/release/READINESS_${GITHUB_RUN_ID}.md"; test -f "$report"
+          verdict=$(tail -n 1 "$report" | sed -n 's/^VERDICT: //p'); [[ "$verdict" == READY || "$verdict" == NOT_READY || "$verdict" == BLOCKED_EXTERNAL ]]
+          if [[ "$verdict" == READY ]]; then jq -n --arg verdict READY --arg app_id "$EXPECTED_WIX_APP_ID" --arg run_id "$GITHUB_RUN_ID" --arg accepted_sha "$(git rev-parse HEAD)" --arg report "$report" '{verdict:$verdict,app_id:$app_id,run_id:$run_id,accepted_sha:$accepted_sha,report:$report}' > reports/release/READY.json; else rm -f reports/release/READY.json; fi
           base=$(git rev-parse HEAD)
-          report="reports/release/READINESS_${GITHUB_RUN_ID}.md"
-          git config user.name wix-release-auditor
-          git config user.email wix-release-auditor@users.noreply.github.com
-          git add "$report"
-          git commit -m "Wix build $GITHUB_RUN_ID: release audit evidence"
-          auth=$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)
-          remote=$(git -c "http.extraheader=AUTHORIZATION: basic $auth" ls-remote origin "refs/heads/$LANE_BRANCH" | awk '{print $1}')
-          test "$remote" = "$base"
+          git config user.name wix-release-auditor; git config user.email wix-release-auditor@users.noreply.github.com
+          git add reports/release; git commit --allow-empty -m "Wix build $GITHUB_RUN_ID: release verdict $verdict"
+          auth=$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0); remote=$(git -c "http.extraheader=AUTHORIZATION: basic $auth" ls-remote origin "refs/heads/$LANE_BRANCH" | awk '{print $1}'); test "$remote" = "$base"
           git -c "http.extraheader=AUTHORIZATION: basic $auth" push origin "HEAD:refs/heads/$LANE_BRANCH"
+          echo "verdict=$verdict" >> "$GITHUB_OUTPUT"
 
-  dispatch:
-    name: Continue or stop product factory
-    needs: [prepare, director, release_audit]
-    if: ${{ always() && needs.director.result == 'success' }}
+  continue:
+    name: Guarantee progression until READY
+    needs: [prepare, build, audit, preview, simulation, integration_audit, wix_live_qa, director, release_audit]
+    if: ${{ always() }}
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
-      - name: Resolve next action
+      - name: Stop only on independently proven READY
+        id: terminal
         env:
           GH_TOKEN: ${{ github.token }}
-          DECISION: ${{ needs.director.outputs.decision }}
-          GATE: ${{ needs.director.outputs.gate }}
-          STALLED: ${{ needs.director.outputs.stalled }}
+          RELEASE_VERDICT: ${{ needs.release_audit.outputs.verdict }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "$RELEASE_VERDICT" == READY ]]; then ready=$(gh api "repos/$GITHUB_REPOSITORY/contents/reports/release/READY.json?ref=$LANE_BRANCH" --jq '.content' 2>/dev/null | tr -d '\n' | base64 -d 2>/dev/null || true); test "$(jq -r '.verdict // empty' <<<"$ready")" = READY; test "$(jq -r '.app_id // empty' <<<"$ready")" = "$EXPECTED_WIX_APP_ID"; echo "ready=true" >> "$GITHUB_OUTPUT"; echo "Product READY is independently proven. Autonomous chain terminates."; else echo "ready=false" >> "$GITHUB_OUTPUT"; fi
+      - name: Dispatch a fresh recovery/product cycle for every non-READY outcome
+        if: ${{ steps.terminal.outputs.ready != 'true' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CYCLE_INDEX: ${{ needs.prepare.outputs.cycle_index }}
+          PREPARE_RESULT: ${{ needs.prepare.result }}
+          BUILD_RESULT: ${{ needs.build.result }}
+          AUDIT_RESULT: ${{ needs.audit.result }}
+          PREVIEW_RESULT: ${{ needs.preview.result }}
+          SIM_RESULT: ${{ needs.simulation.result }}
+          SIM_VERDICT: ${{ needs.simulation.outputs.verdict }}
+          INTEGRATION_AUDIT_RESULT: ${{ needs.integration_audit.result }}
+          INTEGRATION_VERDICT: ${{ needs.integration_audit.outputs.verdict }}
+          LIVE_RESULT: ${{ needs.wix_live_qa.result }}
+          LIVE_VERDICT: ${{ needs.wix_live_qa.outputs.verdict }}
+          DIRECTOR_RESULT: ${{ needs.director.result }}
           RELEASE_RESULT: ${{ needs.release_audit.result }}
           RELEASE_VERDICT: ${{ needs.release_audit.outputs.verdict }}
-          CYCLE_INDEX: ${{ needs.prepare.outputs.cycle_index }}
-          MAX_CYCLES: ${{ needs.prepare.outputs.max_cycles }}
+          INPUT_CYCLE: ${{ inputs.cycle_index }}
+        shell: bash
         run: |
           set -euo pipefail
-          if [[ "$STALLED" == true ]]; then
-            echo "Factory stopped: deterministic no-progress circuit breaker."
-            exit 0
-          fi
-          if [[ "$RELEASE_RESULT" == success && "$RELEASE_VERDICT" == READY ]]; then
-            echo "Factory stopped: READY."
-            exit 0
-          fi
-          if [[ "$RELEASE_RESULT" == success && "$RELEASE_VERDICT" == BLOCKED_EXTERNAL ]]; then
-            echo "Factory stopped: genuine external Wix/human prerequisite."
-            exit 0
-          fi
-          next=$((CYCLE_INDEX + 1))
-          if (( MAX_CYCLES > 0 && next > MAX_CYCLES )); then
-            echo "Factory stopped at max_cycles."
-            exit 0
-          fi
-          should_continue=false
-          [[ "$GATE" == failed ]] && should_continue=true
-          [[ "$DECISION" == continue ]] && should_continue=true
-          [[ "$DECISION" == release_candidate && "$RELEASE_VERDICT" == NOT_READY ]] && should_continue=true
-          if [[ "$should_continue" != true ]]; then
-            echo "Factory stopped by Director."
-            exit 0
-          fi
-          gh workflow run wix-build-loop.yml --ref main \
-            -f cycle_index="$next" \
-            -f max_cycles="$MAX_CYCLES" \
-            -f human_note=""
+          cycle="${CYCLE_INDEX:-${INPUT_CYCLE:-0}}"; [[ "$cycle" =~ ^[0-9]+$ ]] || cycle=0; next=$((cycle + 1))
+          summary="RESULTS prepare=$PREPARE_RESULT build=$BUILD_RESULT audit=$AUDIT_RESULT preview=$PREVIEW_RESULT simulation=$SIM_RESULT/$SIM_VERDICT integration_audit=$INTEGRATION_AUDIT_RESULT/$INTEGRATION_VERDICT wix_live=$LIVE_RESULT/$LIVE_VERDICT director=$DIRECTOR_RESULT release=$RELEASE_RESULT/$RELEASE_VERDICT."
+          evidence=""; jobs=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/jobs?filter=latest&per_page=100" 2>/dev/null || echo '{"jobs":[]}')
+          while IFS=$'\t' read -r job_id job_name; do [[ -n "$job_id" ]] || continue; log=$(mktemp); if gh run view "$GITHUB_RUN_ID" --repo "$GITHUB_REPOSITORY" --job "$job_id" --log >"$log" 2>&1; then excerpt=$(grep -Ei 'error|failed|failure|fatal|assertion|typeerror|referenceerror|syntaxerror|TS[0-9]{4}|VERDICT:|WIX_OPENCODE_FAILURE_KIND|Unexpected server error|BLOCKED_EXTERNAL' "$log" | tail -n 18 | sed -E 's/(token|secret|password|api[_ -]?key)[=: ][^ ]+/\1=[REDACTED]/Ig' | cut -c1-450); evidence+=$'\n'"FAILED JOB: $job_name"$'\n'"$excerpt"; fi; rm -f "$log"; done < <(jq -r '.jobs[]? | select(.conclusion=="failure") | [.id,.name] | @tsv' <<<"$jobs")
+          note="AUTONOMOUS CONTINUATION. READY is not proven. $summary Preserve the current accepted lab/wix-rules state and all successful evidence. Diagnose the evidence below, route deterministic/product defects to the owning lane, change strategy on repeated stagnation, and safely recheck external prerequisites. Provider/runner outages are not product failures. Never weaken tests, governance, Wix safety boundaries, or readiness standards. ${evidence}"; note=$(printf '%s' "$note" | head -c 7800)
+          if [[ "$LIVE_VERDICT" == BLOCKED_EXTERNAL || "$RELEASE_VERDICT" == BLOCKED_EXTERNAL ]]; then sleep 300; fi
+          gh workflow run wix-build-loop.yml --repo "$GITHUB_REPOSITORY" --ref main -f cycle_index="$next" -f recovery_note="$note"
+          echo "Fresh Product Factory cycle $next dispatched."

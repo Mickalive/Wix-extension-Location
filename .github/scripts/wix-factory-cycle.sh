@@ -1,677 +1,200 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-: "${GITHUB_RUN_ID:?}" "${GITHUB_SHA:?}" "${GITHUB_REPOSITORY:?}" "${RUNNER_TEMP:?}" "${PRODUCT_BRANCH:?}"
-: "${MAIN_PROMPT_SHA256:?}" "${EXPECTED_WIX_APP_ID:?}" "${CONTROL_PROTOCOL:?}" "${OX_MODEL:?}"
+: "${GITHUB_RUN_ID:?}" "${GITHUB_SHA:?}" "${GITHUB_REPOSITORY:?}" "${GITHUB_WORKSPACE:?}" "${RUNNER_TEMP:?}"
+: "${PRODUCT_BRANCH:?}" "${OX_MODEL:?}" "${MAIN_PROMPT_SHA256:?}" "${EXPECTED_WIX_APP_ID:?}" "${GH_TOKEN:?}"
 
-ROOT="${RUNNER_TEMP}/wix-factory-${GITHUB_RUN_ID}"
-PRODUCT="${ROOT}/product"
-EVIDENCE="${ROOT}/evidence"
-META="${ROOT}/meta"
-RESULT="${ROOT}/result.env"
-BASE_FILE="${META}/base_sha"
-ROLE_FILE="${META}/role"
-GATE_FILE="${META}/gate"
-WIX_FILE="${META}/wix"
-PROMOTE_FILE="${META}/promote"
-REASON_FILE="${META}/reason"
-CYCLE="${CYCLE_INDEX:-1}"
-[[ "$CYCLE" =~ ^[0-9]+$ ]] || CYCLE=1
+STATE="$GITHUB_WORKSPACE/.factory/state.json"
+ROOT="$RUNNER_TEMP/wix-factory-$GITHUB_RUN_ID"
+PRODUCT="$ROOT/product"
+PRODUCT_REF="refs/remotes/origin/$PRODUCT_BRANCH"
+mkdir -p "$ROOT" "$GITHUB_WORKSPACE/.factory/evidence"
 
-mkdir -p "$ROOT" "$META" "$EVIDENCE"
+log(){ printf '[factory] %s\n' "$*"; }
+die(){ printf '::error::%s\n' "$*"; exit 1; }
+auth(){ printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0; }
+sget(){ jq -r "$1" "$STATE"; }
+sedit(){ local t="$ROOT/state.json"; jq "$@" "$STATE" > "$t" && mv "$t" "$STATE"; }
 
-write_result() {
-  local verdict="$1" reason="$2" cycle="${3:-$CYCLE}"
-  reason="${reason//$'\n'/ }"
-  reason="${reason//\'/}"
-  cat > "$RESULT" <<EOF
-verdict='$verdict'
-reason='$reason'
-persisted_cycle='$cycle'
-EOF
+fetch_product(){
+  git -C "$GITHUB_WORKSPACE" -c "http.extraheader=AUTHORIZATION: basic $(auth)" fetch --prune --tags origin "+refs/heads/$PRODUCT_BRANCH:$PRODUCT_REF" >/dev/null
 }
 
-record_reason() {
-  printf '%s\n' "$1" > "$REASON_FILE"
+remote_main(){ git -C "$GITHUB_WORKSPACE" ls-remote origin refs/heads/main | awk '{print $1}'; }
+
+persist(){
+  local before="$1"
+  git -C "$GITHUB_WORKSPACE" config user.name wix-factory-control
+  git -C "$GITHUB_WORKSPACE" config user.email wix-factory-control@users.noreply.github.com
+  git -C "$GITHUB_WORKSPACE" add .factory
+  git -C "$GITHUB_WORKSPACE" diff --cached --quiet && return 0
+  git -C "$GITHUB_WORKSPACE" commit -m "factory: $(sget '.phase') generation $(sget '.generation') run $GITHUB_RUN_ID" >/dev/null
+  [[ "$(remote_main)" == "$before" ]] || die "control plane moved; refusing stale state push"
+  git -C "$GITHUB_WORKSPACE" -c "http.extraheader=AUTHORIZATION: basic $(auth)" push origin HEAD:refs/heads/main >/dev/null
 }
 
-reason() {
-  cat "$REASON_FILE" 2>/dev/null || echo unknown
+transition(){
+  sedit --arg p "$1" --arg r "$2" --argjson run "$GITHUB_RUN_ID" '.phase=$p|.generation+=1|.last_transition={reason:$r,run_id:$run}|.last_run=$run|.last_operational_failure=null|.lease=null'
 }
 
-set_gate() { printf '%s\n' "$1" > "$GATE_FILE"; }
-gate() { cat "$GATE_FILE" 2>/dev/null || echo CLOSED; }
-set_wix() { printf '%s\n' "$1" > "$WIX_FILE"; }
-wix_state() { cat "$WIX_FILE" 2>/dev/null || echo NOT_RUN; }
-set_promote() { printf '%s\n' "$1" > "$PROMOTE_FILE"; }
-promote() { cat "$PROMOTE_FILE" 2>/dev/null || echo false; }
-
-git_auth() {
-  printf 'x-access-token:%s' "${GH_TOKEN:?}" | base64 -w0
+opfail(){
+  sedit --arg p "$1" --arg r "$2" --argjson run "$GITHUB_RUN_ID" '.last_run=$run|.last_operational_failure={phase:$p,reason:$r,run_id:$run}|.lease=null'
 }
 
-fetch_product() {
-  local auth
-  auth="$(git_auth)"
-  git -C "$GITHUB_WORKSPACE" -c "http.extraheader=AUTHORIZATION: basic $auth" \
-    fetch --no-tags origin "+refs/heads/${PRODUCT_BRANCH}:refs/remotes/origin/${PRODUCT_BRANCH}"
-}
+provider_failure(){ grep -Eqi 'Unexpected server error|UnknownError|network error|temporarily unavailable|service unavailable|provider unavailable|ECONNRESET|ETIMEDOUT|timed out|rate.?limit|HTTP[^0-9]*(429|500|502|503|504)' "$1" 2>/dev/null; }
 
-overlay_control() {
-  local cwd="$1"
-  rm -rf "$cwd/.opencode/agents" "$cwd/.opencode/job-descriptions"
-  mkdir -p "$cwd/.opencode"
-  cp -a "$GITHUB_WORKSPACE/.opencode/agents" "$cwd/.opencode/agents"
-  cp -a "$GITHUB_WORKSPACE/.opencode/job-descriptions" "$cwd/.opencode/job-descriptions"
-  cp "$GITHUB_WORKSPACE/AGENTS.md" "$cwd/AGENTS.md"
-  (cd "$cwd" && sha256sum --check --strict .opencode/job-descriptions/MANIFEST.sha256 >/dev/null)
-}
-
-restore_control() {
-  local cwd="$1"
-  rm -rf "$cwd/.opencode/agents" "$cwd/.opencode/job-descriptions"
-  git -C "$cwd" checkout HEAD -- .opencode/agents .opencode/job-descriptions AGENTS.md >/dev/null 2>&1 || true
-  git -C "$cwd" clean -fd -- .opencode/agents .opencode/job-descriptions AGENTS.md >/dev/null 2>&1 || true
-}
-
-run_agent() {
-  local cwd="$1" agent="$2" label="$3" prompt="$4"
-  local log="${ROOT}/${label}.log"
-  local attempt rc
-  if ! command -v opencode >/dev/null 2>&1; then
-    echo "OpenCode is unavailable." | tee "$log"
-    return 75
-  fi
-  for attempt in 1 2; do
-    echo "OpenCode $label attempt $attempt/2."
-    overlay_control "$cwd"
-    # The pipeline is deliberately the condition of an if statement: bash therefore
-    # does not apply errexit to a provider failure, and this function never changes
-    # the caller's `set -e` state. Provider failure is data, not control flow.
-    if (cd "$cwd" && opencode run --model "$OX_MODEL" --agent "$agent" "$prompt") 2>&1 | tee "$log"; then
-      rc=0
-    else
-      rc=${PIPESTATUS[0]}
-    fi
-    restore_control "$cwd"
-    if (( rc == 0 )); then
-      return 0
-    fi
-    if ! grep -Eqi 'Unexpected server error|UnknownError|err_[A-Za-z0-9_-]+|network error|temporarily unavailable|service unavailable|provider unavailable|ECONNRESET|ETIMEDOUT|timed out|rate.?limit|HTTP[^0-9]*(429|500|502|503|504)' "$log"; then
-      return "$rc"
-    fi
-    if (( attempt < 2 )); then
-      sleep 45
-    fi
-  done
-  return 75
-}
-
-safe_excerpt() {
-  local src="$1"
-  tail -n 50 "$src" 2>/dev/null |
-    sed -E 's/(token|secret|password|api[_ -]?key)[=: ][^ ]+/\1=[REDACTED]/Ig' |
-    head -c 6000
-}
-
-copy_evidence_out() {
-  rm -rf "$EVIDENCE"
-  mkdir -p "$EVIDENCE"
-  if [[ -d "$PRODUCT/reports" ]]; then
-    cp -a "$PRODUCT/reports" "$EVIDENCE/reports"
-  fi
-}
-
-restore_evidence() {
-  if [[ -d "$EVIDENCE/reports" ]]; then
-    mkdir -p "$PRODUCT/reports"
-    cp -a "$EVIDENCE/reports/." "$PRODUCT/reports/"
-    git -C "$PRODUCT" add -A reports 2>/dev/null || true
-  fi
-}
-
-reset_product_to_base() {
-  local base
-  base="$(cat "$BASE_FILE")"
-  copy_evidence_out
-  git -C "$PRODUCT" reset --hard "$base" >/dev/null
-  git -C "$PRODUCT" clean -fd >/dev/null
-  restore_evidence
-}
-
-validate_scope() {
-  local role="$1" bad=0 path
-  while IFS= read -r path; do
-    [[ -n "$path" ]] || continue
-    case "$path" in
-      .env|.env.*|*/.env|*/.env.*|*.key|*.pem|*.p8|*.p12|*credentials*|.wix/*)
-        echo "::error::Credential-like file forbidden: $path"; bad=1; continue ;;
-    esac
-    case "$role:$path" in
-      integration:package.json|integration:package-lock.json|integration:tsconfig.json|integration:astro.config.mjs|integration:extensions.ts|integration:wix.config.json|integration:wix.config.example.json|integration:.gitignore|integration:vite.config.*|integration:vitest.config.*|integration:eslint.config.*|integration:src/env.d.ts|integration:src/platform/*|integration:src/platform/**|integration:src/extensions/backend/*|integration:src/extensions/backend/**|integration:tests/platform/*|integration:tests/platform/**) ;;
-      rules:src/domain/*|rules:src/domain/**|rules:tests/domain/*|rules:tests/domain/**) ;;
-      dashboard:src/extensions/dashboard/*|dashboard:src/extensions/dashboard/**|dashboard:src/ui/*|dashboard:src/ui/**|dashboard:tests/ui/*|dashboard:tests/ui/**) ;;
-      billing:src/billing/*|billing:src/billing/**|billing:tests/billing/*|billing:tests/billing/**) ;;
-      *) echo "::error::Out-of-lane product path: $path"; bad=1 ;;
-    esac
-  done < <(git -C "$PRODUCT" status --porcelain=v1 | sed -E 's/^.. //; s/.* -> //')
-  (( bad == 0 ))
-}
-
-deterministic_checks() {
-  (
-    cd "$PRODUCT"
-    npm ci --ignore-scripts --no-audit --no-fund &&
-    npm run check &&
-    npm run build
-  )
-}
-
-# Builder product changes are staged. Every later agent is read/audit/planning-only for
-# product code. Any unstaged non-allowed path means the agent crossed its authority.
-enforce_unstaged_scope() {
-  local label="$1"; shift
-  local bad=0 path allowed pattern
-  while IFS= read -r path; do
-    [[ -n "$path" ]] || continue
-    allowed=0
-    for pattern in "$@"; do
-      case "$path" in $pattern) allowed=1; break ;; esac
-    done
-    if (( allowed == 0 )); then
-      echo "::error::$label modified forbidden path: $path"
-      if git -C "$PRODUCT" ls-files --error-unmatch "$path" >/dev/null 2>&1; then
-        git -C "$PRODUCT" restore --worktree -- "$path" >/dev/null 2>&1 || true
-      else
-        rm -rf -- "$PRODUCT/$path"
-      fi
-      bad=1
-    fi
-  done < <({
-    git -C "$PRODUCT" diff --name-only
-    git -C "$PRODUCT" ls-files --others --exclude-standard
-  } | sort -u)
-  (( bad == 0 ))
-}
-
-enforce_audit_worktree_scope() {
-  local dir="$1" allowed="$2" bad=0 path
-  while IFS= read -r path; do
-    [[ -n "$path" ]] || continue
-    case "$path" in
-      "$allowed") ;;
-      *)
-        echo "::error::Independent auditor modified forbidden path: $path"
-        bad=1 ;;
-    esac
-  done < <({
-    git -C "$dir" diff --name-only
-    git -C "$dir" ls-files --others --exclude-standard
-  } | sort -u)
-  (( bad == 0 ))
-}
-
-prepare() {
-  rm -rf "$ROOT"
-  mkdir -p "$META" "$EVIDENCE"
-  write_result CONTINUE prepare_started "$CYCLE"
-  set_gate CLOSED
-  set_wix NOT_RUN
-  set_promote false
-
-  printf '%s  MAIN_PROMPT.md\n' "$MAIN_PROMPT_SHA256" | (cd "$GITHUB_WORKSPACE" && sha256sum --check --strict)
-  (cd "$GITHUB_WORKSPACE" && sha256sum --check --strict .opencode/job-descriptions/MANIFEST.sha256)
-
-  fetch_product
-  local base
-  base="$(git -C "$GITHUB_WORKSPACE" rev-parse "refs/remotes/origin/${PRODUCT_BRANCH}")"
-  printf '%s\n' "$base" > "$BASE_FILE"
-  git -C "$GITHUB_WORKSPACE" worktree add --detach "$PRODUCT" "$base" >/dev/null
-
+prepare(){
+  local ref="$1"
+  rm -rf "$PRODUCT"
+  git -C "$GITHUB_WORKSPACE" worktree add --detach "$PRODUCT" "$ref" >/dev/null
   printf '%s  MAIN_PROMPT.md\n' "$MAIN_PROMPT_SHA256" | (cd "$PRODUCT" && sha256sum --check --strict)
-  jq -e '.lanes and (.lanes|type=="object")' "$PRODUCT/docs/NEXT_CYCLE.json" >/dev/null
-
-  local active_count role
-  active_count="$(jq '[.lanes | to_entries[] | select(.value.status=="active")] | length' "$PRODUCT/docs/NEXT_CYCLE.json")"
-  if (( active_count > 1 )); then
-    record_reason "invalid_plan_multiple_active_lanes"
-    printf 'none\n' > "$ROLE_FILE"
-    return 0
-  fi
-  role="$(jq -r '[.lanes | to_entries[] | select(.value.status=="active") | .key][0] // "none"' "$PRODUCT/docs/NEXT_CYCLE.json")"
-  case "$role" in integration|rules|dashboard|billing|none) ;; *) role=none; record_reason "invalid_plan_unknown_lane" ;; esac
-  printf '%s\n' "$role" > "$ROLE_FILE"
-  record_reason "prepared_${role}"
-  echo "Accepted product lease: $base; selected lane: $role"
 }
 
-build() {
-  [[ -f "$BASE_FILE" && -e "$PRODUCT/.git" ]] || {
-    record_reason "prepare_failed"; write_result CONTINUE prepare_failed "$CYCLE"; return 0;
-  }
-  local base role agent directive task why evidence criteria rc report verdict
-  base="$(cat "$BASE_FILE")"
-  role="$(cat "$ROLE_FILE" 2>/dev/null || echo none)"
-
-  if [[ "$(reason)" == invalid_plan_* ]]; then
-    mkdir -p "$PRODUCT/reports/factory"
-    cat > "$PRODUCT/reports/factory/CYCLE_${GITHUB_RUN_ID}.md" <<EOF
-# Factory invariant finding
-The accepted plan contains more than one active lane or an invalid lane. Protocol v4 permits at most one mutable lane per cycle.
-VERDICT: CONTINUE
-EOF
-    return 0
-  fi
-
-  if [[ "$role" != none ]]; then
-    case "$role" in
-      integration) agent=wix-integration-builder; directive=directives/INTEGRATION.md ;;
-      rules) agent=rules-engine-builder; directive=directives/RULES.md ;;
-      dashboard) agent=dashboard-builder; directive=directives/DASHBOARD.md ;;
-      billing) agent=billing-builder; directive=directives/BILLING.md ;;
-    esac
-    task="$(jq -r --arg r "$role" '.lanes[$r].task // ""' "$PRODUCT/docs/NEXT_CYCLE.json")"
-    why="$(jq -r --arg r "$role" '.lanes[$r].why_needed // ""' "$PRODUCT/docs/NEXT_CYCLE.json")"
-    evidence="$(jq -c --arg r "$role" '.lanes[$r].source_evidence // []' "$PRODUCT/docs/NEXT_CYCLE.json")"
-    criteria="$(jq -c --arg r "$role" '.lanes[$r].acceptance_criteria // []' "$PRODUCT/docs/NEXT_CYCLE.json")"
-    set +e
-    run_agent "$PRODUCT" "$agent" "builder-${role}" \
-      "Product Factory protocol v4, run $GITHUB_RUN_ID, cycle $CYCLE. Work only on lane $role from accepted SHA $base. Read your immutable role fiche, MAIN_PROMPT.md, AGENTS.md, docs/WIX_TECHNICAL_CONTRACT.md, docs/BUILD_BLUEPRINT.md, $directive and docs/NEXT_CYCLE.json. Exact task: $task. Why: $why. Evidence: $evidence. Criteria: $criteria. Repair the evidenced blocker only. Do not edit governance, reports, other lanes, workflow files, state files, or git history. Do not commit or push. Never inspect secrets."
-    rc=$?
-    set -e
-    if (( rc != 0 )); then
-      record_reason "builder_${role}_unavailable_or_failed"
-      reset_product_to_base
-      mkdir -p "$PRODUCT/reports/factory"
-      printf '# Builder failure\nLane: %s\nExit: %s\nVERDICT: CONTINUE\n' "$role" "$rc" > "$PRODUCT/reports/factory/CYCLE_${GITHUB_RUN_ID}.md"
-      return 0
-    fi
-
-    if ! validate_scope "$role"; then
-      record_reason "builder_${role}_scope_violation"
-      reset_product_to_base
-      return 0
-    fi
-
-    (cd "$PRODUCT" && git add -A && git diff --cached --binary > "$ROOT/candidate.patch")
-    git -C "$GITHUB_WORKSPACE" worktree add --detach "$ROOT/audit" "$base" >/dev/null
-    if [[ -s "$ROOT/candidate.patch" ]]; then
-      (cd "$ROOT/audit" && git apply --index "$ROOT/candidate.patch")
-    fi
-    mkdir -p "$ROOT/audit/reports/audits"
-    report="$ROOT/audit/reports/audits/CYCLE_${GITHUB_RUN_ID}_${role^^}.md"
-    set +e
-    run_agent "$ROOT/audit" lane-auditor "audit-${role}" \
-      "Independently audit the immutable $role candidate for Product Factory run $GITHUB_RUN_ID against accepted SHA $base and the exact task in docs/NEXT_CYCLE.json. Do not repair product code. Inspect the diff, tests, architecture and acceptance criteria. Write only reports/audits/CYCLE_${GITHUB_RUN_ID}_${role^^}.md ending exactly VERDICT: ACCEPT, VERDICT: FIX_BEFORE_INTEGRATION, or VERDICT: REJECT."
-    rc=$?
-    set -e
-    if (( rc != 0 )) || [[ ! -f "$report" ]]; then
-      record_reason "audit_${role}_unavailable_or_failed"
-      reset_product_to_base
-      return 0
-    fi
-    if ! enforce_audit_worktree_scope "$ROOT/audit" "reports/audits/CYCLE_${GITHUB_RUN_ID}_${role^^}.md"; then
-      record_reason "audit_${role}_scope_violation"
-      reset_product_to_base
-      return 0
-    fi
-    verdict="$(tail -n 1 "$report" | sed -n 's/^VERDICT: //p')"
-    mkdir -p "$PRODUCT/reports/audits"
-    cp "$report" "$PRODUCT/reports/audits/"
-    git -C "$PRODUCT" add -A "reports/audits/CYCLE_${GITHUB_RUN_ID}_${role^^}.md"
-    if [[ "$verdict" != ACCEPT ]]; then
-      record_reason "audit_${role}_${verdict:-invalid}"
-      reset_product_to_base
-      return 0
-    fi
-  fi
-
-  set +e
-  deterministic_checks >"$ROOT/deterministic.log" 2>&1
-  rc=$?
-  set -e
-  if (( rc != 0 )); then
-    mkdir -p "$PRODUCT/reports/integration"
-    {
-      echo "# Deterministic preview failure"
-      echo '```'
-      safe_excerpt "$ROOT/deterministic.log"
-      echo '```'
-      echo "VERDICT: FIX_BEFORE_INTEGRATION"
-    } > "$PRODUCT/reports/integration/CYCLE_${GITHUB_RUN_ID}.md"
-    record_reason "deterministic_preview_failed"
-    return 0
-  fi
-
-  mkdir -p "$PRODUCT/reports/simulation"
-  set +e
-  run_agent "$PRODUCT" wix-simulation-auditor simulation \
-    "Adversarially simulate the exact integrated candidate for Product Factory run $GITHUB_RUN_ID. Do not modify product code. Stress unsafe transitions, authorization boundaries, rule composition, malformed inputs, partial Wix failures, entitlement drift and rollback. Write only reports/simulation/CYCLE_${GITHUB_RUN_ID}.md and reports/simulation/CYCLE_${GITHUB_RUN_ID}.json. The markdown must end exactly VERDICT: PASS, VERDICT: FAIL, or VERDICT: INCONCLUSIVE."
-  rc=$?
-  set -e
-  report="$PRODUCT/reports/simulation/CYCLE_${GITHUB_RUN_ID}.md"
-  if ! enforce_unstaged_scope simulation "reports/simulation/CYCLE_${GITHUB_RUN_ID}.md" "reports/simulation/CYCLE_${GITHUB_RUN_ID}.json"; then
-    record_reason "simulation_scope_violation"
-    return 0
-  fi
-  if (( rc != 0 )) || [[ ! -f "$report" ]]; then
-    record_reason "simulation_unavailable_or_failed"
-    return 0
-  fi
-  verdict="$(tail -n 1 "$report" | sed -n 's/^VERDICT: //p')"
-  git -C "$PRODUCT" add -A "reports/simulation/CYCLE_${GITHUB_RUN_ID}.md" "reports/simulation/CYCLE_${GITHUB_RUN_ID}.json" 2>/dev/null || true
-  if [[ "$verdict" != PASS ]]; then
-    record_reason "simulation_${verdict:-invalid}"
-    return 0
-  fi
-
-  mkdir -p "$PRODUCT/reports/audits"
-  report="$PRODUCT/reports/audits/CYCLE_${GITHUB_RUN_ID}_INTEGRATED.md"
-  set +e
-  run_agent "$PRODUCT" lane-auditor integrated-audit \
-    "Independently audit the complete integrated candidate for Product Factory run $GITHUB_RUN_ID after deterministic checks and adversarial simulation. This is a cross-system audit, not a builder. Do not modify product code. Verify all lane boundaries and the current Wix technical contract. Write only reports/audits/CYCLE_${GITHUB_RUN_ID}_INTEGRATED.md ending exactly VERDICT: ACCEPT, VERDICT: FIX_BEFORE_INTEGRATION, or VERDICT: REJECT."
-  rc=$?
-  set -e
-  if ! enforce_unstaged_scope integrated-audit "reports/audits/CYCLE_${GITHUB_RUN_ID}_INTEGRATED.md"; then
-    record_reason "integrated_audit_scope_violation"
-    return 0
-  fi
-  if (( rc != 0 )) || [[ ! -f "$report" ]]; then
-    record_reason "integrated_audit_unavailable_or_failed"
-    return 0
-  fi
-  verdict="$(tail -n 1 "$report" | sed -n 's/^VERDICT: //p')"
-  git -C "$PRODUCT" add -A "reports/audits/CYCLE_${GITHUB_RUN_ID}_INTEGRATED.md"
-  if [[ "$verdict" != ACCEPT ]]; then
-    record_reason "integrated_audit_${verdict:-invalid}"
-    return 0
-  fi
-
-  set_gate WIX_ELIGIBLE
-  record_reason "pre_wix_gates_passed"
+overlay_control(){
+  rm -rf "$PRODUCT/.opencode/agents" "$PRODUCT/.opencode/job-descriptions"
+  mkdir -p "$PRODUCT/.opencode"
+  cp -a "$GITHUB_WORKSPACE/.opencode/agents" "$PRODUCT/.opencode/agents"
+  cp -a "$GITHUB_WORKSPACE/.opencode/job-descriptions" "$PRODUCT/.opencode/job-descriptions"
+  cp "$GITHUB_WORKSPACE/AGENTS.md" "$PRODUCT/AGENTS.md"
 }
 
-wix_live() {
-  [[ -f "$BASE_FILE" ]] || return 0
-  [[ "$(gate)" == WIX_ELIGIBLE ]] || return 0
-  mkdir -p "$PRODUCT/reports/wix-live"
-  local report="$PRODUCT/reports/wix-live/CYCLE_${GITHUB_RUN_ID}.md" rc
-
-  if [[ ! -f "$PRODUCT/wix.config.json" ]] ||
-     [[ "$(jq -r '.appId // empty' "$PRODUCT/wix.config.json" 2>/dev/null || true)" != "$EXPECTED_WIX_APP_ID" ]]; then
-    cat > "$report" <<EOF
-# Wix Live QA
-Candidate is not bound to the expected existing Wix app $EXPECTED_WIX_APP_ID.
-Owning lane: integration.
-VERDICT: FIX_BEFORE_INTEGRATION
-EOF
-    set_wix FIX_BEFORE_INTEGRATION
-    record_reason "wix_binding_invalid"
-    return 0
-  fi
-
-  if [[ -z "${WIX_API_KEY:-}" ]]; then
-    cat > "$report" <<'EOF'
-# Wix Live QA
-Wix API key is unavailable to the privileged CI step. No secret was exposed to an agent.
-VERDICT: BLOCKED_EXTERNAL
-EOF
-    set_wix BLOCKED_EXTERNAL
-    record_reason "wix_secret_unavailable"
-    return 0
-  fi
-
-  set +e
-  (cd "$PRODUCT" && npx -y "@wix/cli@${WIX_CLI_VERSION}" login --api-key "$WIX_API_KEY") >"$ROOT/wix-login.log" 2>&1
-  rc=$?
-  set -e
-  : > "$ROOT/wix-login.log"
-  if (( rc != 0 )); then
-    cat > "$report" <<'EOF'
-# Wix Live QA
-Wix CLI authentication failed in the privileged step. The secret was neither logged nor exposed to OpenCode.
-VERDICT: BLOCKED_EXTERNAL
-EOF
-    set_wix BLOCKED_EXTERNAL
-    record_reason "wix_authentication_failed"
-    return 0
-  fi
-
-  set +e
-  (cd "$PRODUCT" && npx -y "@wix/cli@${WIX_CLI_VERSION}" build) >"$ROOT/wix-build.log" 2>&1
-  rc=$?
-  set -e
-  if (( rc != 0 )); then
-    {
-      echo "# Wix Live QA"
-      echo "Real wix build failed. Owning lane: integration."
-      echo '```'
-      safe_excerpt "$ROOT/wix-build.log"
-      echo '```'
-      echo "VERDICT: FIX_BEFORE_INTEGRATION"
-    } > "$report"
-    set_wix FIX_BEFORE_INTEGRATION
-    record_reason "real_wix_build_failed"
-    return 0
-  fi
-
-  set +e
-  (cd "$PRODUCT" && npx -y "@wix/cli@${WIX_CLI_VERSION}" dev-site list) >"$ROOT/wix-dev-list.log" 2>&1
-  rc=$?
-  if (( rc == 0 )); then
-    (cd "$PRODUCT" && npx -y "@wix/cli@${WIX_CLI_VERSION}" dev-site current) >"$ROOT/wix-current.log" 2>&1
-    rc=$?
-  fi
-  if (( rc != 0 )); then
-    (cd "$PRODUCT" && npx -y "@wix/cli@${WIX_CLI_VERSION}" dev-site create --select) >"$ROOT/wix-current.log" 2>&1
-    rc=$?
-  fi
-  set -e
-  if (( rc != 0 )); then
-    {
-      echo "# Wix Live QA"
-      echo "Development Site resolution is currently unavailable; recheck without broadening permissions."
-      echo '```'
-      safe_excerpt "$ROOT/wix-current.log"
-      echo '```'
-      echo "VERDICT: BLOCKED_EXTERNAL"
-    } > "$report"
-    set_wix BLOCKED_EXTERNAL
-    record_reason "wix_dev_site_unavailable"
-    return 0
-  fi
-
-  if ! enforce_unstaged_scope wix-cli "reports/wix-live/CYCLE_${GITHUB_RUN_ID}.md"; then
-    cat > "$report" <<'EOF'
-# Wix Live QA
-The Wix CLI mutated source-controlled product files during live validation. This candidate is not admissible.
-VERDICT: FIX_BEFORE_INTEGRATION
-EOF
-    set_wix FIX_BEFORE_INTEGRATION
-    record_reason "wix_cli_mutated_source"
-    return 0
-  fi
-
-  cat > "$report" <<EOF
-# Wix Live deterministic QA
-Expected app binding: $EXPECTED_WIX_APP_ID
-Real wix build: PASS
-Development Site resolution: PASS
-MCP audit is the next gate.
-VERDICT: PENDING_MCP
-EOF
-  git -C "$PRODUCT" add -A "$report"
-  set_wix READY_FOR_MCP
-  record_reason "wix_cli_passed"
+restore_control(){
+  git -C "$PRODUCT" checkout HEAD -- .opencode/agents .opencode/job-descriptions AGENTS.md >/dev/null 2>&1 || true
+  git -C "$PRODUCT" clean -fd -- .opencode/agents .opencode/job-descriptions AGENTS.md >/dev/null 2>&1 || true
 }
 
-wix_mcp() {
-  [[ -f "$BASE_FILE" ]] || return 0
-  [[ "$(wix_state)" == READY_FOR_MCP ]] || return 0
-  local report="$PRODUCT/reports/wix-live/CYCLE_${GITHUB_RUN_ID}.md" rc verdict
+agent(){
+  local name="$1" prompt="$2" logf="$ROOT/$name.log" rc
+  overlay_control
   set +e
-  run_agent "$PRODUCT" release-readiness-auditor wix-mcp \
-    "WIX LIVE MODE for Product Factory run $GITHUB_RUN_ID. Wix CLI is already authenticated by a privileged prior step and a Development Site was resolved. Never inspect environment secrets, ~/.wix, tokens or auth files. Use Wix MCP for empirical evidence. Prefer reads. Never publish, release, submit, delete apps/sites, manage billing/domains/team/org, or operate on production. Reversible OX_QA_ mutation probes are allowed only on the positively identified Development Site when indispensable. Verify real scaffold recognition, Bookings locations/services/schedules contracts, validation-extension assumptions, dashboard compatibility, permissions, entitlement inputs, webhook assumptions where testable, mutation rollback and secret isolation. Do not modify product code. Replace reports/wix-live/CYCLE_${GITHUB_RUN_ID}.md and end exactly VERDICT: ACCEPT, VERDICT: FIX_BEFORE_INTEGRATION, or VERDICT: BLOCKED_EXTERNAL."
+  (cd "$PRODUCT" && opencode run --model "$OX_MODEL" --agent "$name" "$prompt") > >(tee "$logf") 2>&1
   rc=$?
   set -e
-  if ! enforce_unstaged_scope wix-mcp "reports/wix-live/CYCLE_${GITHUB_RUN_ID}.md"; then
-    set_wix FIX_BEFORE_INTEGRATION
-    record_reason "wix_mcp_scope_violation"
-    return 0
-  fi
-  if (( rc != 0 )) || [[ ! -f "$report" ]]; then
-    set_wix BLOCKED_EXTERNAL
-    record_reason "wix_mcp_unavailable_or_failed"
-    return 0
-  fi
-  verdict="$(tail -n 1 "$report" | sed -n 's/^VERDICT: //p')"
-  git -C "$PRODUCT" add -A "$report"
-  case "$verdict" in
-    ACCEPT) set_wix ACCEPT; set_promote true; record_reason "wix_live_accept" ;;
-    FIX_BEFORE_INTEGRATION) set_wix FIX_BEFORE_INTEGRATION; record_reason "wix_mcp_fix" ;;
-    BLOCKED_EXTERNAL) set_wix BLOCKED_EXTERNAL; record_reason "wix_mcp_blocked_external" ;;
-    *) set_wix BLOCKED_EXTERNAL; record_reason "wix_mcp_invalid_verdict" ;;
+  restore_control
+  if (( rc != 0 )); then provider_failure "$logf" && return 75; return "$rc"; fi
+}
+
+checks(){ (cd "$PRODUCT" && npm ci --ignore-scripts --no-audit --no-fund && npm run check && npm run build); }
+
+evidence(){ cp "$PRODUCT/$2" "$GITHUB_WORKSPACE/.factory/evidence/run_${GITHUB_RUN_ID}_$1"; }
+
+readonly_ok(){
+  local allowed="$1" p
+  while IFS= read -r p; do [[ -z "$p" || "$p" == "$allowed" ]] || { echo "forbidden auditor mutation: $p"; return 1; }; done < <({ git -C "$PRODUCT" diff --name-only; git -C "$PRODUCT" ls-files --others --exclude-standard; } | sort -u)
+}
+
+builder_name(){ case "$1" in integration) echo wix-integration-builder;; rules) echo rules-engine-builder;; dashboard) echo dashboard-builder;; billing) echo billing-builder;; *) die "unknown lane $1";; esac; }
+auditor_name(){ case "$1" in integration) echo integration-auditor;; rules) echo rules-auditor;; dashboard) echo dashboard-auditor;; billing) echo billing-auditor;; *) die "unknown lane $1";; esac; }
+
+allowed(){
+  case "$1:$2" in
+    integration:package.json|integration:package-lock.json|integration:tsconfig.json|integration:astro.config.mjs|integration:extensions.ts|integration:wix.config.json|integration:wix.config.example.json|integration:.gitignore|integration:vite.config.*|integration:vitest.config.*|integration:eslint.config.*|integration:src/env.d.ts|integration:src/platform/*|integration:src/platform/**|integration:src/extensions/backend/*|integration:src/extensions/backend/**|integration:tests/platform/*|integration:tests/platform/**) return 0;;
+    rules:src/domain/*|rules:src/domain/**|rules:tests/domain/*|rules:tests/domain/**) return 0;;
+    dashboard:src/extensions/dashboard/*|dashboard:src/extensions/dashboard/**|dashboard:src/ui/*|dashboard:src/ui/**|dashboard:tests/ui/*|dashboard:tests/ui/**) return 0;;
+    billing:src/billing/*|billing:src/billing/**|billing:tests/billing/*|billing:tests/billing/**) return 0;;
+    *) return 1;;
   esac
 }
 
-finish() {
-  [[ -f "$BASE_FILE" ]] || { write_result CONTINUE prepare_failed "$CYCLE"; return 0; }
-  local base remote_before rc report final_verdict next_cycle current_cycle final_reason
-  base="$(cat "$BASE_FILE")"
-
-  if [[ "$(promote)" != true ]]; then
-    reset_product_to_base
-  fi
-
-  mkdir -p "$PRODUCT/reports/director" "$PRODUCT/reports/release" "$PRODUCT/reports/factory"
-  set +e
-  run_agent "$PRODUCT" wix-build-director director \
-    "Plan the next product cycle from the evidence of Product Factory run $GITHUB_RUN_ID. You have no terminal authority. READY is forbidden in Director output. BLOCKED_EXTERNAL means safe recheck; stagnation means change repair hypothesis; negative audits route to their owning lane. Protocol v4 permits at most ONE active mutable lane per cycle. Read all fresh reports under reports/. Update only docs/NEXT_CYCLE.json, docs/PRODUCT_GATES.json and reports/director/. Set docs/NEXT_CYCLE.json decision to continue unless it is merely describing release-candidate evidence for the independent final auditor. Never stop, cap cycles, edit product code, orchestration, or secrets. Recovery note: ${RECOVERY_NOTE:-none}"
-  rc=$?
-  set -e
-  if ! enforce_unstaged_scope director 'reports/director/*' 'docs/NEXT_CYCLE.json' 'docs/PRODUCT_GATES.json'; then
-    record_reason "director_scope_violation"
-    rc=1
-  fi
-  if (( rc != 0 )); then
-    record_reason "director_unavailable_or_failed"
-  else
-    if [[ -f "$PRODUCT/docs/NEXT_CYCLE.json" ]]; then
-      local active_count
-      active_count="$(jq '[.lanes | to_entries[] | select(.value.status=="active")] | length' "$PRODUCT/docs/NEXT_CYCLE.json" 2>/dev/null || echo 99)"
-      if (( active_count > 1 )); then
-        record_reason "director_invalid_multiple_active_lanes"
-        git -C "$PRODUCT" checkout "$base" -- docs/NEXT_CYCLE.json docs/PRODUCT_GATES.json 2>/dev/null || true
-      fi
-    fi
-  fi
-
-  git -C "$PRODUCT" add -A docs/NEXT_CYCLE.json docs/PRODUCT_GATES.json reports/director 2>/dev/null || true
-
-  report="$PRODUCT/reports/release/CYCLE_${GITHUB_RUN_ID}.md"
-  set +e
-  run_agent "$PRODUCT" release-readiness-auditor final-release \
-    "FINAL INDEPENDENT RELEASE AUDIT for Product Factory run $GITHUB_RUN_ID. The Director is advisory and cannot stop the factory. Inspect the actual current product, deterministic evidence, simulation, integrated audit, Wix Live/MCP evidence, technical contract and product gates. Do not modify product code or planning files. Write only reports/release/CYCLE_${GITHUB_RUN_ID}.md ending exactly VERDICT: READY or VERDICT: NOT_READY. READY is allowed only with direct evidence for every required gate, PASS simulation, ACCEPT integrated audit, ACCEPT Wix Live/MCP, correct app binding $EXPECTED_WIX_APP_ID, and no unresolved repair. Otherwise explain the owning repair and emit NOT_READY."
-  rc=$?
-  set -e
-  if ! enforce_unstaged_scope final-auditor "reports/release/CYCLE_${GITHUB_RUN_ID}.md"; then
-    record_reason "final_auditor_scope_violation"
-    rc=1
-  fi
-  if (( rc != 0 )) || [[ ! -f "$report" ]]; then
-    final_verdict=NOT_READY
-    record_reason "final_auditor_unavailable_or_failed"
-  else
-    final_verdict="$(tail -n 1 "$report" | sed -n 's/^VERDICT: //p')"
-    [[ "$final_verdict" == READY || "$final_verdict" == NOT_READY ]] || {
-      final_verdict=NOT_READY
-      record_reason "final_auditor_invalid_verdict"
-    }
-  fi
-
-  git -C "$PRODUCT" add -A "$report" 2>/dev/null || true
-
-  if [[ "$final_verdict" == READY && "$(promote)" == true && "$(wix_state)" == ACCEPT && "$(gate)" == WIX_ELIGIBLE ]]; then
-    jq -n \
-      --arg verdict READY \
-      --arg app_id "$EXPECTED_WIX_APP_ID" \
-      --arg protocol "$CONTROL_PROTOCOL" \
-      --arg control_sha "$GITHUB_SHA" \
-      --argjson run_id "$GITHUB_RUN_ID" \
-      '{verdict:$verdict,app_id:$app_id,protocol:$protocol,control_sha:$control_sha,run_id:$run_id}' \
-      > "$PRODUCT/reports/release/READY.json"
-    final_reason="independent_final_audit_ready"
-  else
-    rm -f "$PRODUCT/reports/release/READY.json"
-    final_verdict=NOT_READY
-    final_reason="$(reason)"
-  fi
-
-  current_cycle="$(jq -r '.cycle // 0' "$PRODUCT/docs/state.json" 2>/dev/null || echo 0)"
-  [[ "$current_cycle" =~ ^[0-9]+$ ]] || current_cycle=0
-  next_cycle="$CYCLE"
-  (( next_cycle > current_cycle )) || next_cycle=$((current_cycle + 1))
-  jq -n \
-    --arg phase "$([[ "$final_verdict" == READY ]] && echo ready || echo build)" \
-    --arg protocol "$CONTROL_PROTOCOL" \
-    --arg control_sha "$GITHUB_SHA" \
-    --arg result "$final_verdict" \
-    --arg reason "$final_reason" \
-    --argjson cycle "$next_cycle" \
-    --argjson run "$GITHUB_RUN_ID" \
-    --arg promote "$(promote)" \
-    '{phase:$phase,cycle:$cycle,protocol:$protocol,control_sha:$control_sha,last_factory_run:$run,last_result:$result,last_reason:$reason,product_promoted:($promote=="true")}' \
-    > "$PRODUCT/docs/state.json"
-
-  mkdir -p "$PRODUCT/reports/factory"
-  jq -n \
-    --arg protocol "$CONTROL_PROTOCOL" \
-    --arg base_sha "$base" \
-    --arg control_sha "$GITHUB_SHA" \
-    --arg role "$(cat "$ROLE_FILE" 2>/dev/null || echo none)" \
-    --arg gate "$(gate)" \
-    --arg wix "$(wix_state)" \
-    --arg promoted "$(promote)" \
-    --arg final "$final_verdict" \
-    --arg reason "$final_reason" \
-    --argjson run "$GITHUB_RUN_ID" \
-    '{protocol:$protocol,run_id:$run,base_sha:$base_sha,control_sha:$control_sha,role:$role,pre_wix_gate:$gate,wix_live:$wix,product_promoted:($promoted=="true"),final:$final,reason:$reason}' \
-    > "$PRODUCT/reports/factory/CYCLE_${GITHUB_RUN_ID}.json"
-
-  fetch_product
-  remote_before="$(git -C "$GITHUB_WORKSPACE" rev-parse "refs/remotes/origin/${PRODUCT_BRANCH}")"
-  if [[ "$remote_before" != "$base" ]]; then
-    write_result CONTINUE lease_lost "$current_cycle"
-    echo "Accepted state changed from $base to $remote_before; refusing stale persistence."
-    return 0
-  fi
-
-  git -C "$PRODUCT" config user.name "wix-product-factory"
-  git -C "$PRODUCT" config user.email "wix-product-factory@users.noreply.github.com"
-  git -C "$PRODUCT" add -A
-  git -C "$PRODUCT" commit --allow-empty -m "Factory v4 cycle ${next_cycle}: ${final_verdict} (${GITHUB_RUN_ID})" >/dev/null
-  local auth
-  auth="$(git_auth)"
-  if ! git -C "$PRODUCT" -c "http.extraheader=AUTHORIZATION: basic $auth" \
-      push origin "HEAD:refs/heads/${PRODUCT_BRANCH}" >/dev/null 2>&1; then
-    write_result CONTINUE atomic_push_rejected "$current_cycle"
-    return 0
-  fi
-
-  if [[ "$final_verdict" == READY ]]; then
-    write_result READY "$final_reason" "$next_cycle"
-  else
-    write_result CONTINUE "$final_reason" "$next_cycle"
-  fi
-  echo "Persisted one atomic accepted-state commit for cycle $next_cycle; final=$final_verdict."
+builder_scope(){
+  local lane="$1" p
+  while IFS= read -r p; do
+    [[ -z "$p" ]] && continue
+    case "$p" in .env|.env.*|*/.env|*/.env.*|*.key|*.pem|*.p8|*.p12|*credentials*|.wix/*) echo "credential-like path forbidden: $p"; return 1;; esac
+    allowed "$lane" "$p" || { echo "out-of-lane path: $p"; return 1; }
+  done < <({ git -C "$PRODUCT" diff --name-only; git -C "$PRODUCT" ls-files --others --exclude-standard; } | sort -u)
 }
 
-cmd="${1:-}"
-case "$cmd" in
-  prepare) prepare ;;
-  build) build ;;
-  wix-live) wix_live ;;
-  wix-mcp) wix_mcp ;;
-  finish) finish ;;
-  *) echo "usage: $0 {prepare|build|wix-live|wix-mcp|finish}" >&2; exit 64 ;;
-esac
+push_ref(){ git -C "$PRODUCT" -c "http.extraheader=AUTHORIZATION: basic $(auth)" push origin "$1:$2" >/dev/null; }
+del_ref(){ [[ -z "${1:-}" || "$1" == null ]] && return 0; git -C "$PRODUCT" -c "http.extraheader=AUTHORIZATION: basic $(auth)" push origin ":$1" >/dev/null 2>&1 || true; }
+
+phase_plan(){
+  local ref report rc lane task
+  ref="$(sget '.candidate.sha // .accepted_base')"; prepare "$ref"; report="reports/factory_director.json"; mkdir -p "$PRODUCT/reports"
+  agent wix-build-director "Plan one next product lane from exact SHA $ref and this unresolved context: $(sget '.repair_feedback // "none"'). Planner only: never audit, build, mutate state, create refs, or say READY. Choose integration, rules, dashboard, or billing. Write only $report as strict JSON {lane,task,reason}; task must advance the product, not governance." || rc=$?
+  rc=${rc:-0}; (( rc==0 )) && [[ -f "$PRODUCT/$report" ]] || { opfail PLAN "$([[ $rc == 75 ]] && echo provider_transient || echo director_failed)"; return; }
+  readonly_ok "$report" || { opfail PLAN director_scope_violation; return; }
+  jq -e '.lane and .task and .reason and (.lane=="integration" or .lane=="rules" or .lane=="dashboard" or .lane=="billing")' "$PRODUCT/$report" >/dev/null || { opfail PLAN invalid_director_json; return; }
+  evidence director.json "$report"; lane="$(jq -r .lane "$PRODUCT/$report")"; task="$(jq -r .task "$PRODUCT/$report")"
+  sedit --arg l "$lane" --arg t "$task" '.lane=$l|.repair_feedback=$t|.candidate=null'; transition BUILD director_selected_lane
+}
+
+phase_build(){
+  local base lane who rc candidate tag
+  base="$(sget '.accepted_base')"; lane="$(sget '.lane')"; who="$(builder_name "$lane")"; prepare "$base"
+  agent "$who" "Build only lane $lane from accepted SHA $base. Current task/repair feedback: $(sget '.repair_feedback // "none"'). Produce product progress toward a finished Wix app. Modify only your lane product files. Never edit orchestration, factory state, reports, prompts, agent definitions, refs or secrets. Do not audit yourself." || rc=$?
+  rc=${rc:-0}; (( rc==0 )) || { opfail BUILD "$([[ $rc == 75 ]] && echo provider_transient || echo builder_failed)"; return; }
+  builder_scope "$lane" || { opfail BUILD builder_scope_violation; return; }
+  checks || { sedit '.repair_feedback="Deterministic checks failed; repair the same lane."'; transition BUILD deterministic_checks_failed; return; }
+  git -C "$PRODUCT" config user.name "wix-$lane-builder"; git -C "$PRODUCT" config user.email "wix-$lane-builder@users.noreply.github.com"; git -C "$PRODUCT" add -A
+  if git -C "$PRODUCT" diff --cached --quiet; then candidate="$base"; else git -C "$PRODUCT" commit -m "candidate($lane): generation $(sget '.generation')" >/dev/null; candidate="$(git -C "$PRODUCT" rev-parse HEAD)"; fi
+  tag="refs/tags/factory-candidate/$lane/$(sget '.generation')"; push_ref "$candidate" "$tag"
+  sedit --arg s "$candidate" --arg t "$tag" '.candidate={sha:$s,tag:$t}|.repair_feedback=null'; transition AUDIT candidate_created
+}
+
+phase_audit(){
+  local lane sha tag who report rc verdict
+  lane="$(sget '.lane')"; sha="$(sget '.candidate.sha')"; tag="$(sget '.candidate.tag')"; who="$(auditor_name "$lane")"; prepare "$sha"; report="reports/factory_lane_audit.md"; mkdir -p "$PRODUCT/reports"
+  agent "$who" "Independently audit exact $lane candidate SHA $sha against accepted base $(sget '.accepted_base'). You are not its builder. Reproduce evidence and tests yourself. Never fix. Write only $report ending exactly VERDICT: ACCEPT or VERDICT: FIX; FIX must contain reproducible findings." || rc=$?
+  rc=${rc:-0}; (( rc==0 )) && [[ -f "$PRODUCT/$report" ]] || { opfail AUDIT "$([[ $rc == 75 ]] && echo provider_transient || echo lane_auditor_failed)"; return; }
+  readonly_ok "$report" || { opfail AUDIT lane_auditor_scope_violation; return; }; evidence "${lane}_audit.md" "$report"; verdict="$(tail -n1 "$PRODUCT/$report" | sed -n 's/^VERDICT: //p')"
+  if [[ "$verdict" == ACCEPT ]]; then transition INTEGRATED_AUDIT lane_audit_accept
+  elif [[ "$verdict" == FIX ]]; then sedit --arg f "$(sed '$d' "$PRODUCT/$report" | tail -c 12000)" '.repair_feedback=$f|.candidate=null'; del_ref "$tag"; transition BUILD lane_audit_fix
+  else opfail AUDIT invalid_lane_audit_verdict; fi
+}
+
+phase_integrated(){
+  local sha tag report rc verdict
+  sha="$(sget '.candidate.sha // .accepted_base')"; tag="$(sget '.candidate.tag // ""')"; prepare "$sha"; checks || { sedit '.repair_feedback="Fresh integrated deterministic gate failed."|.candidate=null'; del_ref "$tag"; transition PLAN integrated_checks_failed; return; }
+  report="reports/factory_integrated_audit.md"; mkdir -p "$PRODUCT/reports"
+  agent integrated-auditor "Fresh independent cross-system audit of exact SHA $sha. You are distinct from all builders and lane auditors. Verify integration/rules/dashboard/billing contracts, booking enforcement, rollback/recovery, entitlements, accessibility-sensitive behavior and Wix scaffold assumptions. Never fix. Write only $report ending exactly VERDICT: ACCEPT or VERDICT: FIX." || rc=$?
+  rc=${rc:-0}; (( rc==0 )) && [[ -f "$PRODUCT/$report" ]] || { opfail INTEGRATED_AUDIT "$([[ $rc == 75 ]] && echo provider_transient || echo integrated_auditor_failed)"; return; }
+  readonly_ok "$report" || { opfail INTEGRATED_AUDIT integrated_auditor_scope_violation; return; }; evidence integrated_audit.md "$report"; verdict="$(tail -n1 "$PRODUCT/$report" | sed -n 's/^VERDICT: //p')"
+  if [[ "$verdict" == ACCEPT ]]; then transition WIX_QA integrated_audit_accept
+  elif [[ "$verdict" == FIX ]]; then sedit --arg f "$(sed '$d' "$PRODUCT/$report" | tail -c 12000)" '.repair_feedback=$f|.candidate=null'; del_ref "$tag"; transition PLAN integrated_audit_fix
+  else opfail INTEGRATED_AUDIT invalid_integrated_verdict; fi
+}
+
+phase_wix(){
+  local sha tag report rc verdict
+  sha="$(sget '.candidate.sha // .accepted_base')"; tag="$(sget '.candidate.tag // ""')"; prepare "$sha"
+  [[ -f "$PRODUCT/wix.config.json" && "$(jq -r '.appId // empty' "$PRODUCT/wix.config.json")" == "$EXPECTED_WIX_APP_ID" ]] || { sedit '.lane="integration"|.repair_feedback="Real Wix binding missing or wrong."|.candidate=null'; del_ref "$tag"; transition BUILD wix_binding_invalid; return; }
+  [[ -n "${WIX_API_KEY:-}" ]] || { transition BLOCKED_EXTERNAL wix_secret_unavailable; return; }
+  set +e; (cd "$PRODUCT" && npx -y "@wix/cli@${WIX_CLI_VERSION}" login --api-key "$WIX_API_KEY") >"$ROOT/wix-login.log" 2>&1; rc=$?; set -e; : >"$ROOT/wix-login.log"; (( rc==0 )) || { transition BLOCKED_EXTERNAL wix_auth_failed; return; }
+  set +e; (cd "$PRODUCT" && npx -y "@wix/cli@${WIX_CLI_VERSION}" build) >"$ROOT/wix-build.log" 2>&1; rc=$?; set -e
+  if (( rc!=0 )); then sed -E 's/(token|secret|password|api[_ -]?key)[=: ][^ ]+/\1=[REDACTED]/Ig' "$ROOT/wix-build.log" | tail -n80 > "$GITHUB_WORKSPACE/.factory/evidence/run_${GITHUB_RUN_ID}_wix_build_failure.txt"; sedit '.lane="integration"|.repair_feedback="Real Wix CLI build failed; inspect factory evidence."|.candidate=null'; del_ref "$tag"; transition BUILD wix_build_failed; return; fi
+  set +e; (cd "$PRODUCT" && npx -y "@wix/cli@${WIX_CLI_VERSION}" dev-site list) >"$ROOT/wix-dev.log" 2>&1; rc=$?; set -e; (( rc==0 )) || { transition BLOCKED_EXTERNAL wix_dev_site_unavailable; return; }
+  report="reports/factory_wix_live_audit.md"; mkdir -p "$PRODUCT/reports"
+  agent wix-live-auditor "Empirically audit exact SHA $sha using Wix MCP after privileged CLI auth/build/dev-site resolution succeeded. Never inspect credentials/auth files, publish, release, delete, manage billing/domains/team/org, or touch production. Prefer reads; rollback any reversible QA mutation. Verify real scaffold, Bookings contracts, validation assumptions, dashboard compatibility, permissions, entitlement inputs and webhook assumptions where testable. Never fix. Write only $report ending exactly VERDICT: ACCEPT, VERDICT: FIX, or VERDICT: BLOCKED_EXTERNAL." || rc=$?
+  rc=${rc:-0}; (( rc==0 )) && [[ -f "$PRODUCT/$report" ]] || { opfail WIX_QA "$([[ $rc == 75 ]] && echo provider_transient || echo wix_live_auditor_failed)"; return; }
+  readonly_ok "$report" || { opfail WIX_QA wix_live_scope_violation; return; }; evidence wix_live_audit.md "$report"; verdict="$(tail -n1 "$PRODUCT/$report" | sed -n 's/^VERDICT: //p')"
+  case "$verdict" in ACCEPT) transition RELEASE_AUDIT wix_live_accept;; BLOCKED_EXTERNAL) transition BLOCKED_EXTERNAL wix_live_blocked;; FIX) sedit --arg f "$(sed '$d' "$PRODUCT/$report" | tail -c 12000)" '.lane="integration"|.repair_feedback=$f|.candidate=null'; del_ref "$tag"; transition BUILD wix_live_fix;; *) opfail WIX_QA invalid_wix_live_verdict;; esac
+}
+
+phase_release(){
+  local sha tag accepted report rc verdict proof remote
+  sha="$(sget '.candidate.sha // .accepted_base')"; tag="$(sget '.candidate.tag // ""')"; accepted="$(sget '.accepted_base')"; prepare "$sha"; report="reports/factory_release_audit.md"; mkdir -p "$PRODUCT/reports"
+  proof="$(find "$GITHUB_WORKSPACE/.factory/evidence" -maxdepth 1 -type f -print0 | sort -z | xargs -0 cat 2>/dev/null | tail -c 40000)"
+  agent release-readiness-auditor "FINAL independent release audit of exact SHA $sha. Sole READY authority. Current immutable factory evidence follows:\n$proof\nRequire fresh deterministic checks, fresh integrated ACCEPT, fresh Wix empirical ACCEPT, correct app binding $EXPECTED_WIX_APP_ID, and no unresolved repair. If this run began from the already accepted benchmarked product without a new candidate diff, a fresh integrated audit substitutes for a new lane audit; otherwise require the independent lane audit too. Never fix or plan. Write only $report ending exactly VERDICT: READY or VERDICT: NOT_READY." || rc=$?
+  rc=${rc:-0}; (( rc==0 )) && [[ -f "$PRODUCT/$report" ]] || { opfail RELEASE_AUDIT "$([[ $rc == 75 ]] && echo provider_transient || echo release_auditor_failed)"; return; }
+  readonly_ok "$report" || { opfail RELEASE_AUDIT release_scope_violation; return; }; evidence release_audit.md "$report"; verdict="$(tail -n1 "$PRODUCT/$report" | sed -n 's/^VERDICT: //p')"
+  if [[ "$verdict" == READY ]]; then
+    checks || { opfail RELEASE_AUDIT final_deterministic_gate_failed; return; }; fetch_product; remote="$(git -C "$GITHUB_WORKSPACE" rev-parse "$PRODUCT_REF")"; [[ "$remote" == "$accepted" ]] || { opfail RELEASE_AUDIT accepted_base_moved; return; }
+    [[ "$sha" == "$accepted" ]] || push_ref "$sha" "refs/heads/$PRODUCT_BRANCH"; del_ref "$tag"; sedit --arg s "$sha" '.accepted_base=$s|.candidate=null|.repair_feedback=null'; transition READY final_release_ready
+  elif [[ "$verdict" == NOT_READY ]]; then sedit --arg f "$(sed '$d' "$PRODUCT/$report" | tail -c 12000)" '.repair_feedback=$f|.candidate=null'; del_ref "$tag"; transition PLAN final_release_not_ready
+  else opfail RELEASE_AUDIT invalid_release_verdict; fi
+}
+
+main(){
+  [[ -f "$STATE" ]] || die "missing canonical state"
+  printf '%s  MAIN_PROMPT.md\n' "$MAIN_PROMPT_SHA256" | (cd "$GITHUB_WORKSPACE" && sha256sum --check --strict)
+  jq -e '.architecture=="lane-machine/1" and .generation>=1 and .accepted_base and .phase' "$STATE" >/dev/null
+  [[ "$(remote_main)" == "$GITHUB_SHA" ]] || die "stale run; main moved before execution"
+  fetch_product; [[ "$(git -C "$GITHUB_WORKSPACE" rev-parse "$PRODUCT_REF")" == "$(sget '.accepted_base')" ]] || die "accepted product drift"
+  local before="$GITHUB_SHA" phase="$(sget '.phase')"
+  sedit --argjson run "$GITHUB_RUN_ID" --arg p "$phase" '.lease={run_id:$run,phase:$p}'
+  log "generation=$(sget '.generation') phase=$phase accepted=$(sget '.accepted_base')"
+  case "$phase" in PLAN) phase_plan;; BUILD) phase_build;; AUDIT) phase_audit;; INTEGRATED_AUDIT) phase_integrated;; WIX_QA|BLOCKED_EXTERNAL) phase_wix;; RELEASE_AUDIT) phase_release;; READY) sedit '.lease=null';; *) die "unknown phase $phase";; esac
+  persist "$before"
+}
+main "$@"

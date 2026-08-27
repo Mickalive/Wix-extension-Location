@@ -48,7 +48,8 @@ jobs:
           grep -Fq 'OX_REVIEW_MODELS: "opencode/laguna-s-2.1-free opencode/deepseek-v4-flash-free opencode/mimo-v2.5-free"' .github/workflows/wix-build-loop.yml
           grep -Fq 'is_builder_agent' .github/scripts/wix-factory-cycle.sh
           grep -Fq 'trying next configured model' .github/scripts/wix-factory-cycle.sh
-          if grep -R -Fq 'opencode/x-preview-f-free' .github .opencode/agents; then
+          retired_model='opencode/x-preview-f-free'
+          if grep -R -Fq "$retired_model" .github/scripts .github/workflows/wix-build-loop.yml .github/workflows/wix-watchdog.yml .opencode/agents; then
             echo '::error::Retired x-preview model reference found in active orchestration or agent definitions.'
             exit 1
           fi

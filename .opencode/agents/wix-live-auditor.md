@@ -1,7 +1,7 @@
 ---
 description: Independent empirical Wix development-site and MCP auditor.
 mode: primary
-model: opencode/x-preview-f-free
+model: opencode/laguna-s-2.1-free
 temperature: 0.01
 permission:
   edit:

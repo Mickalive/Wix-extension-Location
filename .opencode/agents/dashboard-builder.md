@@ -1,7 +1,7 @@
 ---
 description: Exact-scope dashboard/UI builder; consumes contracts without redefining them.
 mode: primary
-model: opencode/x-preview-f-free
+model: opencode/deepseek-v4-flash-free
 temperature: 0.01
 permission:
   edit:

@@ -2,7 +2,7 @@
 set -Eeuo pipefail
 
 : "${GITHUB_RUN_ID:?}" "${GITHUB_SHA:?}" "${GITHUB_REPOSITORY:?}" "${GITHUB_WORKSPACE:?}" "${RUNNER_TEMP:?}"
-: "${PRODUCT_BRANCH:?}" "${OX_MODEL:?}" "${MAIN_PROMPT_SHA256:?}" "${EXPECTED_WIX_APP_ID:?}" "${GH_TOKEN:?}"
+: "${PRODUCT_BRANCH:?}" "${OX_BUILDER_MODELS:?}" "${OX_REVIEW_MODELS:?}" "${MAIN_PROMPT_SHA256:?}" "${EXPECTED_WIX_APP_ID:?}" "${GH_TOKEN:?}"
 
 STATE="$GITHUB_WORKSPACE/.factory/state.json"
 ROOT="$RUNNER_TEMP/wix-factory-$GITHUB_RUN_ID"
@@ -41,7 +41,9 @@ opfail(){
   sedit --arg p "$1" --arg r "$2" --argjson run "$GITHUB_RUN_ID" '.last_run=$run|.last_operational_failure={phase:$p,reason:$r,run_id:$run}|.lease=null'
 }
 
-provider_failure(){ grep -Eqi 'Unexpected server error|UnknownError|network error|temporarily unavailable|service unavailable|provider unavailable|ECONNRESET|ETIMEDOUT|timed out|rate.?limit|HTTP[^0-9]*(429|500|502|503|504)' "$1" 2>/dev/null; }
+provider_failure(){
+  grep -Eqi 'Unexpected server error|UnknownError|network error|temporarily unavailable|service unavailable|provider unavailable|ECONNRESET|ETIMEDOUT|timed out|rate.?limit|HTTP[^0-9]*(401|403|404|408|409|429|500|502|503|504)|Forbidden|model[^[:alnum:]]*(not found|unavailable|unsupported|invalid)|unknown model|no such model' "$1" 2>/dev/null
+}
 
 prepare(){
   local ref="$1"
@@ -63,15 +65,51 @@ restore_control(){
   git -C "$PRODUCT" clean -fd -- .opencode/agents .opencode/job-descriptions AGENTS.md >/dev/null 2>&1 || true
 }
 
+reset_agent_attempt(){
+  git -C "$PRODUCT" reset --hard HEAD >/dev/null
+  git -C "$PRODUCT" clean -fd >/dev/null
+}
+
+is_builder_agent(){
+  case "$1" in
+    wix-integration-builder|rules-engine-builder|dashboard-builder|billing-builder) return 0;;
+    *) return 1;;
+  esac
+}
+
 agent(){
-  local name="$1" prompt="$2" logf="$ROOT/$name.log" rc
-  overlay_control
-  set +e
-  (cd "$PRODUCT" && opencode run --model "$OX_MODEL" --agent "$name" "$prompt") > >(tee "$logf") 2>&1
-  rc=$?
-  set -e
-  restore_control
-  if (( rc != 0 )); then provider_failure "$logf" && return 75; return "$rc"; fi
+  local name="$1" prompt="$2" chain model logf rc slug
+  local -a models
+  if is_builder_agent "$name"; then chain="$OX_BUILDER_MODELS"; else chain="$OX_REVIEW_MODELS"; fi
+  read -r -a models <<< "$chain"
+  (( ${#models[@]} > 0 )) || return 75
+
+  for model in "${models[@]}"; do
+    slug="${model//\//_}"
+    logf="$ROOT/${name}-${slug}.log"
+    overlay_control
+    log "agent=$name model=$model"
+    set +e
+    (cd "$PRODUCT" && opencode run --model "$model" --agent "$name" "$prompt") > >(tee "$logf") 2>&1
+    rc=$?
+    set -e
+    restore_control
+
+    if (( rc == 0 )); then
+      printf '%s\n' "$model" > "$GITHUB_WORKSPACE/.factory/evidence/run_${GITHUB_RUN_ID}_${name}_model.txt"
+      return 0
+    fi
+
+    if provider_failure "$logf"; then
+      log "model=$model unavailable for agent=$name; trying next configured model"
+      reset_agent_attempt
+      continue
+    fi
+
+    return "$rc"
+  done
+
+  return 75
 }
 
 checks(){ (cd "$PRODUCT" && npm ci --ignore-scripts --no-audit --no-fund && npm run check && npm run build); }

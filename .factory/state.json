@@ -3,9 +3,9 @@
   "generation": 3,
   "phase": "BUILD",
   "lane": "integration",
-  "accepted_base": "e5dda6b17e901db62c9a3a6daf8e9ed5284b02db",
+  "accepted_base": "ec916b75d5600e02d679d264648ac92333d721f1",
   "candidate": null,
-  "repair_feedback": "Real Wix CLI build failed; inspect factory evidence.",
+  "repair_feedback": "Real Wix CLI build failed: Wix CLI 1.1.238 reported that wix.config.json is malformed or missing required fields and could not identify the project type. Inspect the current real Wix CLI project/config requirements, preserve the existing appId 3e9ec3af-001b-4684-a197-a5133677844d and project identity, and do not fabricate identifiers.",
   "lease": null,
   "last_run": 33124891469,
   "last_transition": {

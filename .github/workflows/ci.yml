@@ -1,8 +1,15 @@
 name: CI
 
 'on':
+  workflow_dispatch: {}
   push:
-    branches: ["main", "lab/wix-rules"]
+    branches: ["main"]
+    paths:
+      - ".github/**"
+      - ".opencode/**"
+      - "AGENTS.md"
+      - "MAIN_PROMPT.md"
+      - "opencode.json"
   pull_request: {}
 
 permissions:
@@ -18,60 +25,65 @@ env:
 
 jobs:
   checks:
-    name: Architecture and deterministic product gate
+    name: Control architecture + accepted-product deterministic gate
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 35
     steps:
-      - name: Checkout
+      - name: Checkout control plane
         uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
         with:
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Verify authoritative lane-machine architecture
+      - name: Verify authoritative architecture
         shell: bash
         run: |
           set -euo pipefail
           printf '%s  MAIN_PROMPT.md\n' "$MAIN_PROMPT_SHA256" | sha256sum --check --strict
           ruby -e 'require "yaml"; Dir[".github/workflows/*.{yml,yaml}"].each { |f| YAML.load_file(f); puts "valid yaml: #{f}" }'
-          bash -n .github/scripts/wix-factory-cycle.sh
-          test "$(find .github/workflows -maxdepth 1 -type f | wc -l)" -eq 3
-          test "$(find .github/scripts -maxdepth 1 -type f | wc -l)" -eq 1
+          test "$(find .github/workflows -maxdepth 1 -type f | wc -l)" -eq 2
+          test ! -f .github/workflows/wix-watchdog.yml
+          for f in wix-factory-cycle.sh probe-model.sh select-models.sh housekeeping.sh; do
+            bash -n ".github/scripts/$f"
+          done
+          test "$(find .github/scripts -maxdepth 1 -type f | wc -l)" -eq 4
           jq -e '.architecture=="lane-machine/1" and .generation>=1 and .accepted_base and .phase' .factory/state.json >/dev/null
-          grep -Fq 'wix-product-factory-authoritative' .github/workflows/wix-build-loop.yml
-          grep -Fq "cron: '*/5 * * * *'" .github/workflows/wix-watchdog.yml
-          for f in integration-auditor rules-auditor dashboard-auditor billing-auditor integrated-auditor wix-live-auditor release-readiness-auditor; do test -f ".opencode/agents/$f.md"; done
-          ! test -f .opencode/agents/lane-auditor.md
-          ! test -f .opencode/agents/wix-simulation-auditor.md
-
-          grep -Fq 'OX_BUILDER_MODELS: "opencode/deepseek-v4-flash-free opencode/north-mini-code-free opencode/laguna-s-2.1-free"' .github/workflows/wix-build-loop.yml
-          grep -Fq 'OX_REVIEW_MODELS: "opencode/laguna-s-2.1-free opencode/deepseek-v4-flash-free opencode/mimo-v2.5-free"' .github/workflows/wix-build-loop.yml
-          grep -Fq 'is_builder_agent' .github/scripts/wix-factory-cycle.sh
-          grep -Fq 'trying next configured model' .github/scripts/wix-factory-cycle.sh
-          retired_model='opencode/x-preview-f-free'
-          if grep -R -Fq "$retired_model" .github/scripts .github/workflows/wix-build-loop.yml .github/workflows/wix-watchdog.yml .opencode/agents; then
-            echo '::error::Retired x-preview model reference found in active orchestration or agent definitions.'
-            exit 1
-          fi
-          for f in billing-builder dashboard-builder rules-engine-builder wix-integration-builder; do
-            grep -Fq 'model: opencode/deepseek-v4-flash-free' ".opencode/agents/$f.md"
+          grep -Fq "cron: '*/5 * * * *'" .github/workflows/wix-build-loop.yml
+          grep -Fq 'x-preview-f-free' .github/workflows/wix-build-loop.yml
+          grep -Fq 'schemaVersion:2' .github/scripts/select-models.sh
+          grep -Fq 'responsiveThresholdSeconds:30' .github/scripts/select-models.sh
+          grep -Fq 'force-cancel' .github/scripts/housekeeping.sh
+          test -f .opencode/agents/model-probe.md
+          for f in integration-auditor rules-auditor dashboard-auditor billing-auditor integrated-auditor wix-live-auditor release-readiness-auditor; do
+            test -f ".opencode/agents/$f.md"
           done
-          for f in integration-auditor rules-auditor dashboard-auditor billing-auditor integrated-auditor wix-live-auditor release-readiness-auditor wix-build-director; do
-            grep -Fq 'model: opencode/laguna-s-2.1-free' ".opencode/agents/$f.md"
-          done
+          test ! -f .opencode/agents/lane-auditor.md
+          test ! -f .opencode/agents/wix-simulation-auditor.md
+          test ! -f .opencode/job-descriptions/lane-auditor.md
+          test ! -f .opencode/job-descriptions/wix-simulation-auditor.md
+          sha256sum --check --strict .opencode/job-descriptions/MANIFEST.sha256
 
       - name: Set up Node
         uses: actions/setup-node@ae0d4ed08881f17d1511386f5be3e62356acd4a6
         with:
           node-version: 22.13.0
 
-      - name: Run strongest available deterministic product checks
+      - name: Verify exact accepted product, not main
         shell: bash
         run: |
           set -euo pipefail
-          if [[ ! -f package-lock.json ]]; then exit 0; fi
-          npm ci --ignore-scripts --no-audit --no-fund
-          if node -e 'const p=require("./package.json"); process.exit(p.scripts?.check?0:1)' >/dev/null 2>&1; then npm run check; fi
-          if node -e 'const p=require("./package.json"); process.exit(p.scripts?.test?0:1)' >/dev/null 2>&1; then npm test; fi
-          if node -e 'const p=require("./package.json"); process.exit(p.scripts?.typecheck?0:1)' >/dev/null 2>&1; then npm run typecheck; fi
-          if node -e 'const p=require("./package.json"); process.exit(p.scripts?.build?0:1)' >/dev/null 2>&1; then npm run build; fi
+          accepted="$(jq -r '.accepted_base' .factory/state.json)"
+          git fetch --no-tags origin "+refs/heads/lab/wix-rules:refs/remotes/origin/lab/wix-rules"
+          remote="$(git rev-parse refs/remotes/origin/lab/wix-rules)"
+          [[ "$remote" == "$accepted" ]] || { echo "::error::Canonical accepted_base $accepted differs from lab/wix-rules $remote"; exit 1; }
+          product="${RUNNER_TEMP}/accepted-product"
+          git worktree add --detach "$product" "$accepted"
+          (
+            cd "$product"
+            test -f package-lock.json
+            npm ci --ignore-scripts --no-audit --no-fund
+            npm run check
+            npm run build
+          )
+          git worktree remove --force "$product"
+          git worktree prune

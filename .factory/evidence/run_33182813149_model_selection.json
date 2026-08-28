@@ -20,7 +20,7 @@
       "healthy": true,
       "reason": "ok",
       "exitStatus": 0,
-      "elapsedSeconds": 21,
+      "elapsedSeconds": 9,
       "proof": "headless bash tool-call nonce round-trip"
     },
     {
@@ -38,7 +38,7 @@
       "healthy": true,
       "reason": "ok",
       "exitStatus": 0,
-      "elapsedSeconds": 8,
+      "elapsedSeconds": 9,
       "proof": "headless bash tool-call nonce round-trip"
     },
     {
@@ -47,7 +47,7 @@
       "healthy": false,
       "reason": "provider-error",
       "exitStatus": 1,
-      "elapsedSeconds": 2,
+      "elapsedSeconds": 3,
       "proof": "headless bash tool-call nonce round-trip"
     },
     {
@@ -65,7 +65,7 @@
       "healthy": false,
       "reason": "provider-error",
       "exitStatus": 1,
-      "elapsedSeconds": 2,
+      "elapsedSeconds": 3,
       "proof": "headless bash tool-call nonce round-trip"
     },
     {
@@ -74,7 +74,7 @@
       "healthy": true,
       "reason": "ok",
       "exitStatus": 0,
-      "elapsedSeconds": 11,
+      "elapsedSeconds": 10,
       "proof": "headless bash tool-call nonce round-trip"
     },
     {
@@ -83,7 +83,7 @@
       "healthy": true,
       "reason": "ok",
       "exitStatus": 0,
-      "elapsedSeconds": 6,
+      "elapsedSeconds": 7,
       "proof": "headless bash tool-call nonce round-trip"
     },
     {
@@ -99,9 +99,9 @@
       "schemaVersion": 1,
       "model": "nemotron-3.5-lightning-free",
       "healthy": false,
-      "reason": "timeout",
-      "exitStatus": 124,
-      "elapsedSeconds": 90,
+      "reason": "provider-error",
+      "exitStatus": 1,
+      "elapsedSeconds": 79,
       "proof": "headless bash tool-call nonce round-trip"
     },
     {

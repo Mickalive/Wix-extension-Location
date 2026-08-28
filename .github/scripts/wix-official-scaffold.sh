@@ -8,6 +8,8 @@ ROOT="${2:?scratch root required}"
 CREATE_NEW_VERSION="0.0.105"
 APP_NAME="Advanced Booking Rules"
 BOOKINGS_APP_ID="13d21c63-b5ec-5912-8397-c3a5ddb27a97"
+BOOKINGS_SITE_TEMPLATE_ID="17b2bf9e-8661-4c92-973c-67502b415e58"
+SANDBOX_SITE_NAME="abr-ci-sandbox"
 SITE_STATE="$GITHUB_WORKSPACE/.factory/wix-dev-site.json"
 mkdir -p "$ROOT"
 PKG="$ROOT/pkg"
@@ -126,9 +128,77 @@ NODE
 rm -f "$PRODUCT/package-lock.json"
 (cd "$PRODUCT" && npm install --package-lock-only --ignore-scripts --no-audit --no-fund)
 
-# Wix CLI 1.1.228+ explicitly supports dev-site provisioning in CI/agent
-# sessions. Keep the selected dev site ID in factory state (not product code)
-# so we do not create a fresh site on every retry.
+parse_site_id_from_list(){
+  local file="$1"
+  OUT="$file" node <<'NODE'
+const fs=require('fs');
+const uuid=/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+let preferred=[], fallback=[];
+const walk=(v)=>{
+  if (!v || typeof v!=='object') return;
+  if (Array.isArray(v)) return v.forEach(walk);
+  for (const [k,x] of Object.entries(v)) {
+    if (typeof x==='string' && uuid.test(x)) {
+      if (/site.?id/i.test(k)) preferred.push(x); else if (/^id$/i.test(k)) fallback.push(x);
+    }
+    walk(x);
+  }
+};
+for (const line of fs.readFileSync(process.env.OUT,'utf8').split(/\r?\n/).filter(Boolean)) { try { walk(JSON.parse(line)); } catch {} }
+process.stdout.write(preferred[0] || fallback[0] || '');
+NODE
+}
+
+find_regular_sandbox(){
+  local out="$ROOT/dev-site-list.jsonl" err="$ROOT/dev-site-list.err" rc found
+  set +e
+  (cd "$PRODUCT" && timeout 120s npx -y "@wix/cli@${WIX_CLI_VERSION}" dev-site list --search "$SANDBOX_SITE_NAME") >"$out" 2>"$err"
+  rc=$?
+  set -e
+  (( rc == 0 )) || return 1
+  found="$(parse_site_id_from_list "$out")"
+  [[ -n "$found" ]] || return 1
+  site_id="$found"
+  : >"$out"; : >"$err"
+  return 0
+}
+
+create_regular_bookings_sandbox(){
+  local response="$ROOT/regular-site-create.json" code body meta rc
+  if find_regular_sandbox; then
+    echo "::notice::Reusing existing Wix sandbox site $SANDBOX_SITE_NAME."
+    return 0
+  fi
+  body="$(jq -nc --arg template "$BOOKINGS_SITE_TEMPLATE_ID" --arg name "$SANDBOX_SITE_NAME" '{originTemplateId:$template,siteName:$name}')"
+  set +e
+  code="$(curl -sS -o "$response" -w '%{http_code}' -X POST 'https://www.wixapis.com/msm/v1/meta-site/create-from-template' \
+    -H "Authorization: $WIX_API_KEY" -H 'Content-Type: application/json' --data "$body")"
+  rc=$?
+  set -e
+  if (( rc != 0 )) || [[ ! "$code" =~ ^2 ]]; then
+    {
+      echo "Regular Wix sandbox creation failed."
+      echo "HTTP: $code"
+      redact <"$response" | tail -n100
+    } >"$GITHUB_WORKSPACE/.factory/evidence/run_${GITHUB_RUN_ID}_wix_site_creation_failure.txt"
+    : >"$response"
+    return 1
+  fi
+  meta="$(jq -r '.metaSiteId // .meta_site_id // .site.metaSiteId // empty' "$response" 2>/dev/null || true)"
+  : >"$response"
+  for _ in 1 2 3 4 5 6; do
+    sleep 5
+    if find_regular_sandbox; then return 0; fi
+  done
+  {
+    echo "Wix regular sandbox was created but CLI could not resolve its site ID."
+    echo "metaSiteId=${meta:-unknown}"
+    echo "siteName=$SANDBOX_SITE_NAME"
+  } >"$GITHUB_WORKSPACE/.factory/evidence/run_${GITHUB_RUN_ID}_wix_site_creation_failure.txt"
+  return 1
+}
+
+# Keep a selected test-site ID in factory state so retries reuse one sandbox.
 site_id=""
 if [[ -f "$SITE_STATE" ]] && jq -e --arg app "$EXPECTED_WIX_APP_ID" '.appId==$app and (.siteId|type=="string" and length>0)' "$SITE_STATE" >/dev/null 2>&1; then
   site_id="$(jq -r .siteId "$SITE_STATE")"
@@ -139,32 +209,22 @@ if [[ -z "$site_id" ]]; then
   (cd "$PRODUCT" && timeout 240s npx -y "@wix/cli@${WIX_CLI_VERSION}" dev-site create --template dev) >"$ROOT/dev-site-create.jsonl" 2>"$ROOT/dev-site-create.err"
   dev_create_rc=$?
   set -e
-  if (( dev_create_rc != 0 )); then
-    echo "::error::Wix could not create a development site non-interactively." >&2
-    redact <"$ROOT/dev-site-create.err" | tail -n120 >&2
-    exit 42
+  if (( dev_create_rc == 0 )); then
+    site_id="$(parse_site_id_from_list "$ROOT/dev-site-create.jsonl")"
+  else
+    # `dev-site create` currently rejects API-key auth because the internal
+    # Development Sites endpoint requires a Wix User ID. Wix's own current
+    # management skill documents this account-level API fallback for regular
+    # Wix sites. A normal site is valid here because `dev-site list/select`
+    # explicitly supports all sites in the account, not just Development Sites.
+    echo "::warning::Special Development Site creation unavailable to API-key auth; trying official regular Wix Bookings sandbox creation."
+    if ! create_regular_bookings_sandbox; then
+      redact <"$ROOT/dev-site-create.err" | tail -n120 >&2
+      exit 42
+    fi
   fi
-  site_id="$(OUT="$ROOT/dev-site-create.jsonl" EXPECTED="$EXPECTED_WIX_APP_ID" node <<'NODE'
-const fs=require('fs');
-const expected=process.env.EXPECTED;
-const uuid=/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-let preferred=[], fallback=[];
-const walk=(v)=>{
-  if (!v || typeof v!=='object') return;
-  if (Array.isArray(v)) return v.forEach(walk);
-  for (const [k,x] of Object.entries(v)) {
-    if (typeof x==='string' && uuid.test(x) && x!==expected) {
-      if (/site.?id|metasite/i.test(k)) preferred.push(x); else if (/^id$/i.test(k)) fallback.push(x);
-    }
-    walk(x);
-  }
-};
-for (const line of fs.readFileSync(process.env.OUT,'utf8').split(/\r?\n/).filter(Boolean)) { try { walk(JSON.parse(line)); } catch {} }
-process.stdout.write(preferred[0] || fallback[0] || '');
-NODE
-)"
   if [[ -z "$site_id" ]]; then
-    echo "::error::Wix created a dev-site command result but no site ID could be resolved." >&2
+    echo "::error::Wix site creation completed but no site ID could be resolved." >&2
     redact <"$ROOT/dev-site-create.jsonl" | tail -n80 >&2
     exit 42
   fi
@@ -181,7 +241,6 @@ install_app(){
   set -e
   if (( curl_rc == 0 )) && [[ "$code" =~ ^2 ]]; then : >"$response"; return 0; fi
   if grep -Eqi 'already[^" ]*.*install|ALREADY_EXISTS|already exists' "$response" 2>/dev/null; then : >"$response"; return 0; fi
-  # Newer installer deployments may require the explicit install-type envelope.
   body="$(jq -nc --arg site "$site_id" --arg app "$app_id" '{tenant:{tenantType:"SITE",id:$site},appInstance:{appDefId:$app,enabled:true},installType:"INSTALL_TYPE_SITE",appsInstallOptions:{}}')"
   set +e
   code="$(curl -sS -o "$response" -w '%{http_code}' -X POST 'https://www.wixapis.com/apps-installer-service/v1/app-instance/install' \
@@ -199,33 +258,27 @@ install_app(){
   return 1
 }
 
-# The app is a Bookings integration. Install the real Wix Bookings business
-# solution and this exact custom app on the disposable development site.
 install_app "$BOOKINGS_APP_ID" bookings || exit 42
 install_app "$EXPECTED_WIX_APP_ID" product || exit 42
 
-# Now selection is non-interactive because the app is already installed.
 set +e
 (cd "$PRODUCT" && timeout 120s npx -y "@wix/cli@${WIX_CLI_VERSION}" dev-site select "$site_id") >"$ROOT/dev-site-select.log" 2>&1
 select_rc=$?
 set -e
 if (( select_rc != 0 )); then
-  echo "::error::Dev site exists and apps were installed, but Wix CLI could not select it." >&2
+  echo "::error::Test site exists and apps were installed, but Wix CLI could not select it." >&2
   redact <"$ROOT/dev-site-select.log" | tail -n120 >&2
   exit 42
 fi
 : >"$ROOT/dev-site-select.log"
 
-# WIX_SITE_ID is explicitly supported by Wix for non-interactive/CI runs and
-# is intentionally local-only. env pull must supply WIX_CLIENT_*; never invent
-# or persist those values in git.
 printf 'WIX_SITE_ID=%s\n' "$site_id" >"$PRODUCT/.env.local"
 set +e
 (cd "$PRODUCT" && timeout 120s npx -y "@wix/cli@${WIX_CLI_VERSION}" env pull) >"$ROOT/env-pull.log" 2>&1
 env_rc=$?
 set -e
 if (( env_rc != 0 )) || ! grep -Eq '^WIX_CLIENT_ID=.+$' "$PRODUCT/.env.local"; then
-  echo "::error::Wix development site exists but env pull did not provide WIX_CLIENT_ID." >&2
+  echo "::error::Wix test site exists but env pull did not provide WIX_CLIENT_ID." >&2
   redact <"$ROOT/env-pull.log" | tail -n120 >&2
   exit 42
 fi

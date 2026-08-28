@@ -43,13 +43,15 @@ jobs:
           ruby -e 'require "yaml"; Dir[".github/workflows/*.{yml,yaml}"].each { |f| YAML.load_file(f); puts "valid yaml: #{f}" }'
           test "$(find .github/workflows -maxdepth 1 -type f | wc -l)" -eq 2
           test ! -f .github/workflows/wix-watchdog.yml
-          for f in wix-factory-cycle.sh probe-model.sh select-models.sh housekeeping.sh; do
+          for f in wix-factory-cycle.sh wix-official-scaffold.sh probe-model.sh select-models.sh housekeeping.sh; do
             bash -n ".github/scripts/$f"
           done
-          test "$(find .github/scripts -maxdepth 1 -type f | wc -l)" -eq 4
+          test "$(find .github/scripts -maxdepth 1 -type f | wc -l)" -eq 5
           jq -e '.architecture=="lane-machine/1" and .generation>=1 and .accepted_base and .phase' .factory/state.json >/dev/null
           grep -Fq "cron: '*/5 * * * *'" .github/workflows/wix-build-loop.yml
           grep -Fq 'x-preview-f-free' .github/workflows/wix-build-loop.yml
+          grep -Fq 'OFFICIAL_WIX_SCAFFOLD_REBASE_REQUIRED' .github/scripts/wix-factory-cycle.sh
+          grep -Fq -- '--extend-app-id "$EXPECTED_WIX_APP_ID"' .github/scripts/wix-official-scaffold.sh
           grep -Fq 'schemaVersion:2' .github/scripts/select-models.sh
           grep -Fq 'responsiveThresholdSeconds:30' .github/scripts/select-models.sh
           grep -Fq 'force-cancel' .github/scripts/housekeeping.sh

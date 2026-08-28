@@ -5,7 +5,7 @@
   "lane": "integration",
   "accepted_base": "ec916b75d5600e02d679d264648ac92333d721f1",
   "candidate": null,
-  "repair_feedback": "Deterministic checks failed; repair the same lane.",
+  "repair_feedback": "OFFICIAL_WIX_SCAFFOLD_REBASE_REQUIRED: the authenticated bootstrap proved that the exact existing Wix app scaffold builds, but only wix.config.json was persisted. Regenerate that exact official scaffold for App ID 3e9ec3af-001b-4684-a197-a5133677844d, preserve Wix-generated projectId/projectType/dependency versions, merge the existing product into it, then require deterministic product checks plus a real Wix build before candidate creation.",
   "lease": null,
   "last_run": 33134078217,
   "last_transition": {

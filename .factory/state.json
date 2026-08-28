@@ -1,20 +1,19 @@
 {
   "architecture": "lane-machine/1",
-  "generation": 9,
-  "phase": "BUILD",
+  "generation": 10,
+  "phase": "AUDIT",
   "lane": "integration",
   "accepted_base": "ec916b75d5600e02d679d264648ac92333d721f1",
-  "candidate": null,
-  "repair_feedback": "OFFICIAL_WIX_SCAFFOLD_REBASE_REQUIRED: real Wix CLI build failed on the deliverable; regenerate official scaffold and reconcile product wiring without hand-editing Wix identifiers.",
-  "lease": null,
-  "last_run": 33203095552,
-  "last_transition": {
-    "reason": "wix_build_failed",
-    "run_id": 33183728932
+  "candidate": {
+    "sha": "541ae5917511c9b5c83e9d21191642a10bd4ef19",
+    "tag": "refs/tags/factory-candidate/integration/9"
   },
-  "last_operational_failure": {
-    "phase": "BUILD",
-    "reason": "official_wix_scaffold_failed",
-    "run_id": 33203095552
-  }
+  "repair_feedback": null,
+  "lease": null,
+  "last_run": 33203642183,
+  "last_transition": {
+    "reason": "candidate_created",
+    "run_id": 33203642183
+  },
+  "last_operational_failure": null
 }

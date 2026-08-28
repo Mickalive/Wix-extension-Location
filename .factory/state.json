@@ -7,10 +7,14 @@
   "candidate": null,
   "repair_feedback": "OFFICIAL_WIX_SCAFFOLD_REBASE_REQUIRED: real Wix CLI build failed on the deliverable; regenerate official scaffold and reconcile product wiring without hand-editing Wix identifiers.",
   "lease": null,
-  "last_run": 33183728932,
+  "last_run": 33203095552,
   "last_transition": {
     "reason": "wix_build_failed",
     "run_id": 33183728932
   },
-  "last_operational_failure": null
+  "last_operational_failure": {
+    "phase": "BUILD",
+    "reason": "official_wix_scaffold_failed",
+    "run_id": 33203095552
+  }
 }

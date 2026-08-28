@@ -9,9 +9,9 @@
     "lane": "integration",
     "role": "wix-integration-builder",
     "builderChain": "opencode/mimo-v2.5-free opencode/nemotron-3-ultra-free opencode/hy3-free opencode/big-pickle opencode/muse-spark-1.2-contributor-free",
-    "reviewChain": "opencode/mimo-v2.5-free opencode/nemotron-3-ultra-free opencode/hy3-free opencode/muse-spark-1.2-contributor-free opencode/big-pickle",
+    "reviewChain": "opencode/nemotron-3-ultra-free opencode/hy3-free opencode/muse-spark-1.2-contributor-free opencode/big-pickle opencode/mimo-v2.5-free",
     "builderPrimary": "opencode/mimo-v2.5-free",
-    "reviewPrimary": "opencode/mimo-v2.5-free"
+    "reviewPrimary": "opencode/nemotron-3-ultra-free"
   },
   "probes": [
     {
@@ -20,7 +20,7 @@
       "healthy": true,
       "reason": "ok",
       "exitStatus": 0,
-      "elapsedSeconds": 6,
+      "elapsedSeconds": 7,
       "proof": "headless bash tool-call nonce round-trip"
     },
     {
@@ -38,7 +38,7 @@
       "healthy": true,
       "reason": "ok",
       "exitStatus": 0,
-      "elapsedSeconds": 8,
+      "elapsedSeconds": 9,
       "proof": "headless bash tool-call nonce round-trip"
     },
     {
@@ -47,7 +47,7 @@
       "healthy": false,
       "reason": "provider-error",
       "exitStatus": 1,
-      "elapsedSeconds": 2,
+      "elapsedSeconds": 3,
       "proof": "headless bash tool-call nonce round-trip"
     },
     {
@@ -74,7 +74,7 @@
       "healthy": true,
       "reason": "ok",
       "exitStatus": 0,
-      "elapsedSeconds": 10,
+      "elapsedSeconds": 9,
       "proof": "headless bash tool-call nonce round-trip"
     },
     {
@@ -83,7 +83,7 @@
       "healthy": true,
       "reason": "ok",
       "exitStatus": 0,
-      "elapsedSeconds": 7,
+      "elapsedSeconds": 8,
       "proof": "headless bash tool-call nonce round-trip"
     },
     {
@@ -92,16 +92,16 @@
       "healthy": true,
       "reason": "ok",
       "exitStatus": 0,
-      "elapsedSeconds": 9,
+      "elapsedSeconds": 14,
       "proof": "headless bash tool-call nonce round-trip"
     },
     {
       "schemaVersion": 1,
       "model": "nemotron-3.5-lightning-free",
       "healthy": false,
-      "reason": "provider-error",
-      "exitStatus": 1,
-      "elapsedSeconds": 74,
+      "reason": "timeout",
+      "exitStatus": 124,
+      "elapsedSeconds": 90,
       "proof": "headless bash tool-call nonce round-trip"
     },
     {

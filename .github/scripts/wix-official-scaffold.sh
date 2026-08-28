@@ -232,7 +232,10 @@ if [[ -z "$site_id" ]]; then
 fi
 
 install_app(){
-  local app_id="$1" label="$2" response="$ROOT/install-${label}.json" code body
+  local app_id="$1"
+  local label="$2"
+  local response="$ROOT/install-${label}.json"
+  local code body curl_rc
   body="$(jq -nc --arg site "$site_id" --arg app "$app_id" '{tenant:{tenantType:"SITE",id:$site},appInstance:{appDefId:$app,enabled:true}}')"
   set +e
   code="$(curl -sS -o "$response" -w '%{http_code}' -X POST 'https://www.wixapis.com/apps-installer-service/v1/app-instance/install' \

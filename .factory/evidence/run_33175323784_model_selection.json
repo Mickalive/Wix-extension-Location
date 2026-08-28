@@ -20,7 +20,7 @@
       "healthy": true,
       "reason": "ok",
       "exitStatus": 0,
-      "elapsedSeconds": 6,
+      "elapsedSeconds": 21,
       "proof": "headless bash tool-call nonce round-trip"
     },
     {
@@ -47,7 +47,7 @@
       "healthy": false,
       "reason": "provider-error",
       "exitStatus": 1,
-      "elapsedSeconds": 3,
+      "elapsedSeconds": 2,
       "proof": "headless bash tool-call nonce round-trip"
     },
     {
@@ -65,7 +65,7 @@
       "healthy": false,
       "reason": "provider-error",
       "exitStatus": 1,
-      "elapsedSeconds": 3,
+      "elapsedSeconds": 2,
       "proof": "headless bash tool-call nonce round-trip"
     },
     {
@@ -74,7 +74,7 @@
       "healthy": true,
       "reason": "ok",
       "exitStatus": 0,
-      "elapsedSeconds": 13,
+      "elapsedSeconds": 11,
       "proof": "headless bash tool-call nonce round-trip"
     },
     {
@@ -83,7 +83,7 @@
       "healthy": true,
       "reason": "ok",
       "exitStatus": 0,
-      "elapsedSeconds": 4,
+      "elapsedSeconds": 6,
       "proof": "headless bash tool-call nonce round-trip"
     },
     {
@@ -110,7 +110,7 @@
       "healthy": false,
       "reason": "provider-error",
       "exitStatus": 1,
-      "elapsedSeconds": 2,
+      "elapsedSeconds": 3,
       "proof": "headless bash tool-call nonce round-trip"
     },
     {

@@ -2,16 +2,16 @@
   "schemaVersion": 2,
   "policy": "live headless tool-call health -> responsive tier -> task-specific capability order; OX/x-preview first when healthy; independent audit primary preferred; upstream models retained only as fallback",
   "responsiveThresholdSeconds": 30,
-  "healthyCount": 5,
-  "responsiveCount": 5,
+  "healthyCount": 4,
+  "responsiveCount": 4,
   "current": {
     "phase": "BUILD",
     "lane": "integration",
     "role": "wix-integration-builder",
-    "builderChain": "opencode/mimo-v2.5-free opencode/nemotron-3-ultra-free opencode/hy3-free opencode/big-pickle opencode/muse-spark-1.2-contributor-free",
-    "reviewChain": "opencode/nemotron-3-ultra-free opencode/hy3-free opencode/muse-spark-1.2-contributor-free opencode/big-pickle opencode/mimo-v2.5-free",
+    "builderChain": "opencode/mimo-v2.5-free opencode/hy3-free opencode/big-pickle opencode/muse-spark-1.2-contributor-free",
+    "reviewChain": "opencode/mimo-v2.5-free opencode/hy3-free opencode/muse-spark-1.2-contributor-free opencode/big-pickle",
     "builderPrimary": "opencode/mimo-v2.5-free",
-    "reviewPrimary": "opencode/nemotron-3-ultra-free"
+    "reviewPrimary": "opencode/mimo-v2.5-free"
   },
   "probes": [
     {
@@ -20,7 +20,7 @@
       "healthy": true,
       "reason": "ok",
       "exitStatus": 0,
-      "elapsedSeconds": 7,
+      "elapsedSeconds": 6,
       "proof": "headless bash tool-call nonce round-trip"
     },
     {
@@ -38,7 +38,7 @@
       "healthy": true,
       "reason": "ok",
       "exitStatus": 0,
-      "elapsedSeconds": 9,
+      "elapsedSeconds": 8,
       "proof": "headless bash tool-call nonce round-trip"
     },
     {
@@ -74,7 +74,7 @@
       "healthy": true,
       "reason": "ok",
       "exitStatus": 0,
-      "elapsedSeconds": 9,
+      "elapsedSeconds": 13,
       "proof": "headless bash tool-call nonce round-trip"
     },
     {
@@ -83,16 +83,16 @@
       "healthy": true,
       "reason": "ok",
       "exitStatus": 0,
-      "elapsedSeconds": 8,
+      "elapsedSeconds": 4,
       "proof": "headless bash tool-call nonce round-trip"
     },
     {
       "schemaVersion": 1,
       "model": "nemotron-3-ultra-free",
-      "healthy": true,
-      "reason": "ok",
-      "exitStatus": 0,
-      "elapsedSeconds": 14,
+      "healthy": false,
+      "reason": "timeout",
+      "exitStatus": 124,
+      "elapsedSeconds": 90,
       "proof": "headless bash tool-call nonce round-trip"
     },
     {

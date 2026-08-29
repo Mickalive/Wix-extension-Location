@@ -1,5 +1,4 @@
 name: Wix Product Factory
-# Manual wake marker: 2026-08-28T21:13+02:00 — no behavioral change.
 
 'on':
   workflow_dispatch: {}
@@ -8,6 +7,7 @@ name: Wix Product Factory
   push:
     branches: ["main"]
     paths:
+      - ".factory/state.json"
       - ".github/workflows/wix-build-loop.yml"
       - ".github/scripts/**"
       - ".github/actions/setup-opencode/**"

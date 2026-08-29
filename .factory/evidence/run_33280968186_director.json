@@ -1,0 +1,5 @@
+{
+  "lane": "rules",
+  "task": "Remove the LOCATION_NOT_COVERED hard-block from evaluateRules stage 1 and align with Integration skip posture per Contract §7",
+  "reason": "The cross-system integrated audit at SHA ec916b75d5600e02d679d264648ac92333d721f1 identified a binding cross-lane contract break: Rules domain blocks bookings for plan-uncovered locations while Integration lane correctly skips (allows) per Technical Contract §7. The Rules lane must remove the LOCATION_NOT_COVERED block (or convert it to a non-blocking informational notice) and update the four test files that enforce the block (evaluate.spec.ts:313, targetAware.spec.ts:249/249/565, matrixProperties.spec.ts:240/242). No Integration, Dashboard, or Billing change is required. This is the sole blocking defect; all other cross-lane seams are verified coherent."
+}

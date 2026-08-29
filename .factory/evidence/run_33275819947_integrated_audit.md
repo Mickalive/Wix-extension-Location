@@ -1,0 +1,100 @@
+# Cross-System Integrated Audit — SHA `ec916b75d5600e02d679d264648ac92333d721f1`
+
+**Auditor:** Fresh independent cross-system reviewer (distinct from all builders and lane auditors).
+**Scope:** Integration ↔ Rules ↔ Dashboard ↔ Billing contracts, booking enforcement, failure/rollback behavior, entitlements, accessibility-sensitive behavior, and real Wix scaffold assumptions.
+**Method:** Direct source inspection of the candidate tree at the named SHA (working tree = candidate). No code was modified.
+
+---
+
+## 1. Verdict summary
+
+The integrated tree is internally coherent on most cross-lane seams (pinned meter DTO, mutation-status/recover envelopes, failure-semantics taxonomy, idempotency/rollback, fail-open entitlements, accessibility roles). **However, one binding cross-lane contract is broken and is test-enforced on both sides with opposite expectations.** The Rules domain encodes a booking **BLOCK** for plan-uncovered locations, while the Integration enforcement layer **skips** (allows via native Wix) for the identical scenario. The binding Technical Contract §7 mandates "restrict rule management/enforcement coverage to the plan allowance" — i.e. the Integration skip posture — so the Rules domain's block contradicts both the Integration lane and the contract.
+
+**VERDICT: FIX** (repair owned by the Rules lane; Integration skip posture is correct and must be retained).
+
+---
+
+## 2. Cross-lane contracts that ARE coherent (verified)
+
+- **Entitlement meter DTO** — Dashboard `bridge.getEntitlementMeter()` validates `{ meter:{count,degraded}, coverage:{allowedLocationIds,overLimit,degraded,warning} }` (`src/ui/services/bridge.js` `isEntitlementMeterDto`). Platform `getEntitlementMeter` (`src/platform/http/meterEndpoint.ts`) returns exactly that pinned shape, composed from `gate.meter()` + `gate.allowedLocationIds()`. Match confirmed.
+- **Mutation-status / recover envelopes** — Bridge `requestEnvelope(..., 'status'|'recovery')` matches platform `getMutationStatus` (`{status:...}`) and `postRecover` (`{recovery:...}`). Match confirmed.
+- **Apply-plan** — Bridge sends `{ops, confirmedDiffHash}`; platform `postApplyPlan` returns `{summary, requestedBy}`; dashboard reads `response?.summary?.planId`. Extra `requestedBy` is tolerated. Match confirmed.
+- **Failure semantics** — `failureSemanticsFor` (CREATE/CANCEL = FAIL_CLOSED, RESCHEDULE = FAIL_OPEN) is shared verbatim by domain `TargetOperation` and the validation-plugin handler matrix. Match confirmed.
+- **Schedule-mutation rollback/recovery** — `ScheduleMutationOrchestrator` implements snapshot→diff→idempotent apply→verify→rollback→audit with terminal-state hardening and crash recovery (`recoverInterruptedApply`). Idempotency keys are deterministic UUIDv5. Coherent and well-guarded.
+- **Entitlements fail-open** — `createEntitlementGate` fails open on billing/listing/count failures; downgrade preserves configuration (`selectManagedLocations` returns `unmanagedLocationIds`, never deletes). Matches `directives/BILLING.md` and Contract §7.
+- **Accessibility-sensitive behavior** — Diff modal uses `role="dialog"`, `aria-modal`, `aria-labelledby/describedby`, focus moves in on open and is restored on close, Escape cancels (never confirms), confirm is double-guarded. Dashboard pages use `role="status"`/`role="alert"`, native controls, `aria-label`s. Purity gate `tests/ui/noWixImports.test.js` confirms only `bridge.js` references `@wix/*`.
+- **Real Wix scaffold assumptions** — `wix.config.json` carries `appId 3e9ec3af-001b-4684-a197-a5133677844d`, which `reports/wix-live/BOOTSTRAP_BINDING.md` confirms is a real, human-bound existing app ("Advanced Booking Rules"), not fabricated. `classifyProjectBinding` would mark it LINKED. The real `bookingsValidation.provideHandlers()` adapter is honestly deferred to gate T-VP0 (Contract classifies the plugin STABLE_PRODUCTION with mandatory dev-site gates). No fabricated identifiers found.
+
+---
+
+## 3. PRIMARY DEFECT — contradictory entitlement-coverage posture (cross-lane contract break)
+
+### 3.1 The two lanes disagree on the same scenario
+
+**Scenario:** non-degraded entitlement decision + an OWNER_BUSINESS booking whose `locationId` is **outside** `allowedLocationIds` (plan-uncovered / over-limit location).
+
+**Rules lane (domain) — BLOCKS:**
+`src/domain/evaluate.ts` stage 1 (lines 178–192):
+```ts
+} else if (
+  facts.locationId !== null && facts.locationId !== undefined &&
+  !deps.entitlement.allowedLocationIds.includes(facts.locationId)
+) {
+  explanations.push(explanation('block', ENGINE_RULE_IDS.entitlement,
+    OUTCOME_CODES.locationNotCovered,
+    'Online booking is not available for this location.'));
+}
+```
+Test-enforced to BLOCK: `tests/domain/evaluate.spec.ts:313` (`block/uncovered-location`, `entitlement: healthyEntitlement(['loc-other'])`); also `tests/domain/targets/targetAware.spec.ts:249,259,565` and `tests/domain/targets/matrixProperties.spec.ts:240,242`.
+
+**Integration lane (enforcement) — SKIPS (allows):**
+`src/platform/validation-plugin/handlers.ts` `executeRequest` (lines 646–663) pre-filters uncovered locations and returns an explicit **valid** result without ever calling `evaluateRules`:
+```ts
+if (!entitlement.degraded && locationId !== null &&
+    !entitlement.allowedLocationIds.includes(locationId)) {
+  results[item.index] = { ..., valid: true, outcome: null,
+    disposition: 'UNCOVERED_LOCATION_RULES_SKIPPED', invalidReason: null };
+  continue;
+}
+```
+Test-enforced to SKIP: `tests/platform/validation-plugin-entitlement.spec.ts:40-52` (`valid: true`, `UNCOVERED_LOCATION_RULES_SKIPPED`, `outcome: null`, zero gateway reads); also `:66-72` (over-limit still skips) and `tests/platform/validation-plugin-bulk.spec.ts:30,32`.
+
+### 3.2 Why this is a contract break, not a harmless dead branch
+
+- The Integration pre-filter makes the domain's `LOCATION_NOT_COVERED` branch **unreachable in the enforcement path**, so today's integrated runtime happens to behave per §7 (allow via native Wix). But the two lanes are still **contracted to opposite outcomes** for the same input, and both assertions are locked by tests.
+- The binding **Technical Contract §7** (`docs/WIX_TECHNICAL_CONTRACT.md:112`) states: *"restrict rule management/enforcement coverage to the plan allowance … never delete user data; show upgrade CTA."* "Restrict coverage" = do not enforce at uncovered locations (skip/allow), **not** hard-block booking. The Integration lane implements §7 correctly; the **Rules domain contradicts §7**.
+- The domain's customer-facing message *"Online booking is not available for this location"* is therefore wrong under the product's ratified posture.
+- **Latent regression risk:** if the Integration pre-filter is ever simplified/removed (e.g. "let the domain own entitlement"), behavior silently flips from allow → block for every over-limit location — a severe, hard-to-detect regression. The contradiction is a maintenance landmine precisely because the domain is presented as the "single source of truth" while being overridden.
+
+### 3.3 Required fix (Rules lane)
+
+Remove the `LOCATION_NOT_COVERED` block from `evaluateRules` stage 1 (or convert it to a non-blocking informational notice). The Integration skip posture is the contract-correct one and must be retained. Update the Rules-lane tests that assert the block (`evaluate.spec.ts:313`, `targetAware.spec.ts:249/565`, `matrixProperties.spec.ts:240/242`) to reflect the corrected "restrict coverage" posture. No Integration, Dashboard, or Billing change is required for this defect.
+
+---
+
+## 4. Secondary observations (not blocking, but noted)
+
+- **Billable-count floor vs coverage allowance display divergence.** `countBillableLocations` (`src/billing/counter/countBillableLocations.ts:79`) floors a computed 0 → 1 for billing, while `selectManagedLocations` returns `allowedLocationIds` with no floor. On a FREE plan with zero live billable locations the dashboard would render `meter.count = 1` ("1 location is counted") alongside `coverage.allowedLocationIds.length = 0` ("Your plan manages up to 0 locations"). The two numbers are conceptually different (billing floor vs managed allowance) but their co-display can read as contradictory. Recommend the dashboard reconcile the floor narrative or the billing lane expose the unfloored computed count alongside the floored billing count. Not a contract break, but a coherence gap worth closing.
+- **`subjectBookingId` / identity seams** are correctly defaulted to unavailable (gated behind T-VP3/T-VP5) and never fabricated — consistent with Invariant C1 and the constitution.
+
+---
+
+## 5. Failure / rollback behavior (verified coherent)
+
+- Orchestrator enforces snapshot-before-write, idempotent apply (UUIDv5), bounded revision-retry, verify-then-complete, and rollback-on-failure with exactly one audit entry per run. Terminal-state hardening rejects re-verify/re-rollback/re-audit. Crash recovery restores the exact pre-apply snapshot and verifies at window granularity. This satisfies the rollback/recovery contract.
+- Validation-plugin target-semantics guard converts any internal error/deadline into explicit per-item results (FAIL_CLOSED block-with-retry for CREATE/CANCEL, FAIL_OPEN not-enforced for RESCHEDULE) with persisted degradations — never silent, never thrown into the booking decision.
+
+---
+
+## 6. Entitlements (verified coherent)
+
+- `resolveEntitlement` fails safe (unknown paid id → TIER_1 + persistent `UNKNOWN_PLAN_IDENTIFIER` warning; missing/empty `vendorProductId` → FREE). `billingExpirationDate` is intentionally advisory-only. Clone markers do not change resolution.
+- `createEntitlementGate` fails open on every infrastructure failure (explicit `null` tier sentinel, per-source warning liveness, recovery on healthy re-call). Downgrade/over-limit preserves configuration. Matches Contract §7 and `directives/BILLING.md`.
+
+---
+
+## 7. Recommendation
+
+Adopt the preview **only after** the Rules lane removes the contradictory `LOCATION_NOT_COVERED` block (defect §3) and aligns its tests with the Integration skip posture and Contract §7. All other cross-lane seams reviewed are coherent and integrable. The secondary floor/display coherence gap (§4) should be tracked but does not block adoption once §3 is fixed.
+
+VERDICT: FIX

@@ -1,0 +1,65 @@
+# Factory Integrated Audit — exact SHA 3e53f9d5a13acf335aa53a932c64605a059ea163
+
+- **Auditor:** fresh independent cross-system auditor (distinct from all builders and lane auditors). Read-only except this report; nothing fixed, no Wix credentials accessed, no governance touched.
+- **Subject:** exact commit `3e53f9d5a13acf335aa53a932c64605a059ea163` — `candidate(integration): generation 62` (INT-C7-REPAIR).
+- **Candidate diff:** 2 files, +39/−11 — `src/platform/registration/README.md`, `src/platform/registration/scaffoldPrerequisites.ts`. No other product file changed by the candidate.
+- **Binding authorities:** `MAIN_PROMPT.md`, `AGENTS.md`, `docs/WIX_TECHNICAL_CONTRACT.md`, `docs/BUILD_BLUEPRINT.md`, `docs/NEXT_CYCLE.json` (task INT-C7-LIVE), `docs/runbooks/T_VP0_SCAFFOLD.md`, `directives/INTEGRATION.md`.
+- **Working-tree note:** the audit sandbox carries uncommitted governance-file edits (`.opencode/**`, `AGENTS.md`) and untracked agent fiches. These are environment setup, not part of the candidate SHA; the candidate commit itself touches only the two registration files above.
+
+---
+
+## 1. Deterministic checks (executed by this auditor on the exact SHA)
+
+| Check | Result |
+|---|---|
+| `npm run check` (strict `tsc --noEmit` + purity gate + vitest) | **exit 0 — 548/548 tests in 49 files**; purity gate green over all seven protected roots incl. `src/platform/registration` |
+| `npm test` in `tests/ui` (dashboard lane, node built-in runner) | **210/210 pass** (accessibility, keyboard operability, live regions, dialog semantics, entitlement restriction, recovery guidance, poller safety all green) |
+| `npm run build` | equals `check`; green |
+
+The `PURITY GATE FAILED` lines inside the vitest output are the asserted negative-control fixture of `purity-gate.spec.ts` (expected, test passes). No test was weakened, skipped, or deleted by this candidate; the candidate is documentation-only, so the executable surface is byte-unchanged from the accepted base.
+
+## 2. Cross-lane contract verification (integration / rules / dashboard / billing)
+
+- **Booking enforcement (integration ↔ rules):** `src/platform/validation-plugin/handlers.ts` consumes the pure `evaluateRules` domain with pre-resolved deps; CREATE/CANCEL fail closed with block-with-retry-hint, RESCHEDULE fails open forever with `FAIL_OPEN_NOT_ENFORCED` (Contract §5.3); every bulk index gets an explicit result; entitlement failures never block bookings (Contract §7/C5); counter-gateway failures degrade caps visibly. Domain `evaluate.ts` is deterministic, target-aware (CREATE/CANCEL/RESCHEDULE via `EvaluationTargetContext`), and pinned by 548 green tests. **Contract intact.**
+- **Rollback/recovery (integration):** `schedule-mutation/orchestrator.ts` implements snapshot → journal baseline → idempotent UUIDv5 writes → revision-checked retries → verify → rollback → audit, with terminal-state guards and crash recovery (`recoverInterruptedApply`). No mutation path was touched by this candidate. **Contract intact.**
+- **Entitlements (billing):** `entitlementGate.ts` fail-open posture, per-source warning liveness, `FAIL_OPEN_RESOLUTION` with explicit `tier: null`; `tiers.ts` four paid tiers differing only by `maxLocations`; downgrade-through-gate tests green. **Contract intact.**
+- **Dashboard:** bridge/editor/meter parity suites green (210 UI tests); no Wix imports outside the single services bridge; accessibility-sensitive behavior (accessible names, keyboard activation, `role=alert`/`role=status`, dialog focus management) proven by tests. **Contract intact.**
+- **Composition:** `src/platform/composition/**` unchanged; meter endpoint and editor restriction consume the same `allowedLocationIds()` decision. **Contract intact.**
+
+None of the candidate's two files is imported by any other lane; the changes are documentation/string-only, so no DTO, port, or semantic drift is possible from this candidate.
+
+## 3. Real Wix scaffold assumptions — the core of this audit
+
+The candidate's entire purpose is to document the state of `wix.config.json` in the committed tree. I verified every factual claim in the candidate against the repository itself.
+
+**Verified true:**
+- `wix.config.json` **is** tracked at this SHA with non-placeholder values: `appId: 3e9ec3af-001b-4684-a197-a5133677844d`, `projectId: advanced-booking-rules`, `projectType: App` (`git show HEAD:wix.config.json`).
+- The `.gitignore` rule `^wix\.config\.json$` exists and the file is nonetheless tracked.
+- The classifier in `projectConfig.ts` would classify the current file as `LINKED` (non-placeholder `appId`), and `LINKED` proves only non-placeholder shape, not genuineness.
+- The three Wix product gates (`real_wix_scaffold_registration`, `empirical_wix_validation`, `real_wix_build_release`) are `OPEN` in `docs/PRODUCT_GATES.json`.
+
+**Verified false / contradicted by the repository's own persisted evidence:**
+
+1. **"the `.gitignore` rule was added after the file was already tracked" (README §1) — FALSE.** The rule predates the file: `.gitignore` at `468618fa~1` (the commit immediately before the binding was persisted) already contains the `wix.config.json` rule with its rationale comment. The file was added later, at commit `468618fa` ("wix: persist verified existing-app binding", author `wix-binding-bootstrap`), i.e. deliberately persisted by the trusted workflow shell despite the rule — not an accidental pre-rule commit.
+
+2. **"the file's origin has not been independently verified by a Wix Live QA run that actually authenticated and executed `wix build` against a real Wix project" (README §1/§4) — CONTRADICTED by `reports/wix-live/BOOTSTRAP_BINDING.md`**, which is persisted `reports/wix-live/**` evidence (the exact class AGENTS.md designates as able to prove the Wix gates). That report states: GitHub Actions authenticated with the protected Wix API key, bound to the explicitly selected existing app **Advanced Booking Rules** (App ID `3e9ec3af-001b-4684-a197-a5133677844d`), Wix generated the real `wix.config.json` for that exact app, and **a real `wix build` completed successfully before the binding was persisted**; no credential was persisted. The candidate's claim that the origin is unverified ignores this record. (The narrower point — that the full empirical gates still require the Wix Live QA cycle, since the bootstrap's build was a pre-persistence validation and "the subsequent real `wix build` remains mandatory" — is legitimate and consistent with the OPEN gates; but that is not what the candidate wrote.)
+
+3. **"This state is anomaly" / "The file must be removed from git tracking to restore `.gitignore` enforcement" — MISCHARACTERIZED and HARMFUL remediation.** The persistence of the generated non-secret `wix.config.json` was the Director's explicit plan (`docs/NEXT_CYCLE.md`: "persist only the generated non-secret `wix.config.json` metadata, then let the normal Wix Live stage execute `wix build`…"), executed by the trusted workflow shell with evidence. The integration lane fiche permits repairing the real non-secret `wix.config.json` while preserving the bound App ID. Removing the binding from git tracking would strip the real binding from the accepted branch; a fresh checkout would then lack `wix.config.json`, and the Wix Live stage's `wix build` would fail or require re-bootstrapping — regressing the exact path the Director planned. The `.gitignore`-vs-persistence tension is a Director-level policy decision (e.g., documenting the trusted-shell exception), not a builder-level "anomaly" to be removed.
+
+4. **`externalBlockerStatement()` now states `wix.config.json` "is generated exclusively by the authenticated one-time scaffold (`npm create @wix/new@latest app`)" — INACCURATE for the actual file.** The committed file was generated by the authenticated bootstrap binding to an **existing** app, not by `npm create @wix/new@latest app` (which creates a new app). The statement describes a hypothetical scaffold-pending state, omits the `BOOTSTRAP_BINDING.md` provenance, and would mislead Wix Live QA tooling that consumes it into reporting "requires independent verification" when the repository already contains the verification record.
+
+5. **Task INT-C7-LIVE not advanced.** The Director task asked the lane to "Consume the real Wix binding… Validate the generated project metadata, adapt only the integration/registration surface required for the unified Wix CLI project, and repair any real wix build/dev-site findings." The candidate validates nothing, adapts nothing, and repairs nothing — it documents the binding as contamination and recommends its removal. Acceptance criterion 1 ("A real Wix-generated wix.config.json exists and contains no secret material") is not converted into any test or validation (e.g., classifying the real file as `LINKED` and asserting no secret material), and the anti-fabrication sweep in `registration-surface.spec.ts` still excludes `wix.config.json` from its file list, so the suite passes while the tracked file exists — the anomaly the candidate documents is invisible to the tests.
+
+**What the candidate does correctly:** it does not fabricate identifiers; the blocker statement stays identifier-free; it honestly acknowledges the file is tracked; and its `LINKED`-does-not-prove-genuineness caveat is accurate. These do not outweigh the false provenance claims and the harmful remediation recommendation, because the README is the authoritative documentation of the registration surface that the Director and future cycles rely on for routing, and `externalBlockerStatement()` feeds live-QA disposition reporting.
+
+## 4. Non-blocking observations
+
+- **O1:** `registration-surface.spec.ts` "gitignores the real project binding so it can never be committed by accident" asserts only `.gitignore` content, not actual tracking state; it cannot detect a deliberately persisted binding. A tracking-state assertion (e.g., `git ls-files` check) would have made the documented anomaly test-visible.
+- **O2:** `docs/PRODUCT_GATES.json` shows all gates `OPEN` including `rules_domain`/`dashboard_rule_editor`/`billing_entitlement_reconciliation` despite those lanes being complete per `NEXT_CYCLE.md`; the ledger is stale and should be reconciled by the Director.
+- **O3:** the candidate's caution about unverified identifiers is defensible in spirit (the lane cannot authenticate), but the correct expression is "provenance recorded in `BOOTSTRAP_BINDING.md`; full empirical gates still pending Wix Live QA" — not "origin unverified".
+
+## 5. Verdict rationale
+
+The candidate is documentation-only and breaks nothing (548 + 210 tests green, purity/typecheck green, no cross-lane contract damage). However, its central documentation claims about the real Wix scaffold state are factually wrong in ways that matter: it misstates the `.gitignore` chronology, denies the existence of the persisted authenticated-binding evidence (`reports/wix-live/BOOTSTRAP_BINDING.md`) that AGENTS.md designates as proof-capable, mischaracterizes the Director-planned binding as an "anomaly", recommends removing the real binding from tracking (which would break the Wix Live `wix build` path), and rewrites `externalBlockerStatement()` around a hypothetical scaffold state that omits the actual provenance. Integrating this candidate would misdirect the Director and future cycles about the binding and could trigger the harmful removal it recommends. The repair belongs to the integration lane: correct the provenance narrative against `BOOTSTRAP_BINDING.md`, fix the gitignore-ordering claim, route the `.gitignore`-vs-persistence policy conflict to the Director instead of recommending removal, make the blocker statement reflect the actual LINKED state, and add the missing metadata validation (classify the real file, assert no secret material) that task INT-C7-LIVE requires.
+
+VERDICT: FIX

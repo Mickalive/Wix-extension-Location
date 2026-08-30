@@ -1,0 +1,5 @@
+{
+  "lane": "integration",
+  "task": "INT-C8-DGATE-REPAIR",
+  "reason": "Fresh integrated deterministic gate failed after integration candidate application. Rules, Dashboard, and Billing are all marked complete with no-op evidence and have zero pending code changes — the failure cannot originate from them. The integration lane is the sole active lane (INT-C7-LIVE) and owns the only recently modified surface (src/platform/registration/**, .gitignore, tsconfig.json, extensions.ts, purity root addition). The repair must identify the specific deterministic failure (tsc error, test regression, build failure, or purity gate regression) introduced by the integration candidate on top of base ec916b75d5600e02d679d264648ac92333d721f1, fix it, add a regression test if applicable, and produce a fresh candidate whose deterministic checks pass. This is a same-lane repair task (not new feature work) required before any further product progress."
+}

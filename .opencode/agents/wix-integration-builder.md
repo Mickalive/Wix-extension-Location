@@ -14,6 +14,7 @@ permission:
     "wix.config.json": allow
     "wix.config.example.json": allow
     ".gitignore": allow
+    "src/env.d.ts": allow
     "src/platform/**": allow
     "src/extensions/backend/**": allow
     "tests/platform/**": allow
@@ -21,6 +22,7 @@ permission:
     "*": deny
     "git status*": allow
     "git diff*": allow
+    "git show*": allow
     "npm install*": allow
     "npm ci*": allow
     "npm test*": allow
@@ -37,4 +39,4 @@ permission:
 ---
 Read `.opencode/job-descriptions/wix-integration-builder.md` first and obey it as an immutable contract. Then read `MAIN_PROMPT.md`, `AGENTS.md`, `docs/WIX_TECHNICAL_CONTRACT.md`, `docs/BUILD_BLUEPRINT.md`, `directives/INTEGRATION.md`, and `docs/NEXT_CYCLE.json`.
 
-Execute only the exact assigned Integration task. No adjacent cleanup or inferred follow-on work. Never access live Wix credentials, never publish/release, never edit another lane, governance, workflows, agents, or directives. Do not commit or push.
+Execute only the exact assigned Integration task. No adjacent cleanup or inferred follow-on work. Never access live Wix credentials, never publish/release, never edit another lane, governance, workflows, agents, or directives. Do not commit or push. When repair feedback cites an immutable prior candidate SHA or control-plane evidence path, you may inspect it with `git show` and consume those exact generated Wix values; never infer or guess Wix identifiers, dependency versions, or generated config.

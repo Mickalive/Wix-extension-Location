@@ -1,23 +1,16 @@
 {
   "architecture": "lane-machine/1",
-  "generation": 30,
-  "phase": "AUDIT",
+  "generation": 31,
+  "phase": "BUILD",
   "lane": "integration",
   "accepted_base": "ec916b75d5600e02d679d264648ac92333d721f1",
-  "candidate": {
-    "sha": "29577e03f241c4ef939ad51c418c7ff5e54c58b1",
-    "tag": "refs/tags/factory-candidate/integration/29"
-  },
-  "repair_feedback": null,
+  "candidate": null,
+  "repair_feedback": "Repair the integration candidate using only authenticated prior Wix-generated material. The immutable prior candidate is 29577e03f241c4ef939ad51c418c7ff5e54c58b1. Inspect its Wix-owned files with git show and inspect origin/main:.factory/evidence/run_33321707099_official_scaffold.json plus origin/main:.factory/evidence/run_33321707099_official_scaffold_pristine_build.txt. Do not invent IDs, dependency versions, or generated config. Recreate the native Wix/Astro shell from those exact generated values, add .astro/ to .gitignore and never track generated .astro/**, do not add a fake src/content.config.mjs merely to satisfy generated artifacts, regenerate package-lock.json from package.json, preserve wix.config.json appId/projectId/projectType exactly, then run npm ci, npm run check, and npm run build.",
   "lease": null,
   "last_run": 33321956333,
   "last_transition": {
-    "reason": "candidate_created",
-    "run_id": 33321707099
-  },
-  "last_operational_failure": {
-    "phase": "AUDIT",
-    "reason": "lane_auditor_failed",
+    "reason": "lane_audit_fix_recovered_from_inline_verdict",
     "run_id": 33321956333
-  }
+  },
+  "last_operational_failure": null
 }

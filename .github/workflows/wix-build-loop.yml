@@ -206,3 +206,22 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           WIX_API_KEY: ${{ secrets.WIX_API_KEY }}
         run: bash .github/scripts/wix-factory-cycle.sh
+
+      - name: Dispatch next logical transition
+        if: ${{ success() }}
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          git fetch --quiet origin main
+          state="$(git show origin/main:.factory/state.json)"
+          phase="$(jq -r '.phase' <<<"$state")"
+          operational_failure="$(jq -r 'if .last_operational_failure == null then "none" else "present" end' <<<"$state")"
+          echo "Latest authoritative phase: $phase; operational failure: $operational_failure"
+          if [[ "$phase" == READY || "$phase" == BLOCKED_EXTERNAL || "$operational_failure" == present ]]; then
+            echo "No immediate self-dispatch; terminal/external/operational state will be handled by normal policy."
+            exit 0
+          fi
+          gh workflow run wix-build-loop.yml --repo "$GITHUB_REPOSITORY" --ref main
+          echo "Dispatched next authoritative transition from phase $phase."

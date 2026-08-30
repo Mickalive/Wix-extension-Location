@@ -1,0 +1,52 @@
+(node:2480) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+(Use `node --trace-deprecation ...` to show where the warning was created)
+[2m16:14:18[22m [34m[@wix/astro-wix-hosting-adapter][39m Enabling sessions with Cloudflare KV with the "SESSION" KV binding.
+[2m16:14:18[22m [34m[@wix/astro-wix-hosting-adapter][39m If you see the error "Invalid binding `SESSION`" in your build output, you need to add the binding to your wrangler config file.
+[33m[1m16:14:19[22m [WARN] [vite][39m Failed to resolve dependency: [36m@wix/stores[39m, present in client 'optimizeDeps.include'
+[2m16:14:19[22m [34m[content][39m Syncing content
+[2m16:14:19[22m [34m[content][39m Synced content
+[2m16:14:19[22m [34m[types][39m Generated [2m206ms[22m
+[2m16:14:19[22m [34m[build][39m output: [34m"server"[39m
+[2m16:14:19[22m [34m[build][39m mode: [34m"server"[39m
+[2m16:14:19[22m [34m[build][39m directory: [34m/home/runner/work/_temp/wix-factory-33321707099/official-scaffold/work/advanced-booking-rules/dist/[39m
+[2m16:14:19[22m [34m[build][39m adapter: [32m@astrojs/cloudflare[39m
+[2m16:14:19[22m [34m[build][39m Collecting build info...
+[2m16:14:19[22m [34m[build][39m [32m✓ Completed in 320ms.[39m
+[2m16:14:19[22m [34m[build][39m Building server entrypoints...
+[33m[1m16:14:19[22m [WARN] [vite][39m [33m[plugin vite:resolve] Automatically externalized node built-in module "node:assert" imported from "node_modules/@wix/astro/build/dependencies/astro-viewer-api/backend-runtime/api.mjs". Consider adding it to environments.ssr.external if it is intended.[39m
+[33m[1m16:14:19[22m [WARN] [vite][39m [33m[plugin vite:resolve] Automatically externalized node built-in module "node:assert" imported from "node_modules/@wix/astro/build/dependencies/astro-payment-links/backend-runtime/payment-link.mjs". Consider adding it to environments.ssr.external if it is intended.[39m
+[33m[1m16:14:19[22m [WARN] [vite][39m [33m[plugin vite:resolve] Automatically externalized node built-in module "node:assert" imported from "node_modules/@wix/astro/build/dependencies/astro-payment-links/backend-runtime/proposal.mjs". Consider adding it to environments.ssr.external if it is intended.[39m
+[33m[1m16:14:19[22m [WARN] [vite][39m [33m[plugin vite:resolve] Automatically externalized node built-in module "node:assert" imported from "node_modules/@wix/astro/build/dependencies/astro-admin-redirect/backend-runtime/admin.mjs". Consider adding it to environments.ssr.external if it is intended.[39m
+[33m[1m16:14:19[22m [WARN] [vite][39m [33m[plugin vite:resolve] Automatically externalized node built-in module "node:assert" imported from "node_modules/@wix/astro/build/dependencies/astro-payment-links/backend-runtime/payment-checkout.mjs". Consider adding it to environments.ssr.external if it is intended.[39m
+[33m[1m16:14:19[22m [WARN] [vite][39m [33m[plugin vite:resolve] Automatically externalized node built-in module "node:assert" imported from "node_modules/@wix/astro/build/dependencies/astro-robots/backend-runtime/robots.mjs". Consider adding it to environments.ssr.external if it is intended.[39m
+[33m[1m16:14:19[22m [WARN] [vite][39m [33m[plugin vite:resolve] Automatically externalized node built-in module "node:async_hooks" imported from "node_modules/@wix/astro/build/dependencies/astro-auth/backend-runtime/createHost-CAkv7ndd.mjs". Consider adding it to environments.ssr.external if it is intended.[39m
+[2m16:14:21[22m [34m[vite][39m [32m✓ built in 2.49s[39m
+[2m16:14:21[22m [34m[build][39m [32m✓ Completed in 2.52s.[39m
+
+[42m[30m building client (vite) [39m[49m
+[2m16:14:21[22m [34m[vite][39m transforming...
+[2m16:14:29[22m [34m[vite][39m [32m✓[39m 6864 modules transformed.
+[2m16:14:29[22m [34m[vite][39m rendering chunks...
+[2m16:14:29[22m [34m[vite][39m computing gzip size...
+[2m16:14:29[22m [34m[vite][39m [2mdist/[22m[2m_astro/[22m[35mwrapper.D3o0C13n.css                           [39m[1m[2m1,151.74 kB[22m[1m[22m[2m │ gzip: 119.42 kB[22m
+[2m16:14:29[22m [34m[vite][39m [2mdist/[22m[2m_astro/[22m[36mpage.CdlI4dnA.js                               [39m[1m[2m    0.09 kB[22m[1m[22m[2m │ gzip:   0.10 kB[22m
+[2m16:14:29[22m [34m[vite][39m [2mdist/[22m[2m_astro/[22m[36mastro_scripts/before-hydration.js.zE5dnXML.js  [39m[1m[2m    0.09 kB[22m[1m[22m[2m │ gzip:   0.10 kB[22m
+[2m16:14:29[22m [34m[vite][39m [2mdist/[22m[2m_astro/[22m[36mclient.jKPUk9Nq.js                             [39m[1m[2m    1.84 kB[22m[1m[22m[2m │ gzip:   0.91 kB[22m
+[2m16:14:29[22m [34m[vite][39m [2mdist/[22m[2m_astro/[22m[36mindex.X7GRfrFV.js                              [39m[1m[2m   19.62 kB[22m[1m[22m[2m │ gzip:   7.00 kB[22m
+[2m16:14:29[22m [34m[vite][39m [2mdist/[22m[2m_astro/[22m[36msetup.R2pJ1oMc.js                              [39m[1m[2m   59.13 kB[22m[1m[22m[2m │ gzip:  16.89 kB[22m
+[2m16:14:29[22m [34m[vite][39m [2mdist/[22m[2m_astro/[22m[36mindex.C_ZFJOLt.js                              [39m[1m[2m  141.88 kB[22m[1m[22m[2m │ gzip:  45.55 kB[22m
+[2m16:14:29[22m [34m[vite][39m [2mdist/[22m[2m_astro/[22m[36mwrapper.Cyz5nuH_.js                            [39m[1m[2m  167.01 kB[22m[1m[22m[2m │ gzip:  53.45 kB[22m
+[2m16:14:29[22m [34m[vite][39m [32m✓ built in 7.81s[39m
+
+[42m[30m prerendering static routes [39m[49m
+[2m16:14:29[22m [32m✓ Completed in 15ms.
+[39m
+[2m16:14:29[22m [34m[build][39m Rearranging server assets...
+[2m16:14:29[22m [34m[build][39m Server built in [1m10.70s[22m
+[2m16:14:29[22m [34m[build][39m [1mComplete![22m
+╭────────────────────────────────────────╮
+│                                        │
+│  Update available 1.1.238 -> 1.1.240   │
+│ Run npm i -g @wix/cli@latest to update │
+│                                        │
+╰────────────────────────────────────────╯

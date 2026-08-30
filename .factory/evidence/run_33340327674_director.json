@@ -1,0 +1,5 @@
+{
+  "lane": "integration",
+  "task": "INT-C8-DGATE",
+  "reason": "Fresh integrated deterministic gate failed (npm run check / npm run build regression). Rules, Dashboard, and Billing are complete with no pending work. All five recent integration builder runs (33071936451 through 33072886087) exited with code 75 before producing an auditable candidate. The only path to advance the product is an integration repair that identifies and resolves the typecheck/build/test regression introduced after the last known-green integrated state (run 32920420147, 548/548 tests, tsc clean, purity gate green). The candidate must start from the exact base SHA ec916b75d5600e02d679d264648ac92333d721f1, run tsc --noEmit, purity gate, and all 548+ vitest tests clean, and produce a diff limited to the minimal fix required to restore the deterministic gate. No new features, no Wix binding fabrication, no governance changes."
+}

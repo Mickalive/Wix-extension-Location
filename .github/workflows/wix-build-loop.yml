@@ -217,11 +217,25 @@ jobs:
           git fetch --quiet origin main
           state="$(git show origin/main:.factory/state.json)"
           phase="$(jq -r '.phase' <<<"$state")"
-          operational_failure="$(jq -r 'if .last_operational_failure == null then "none" else "present" end' <<<"$state")"
-          echo "Latest authoritative phase: $phase; operational failure: $operational_failure"
-          if [[ "$phase" == READY || "$phase" == BLOCKED_EXTERNAL || "$operational_failure" == present ]]; then
-            echo "No immediate self-dispatch; terminal/external/operational state will be handled by normal policy."
+          failure_reason="$(jq -r '.last_operational_failure.reason // "none"' <<<"$state")"
+          echo "Latest authoritative phase: $phase; operational failure: $failure_reason"
+
+          if [[ "$phase" == READY || "$phase" == BLOCKED_EXTERNAL ]]; then
+            echo "No immediate self-dispatch; terminal/external state will be handled by normal policy."
             exit 0
           fi
+
+          case "$failure_reason" in
+            none)
+              ;;
+            provider_transient|director_failed|lane_auditor_failed|integrated_auditor_failed|wix_live_auditor_failed|release_auditor_failed|invalid_lane_audit_verdict|invalid_integrated_verdict|invalid_wix_live_verdict|invalid_release_verdict)
+              echo "Recoverable orchestration failure ($failure_reason): retrying the same authoritative phase without advancing product state."
+              ;;
+            *)
+              echo "Non-recoverable operational failure ($failure_reason): refusing blind self-retry."
+              exit 0
+              ;;
+          esac
+
           gh workflow run wix-build-loop.yml --repo "$GITHUB_REPOSITORY" --ref main
           echo "Dispatched next authoritative transition from phase $phase."

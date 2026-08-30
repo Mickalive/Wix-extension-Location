@@ -1,23 +1,16 @@
 {
   "architecture": "lane-machine/1",
-  "generation": 37,
-  "phase": "AUDIT",
+  "generation": 38,
+  "phase": "BUILD",
   "lane": "integration",
   "accepted_base": "ec916b75d5600e02d679d264648ac92333d721f1",
-  "candidate": {
-    "sha": "b1b4edbb62320c6e80afb3762e486d32407c2748",
-    "tag": "refs/tags/factory-candidate/integration/36"
-  },
-  "repair_feedback": null,
+  "candidate": null,
+  "repair_feedback": "OFFICIAL_WIX_SCAFFOLD_REBASE_REQUIRED: integration audit FIX from run 33325817347. Regenerate the authenticated exact-app Wix scaffold. Preserve the restored provenance evidence. The repaired scaffold reconciliation must keep .astro/ as generated local state only (gitignored and never committed), must not duplicate any package between dependencies and devDependencies, must regenerate package-lock.json from the reconciled package.json, and must preserve the exact generated appId/projectId/projectType and Wix dependency versions. Then run the deterministic suite and the real Wix build with the pulled test-site environment.",
   "lease": null,
   "last_run": 33325817347,
   "last_transition": {
-    "reason": "candidate_created",
-    "run_id": 33325600480
-  },
-  "last_operational_failure": {
-    "phase": "AUDIT",
-    "reason": "invalid_lane_audit_verdict",
+    "reason": "lane_audit_fix_recovered_markdown_verdict",
     "run_id": 33325817347
-  }
+  },
+  "last_operational_failure": null
 }

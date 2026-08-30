@@ -173,7 +173,7 @@ jobs:
       - name: Set up Node
         uses: actions/setup-node@ae0d4ed08881f17d1511386f5be3e62356acd4a6
         with:
-          node-version: 22.13.0
+          node-version: 22.19.0
 
       - name: Install reviewed OpenCode CLI
         uses: ./.github/actions/setup-opencode
@@ -195,9 +195,8 @@ jobs:
                 mv .factory/state.tmp .factory/state.json
               fi
             fi
-            rm -rf .factory/evidence
-            mkdir -p .factory/evidence
           fi
+          mkdir -p .factory/evidence
           printf '%s' "$MODEL_SELECTION_B64" | base64 -d > ".factory/evidence/run_${GITHUB_RUN_ID}_model_selection.json"
           jq -e '.schemaVersion==2 and .healthyCount>=1 and .current.builderChain and .current.reviewChain' ".factory/evidence/run_${GITHUB_RUN_ID}_model_selection.json" >/dev/null
 

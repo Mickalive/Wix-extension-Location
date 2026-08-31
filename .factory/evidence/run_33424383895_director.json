@@ -1,0 +1,5 @@
+{
+  "lane": "integration",
+  "task": "INT-C7-R1",
+  "reason": "Fresh integrated deterministic gate failed after integration. The integration lane owns the platform code and must repair the issues that caused npm run check or npm run build to fail. Per workflow rules, deterministic test/build failures after integration are integration-lane responsibility. Rules, Dashboard, and Billing are complete with no pending work. The integration lane must diagnose the specific failure (type errors, test failures, purity gate issues, or build errors) and produce a repair candidate that passes all deterministic checks before the next integration attempt."
+}

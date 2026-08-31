@@ -3,7 +3,7 @@ name: Wix Product Factory
 'on':
   workflow_dispatch: {}
   schedule:
-    - cron: '*/5 * * * *'
+    - cron: '*/15 * * * *'
   push:
     branches: ["main"]
     paths:
@@ -23,7 +23,9 @@ permissions:
   id-token: write
 
 concurrency:
-  group: wix-product-factory-authoritative
+  # Different authoritative SHAs must never block one another. The cycle script
+  # rejects stale writes, so an old hung run cannot corrupt a newer state.
+  group: wix-product-factory-${{ github.sha }}
   cancel-in-progress: false
 
 env:
@@ -33,21 +35,19 @@ env:
   WIX_CLI_VERSION: 1.1.238
 
 jobs:
-  prepare:
-    name: Prepare clean authoritative cycle
+  factory:
+    name: One authoritative product-state transition
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
-    outputs:
-      final: ${{ steps.state.outputs.final }}
+    timeout-minutes: 95
     steps:
-      - name: Checkout control plane
+      - name: Checkout exact control SHA
         uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
         with:
           ref: ${{ github.sha }}
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Validate state and clean obsolete automation
+      - name: Validate authoritative state
         id: state
         shell: bash
         env:
@@ -62,145 +62,30 @@ jobs:
             echo "final=false" >> "$GITHUB_OUTPUT"
           fi
 
-  model_probe:
-    name: Probe OpenCode — ${{ matrix.model }}
-    needs: prepare
-    if: ${{ needs.prepare.result == 'success' && needs.prepare.outputs.final != 'true' }}
-    continue-on-error: true
-    strategy:
-      fail-fast: false
-      max-parallel: 6
-      matrix:
-        model:
-          - x-preview-f-free
-          - deepseek-v4-flash-free
-          - north-mini-code-free
-          - laguna-s-2.1-free
-          - mimo-v2.5-free
-          - nemotron-3-ultra-free
-          - nemotron-3.5-lightning-free
-          - hy3-free
-          - big-pickle
-          - ling-3.0-flash-free
-          - ling-3.0-tiny-free
-          - muse-spark-1.2-contributor-free
-    runs-on: ubuntu-24.04
-    timeout-minutes: 8
-    steps:
-      - name: Checkout exact control SHA
-        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
-        with:
-          ref: ${{ github.sha }}
-          fetch-depth: 1
-          persist-credentials: false
-
-      - name: Install reviewed OpenCode CLI
-        uses: ./.github/actions/setup-opencode
-
-      - name: Probe real headless tool calling
-        shell: bash
-        env:
-          PROBE_MODEL: ${{ matrix.model }}
-        run: bash .github/scripts/probe-model.sh "$PROBE_MODEL"
-
-      - name: Upload probe evidence
-        if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
-        with:
-          name: wix-model-probe-${{ matrix.model }}
-          path: ${{ runner.temp }}/model-probe-${{ matrix.model }}/probe.json
-          if-no-files-found: error
-          retention-days: 3
-
-  select_models:
-    name: Select best healthy models for current role
-    needs: [prepare, model_probe]
-    if: ${{ always() && needs.prepare.result == 'success' && needs.prepare.outputs.final != 'true' }}
-    runs-on: ubuntu-24.04
-    timeout-minutes: 10
-    outputs:
-      builder_models: ${{ steps.select.outputs.builder_models }}
-      review_models: ${{ steps.select.outputs.review_models }}
-      selection_b64: ${{ steps.select.outputs.selection_b64 }}
-      healthy_count: ${{ steps.select.outputs.healthy_count }}
-    steps:
-      - name: Checkout exact control SHA
-        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
-        with:
-          ref: ${{ github.sha }}
-          fetch-depth: 1
-          persist-credentials: false
-
-      - name: Download all model probes
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          mkdir -p /tmp/wix-model-probes
-          gh run download "$GITHUB_RUN_ID" --repo "$GITHUB_REPOSITORY" -p 'wix-model-probe-*' -D /tmp/wix-model-probes
-
-      - name: Select role-specific chains
-        id: select
-        shell: bash
-        run: bash .github/scripts/select-models.sh /tmp/wix-model-probes .factory/state.json .factory/evidence
-
-      - name: Upload selection audit
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
-        with:
-          name: wix-model-selection
-          path: ${{ runner.temp }}/wix-model-selection/selection.json
-          if-no-files-found: error
-          retention-days: 7
-
-  transition:
-    name: One authoritative product-state transition
-    needs: [prepare, select_models]
-    if: ${{ always() && needs.prepare.result == 'success' && needs.prepare.outputs.final != 'true' && needs.select_models.result == 'success' }}
-    runs-on: ubuntu-24.04
-    timeout-minutes: 90
-    env:
-      OX_BUILDER_MODELS: ${{ needs.select_models.outputs.builder_models }}
-      OX_REVIEW_MODELS: ${{ needs.select_models.outputs.review_models }}
-    steps:
-      - name: Checkout exact control SHA
-        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
-        with:
-          ref: ${{ github.sha }}
-          fetch-depth: 0
-          persist-credentials: false
-
       - name: Set up Node
+        if: ${{ steps.state.outputs.final != 'true' }}
         uses: actions/setup-node@ae0d4ed08881f17d1511386f5be3e62356acd4a6
         with:
           node-version: 22.19.0
 
       - name: Install reviewed OpenCode CLI
+        if: ${{ steps.state.outputs.final != 'true' }}
         uses: ./.github/actions/setup-opencode
 
-      - name: Prepare current evidence chain
+      - name: Probe and select healthy models
+        if: ${{ steps.state.outputs.final != 'true' }}
+        shell: bash
+        run: bash .github/scripts/probe-and-select-models.sh
+
+      - name: Prepare Wix candidate environment
+        if: ${{ steps.state.outputs.final != 'true' }}
         shell: bash
         env:
-          MODEL_SELECTION_B64: ${{ needs.select_models.outputs.selection_b64 }}
-        run: |
-          set -euo pipefail
-          phase="$(jq -r '.phase' .factory/state.json)"
-          if [[ "$phase" == BUILD ]]; then
-            feedback="$(jq -r '.repair_feedback // ""' .factory/state.json)"
-            if [[ "$feedback" == "Real Wix CLI build failed; inspect factory evidence." ]]; then
-              failure_file="$(find .factory/evidence -maxdepth 1 -type f -name 'run_*_wix_build_failure.txt' | sort -V | tail -n1)"
-              if [[ -n "$failure_file" ]]; then
-                failure="$(tail -c 10000 "$failure_file")"
-                jq --arg f "Real Wix CLI build failed:\n$failure" '.repair_feedback=$f' .factory/state.json > .factory/state.tmp
-                mv .factory/state.tmp .factory/state.json
-              fi
-            fi
-          fi
-          mkdir -p .factory/evidence
-          printf '%s' "$MODEL_SELECTION_B64" | base64 -d > ".factory/evidence/run_${GITHUB_RUN_ID}_model_selection.json"
-          jq -e '.schemaVersion==2 and .healthyCount>=1 and .current.builderChain and .current.reviewChain' ".factory/evidence/run_${GITHUB_RUN_ID}_model_selection.json" >/dev/null
+          WIX_API_KEY: ${{ secrets.WIX_API_KEY }}
+        run: bash .github/scripts/wix-env-preflight.sh
 
       - name: Execute exactly one factory transition
+        if: ${{ steps.state.outputs.final != 'true' }}
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
@@ -208,7 +93,7 @@ jobs:
         run: bash .github/scripts/wix-factory-cycle.sh
 
       - name: Dispatch next logical transition
-        if: ${{ success() }}
+        if: ${{ success() && steps.state.outputs.final != 'true' }}
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
@@ -221,21 +106,30 @@ jobs:
           echo "Latest authoritative phase: $phase; operational failure: $failure_reason"
 
           if [[ "$phase" == READY || "$phase" == BLOCKED_EXTERNAL ]]; then
-            echo "No immediate self-dispatch; terminal/external state will be handled by normal policy."
             exit 0
           fi
 
           case "$failure_reason" in
-            none)
-              ;;
-            provider_transient|director_failed|lane_auditor_failed|integrated_auditor_failed|wix_live_auditor_failed|release_auditor_failed|invalid_lane_audit_verdict|invalid_integrated_verdict|invalid_wix_live_verdict|invalid_release_verdict)
-              echo "Recoverable orchestration failure ($failure_reason): retrying the same authoritative phase without advancing product state."
-              ;;
-            *)
-              echo "Non-recoverable operational failure ($failure_reason): refusing blind self-retry."
-              exit 0
-              ;;
+            none|provider_transient|director_failed|lane_auditor_failed|integrated_auditor_failed|wix_live_auditor_failed|release_auditor_failed|invalid_lane_audit_verdict|invalid_integrated_verdict|invalid_wix_live_verdict|invalid_release_verdict) ;;
+            *) echo "Non-recoverable operational failure: $failure_reason"; exit 0 ;;
           esac
+
+          # Stop hot loops. Progressing states dispatch immediately; an identical
+          # semantic state gets at most two immediate retries, then yields to the
+          # 15-minute watchdog so provider/orchestration failures cannot burn runs.
+          current_signature="$(jq -r '[.phase, (.lane // "none"), (.candidate.sha // "none"), (.repair_feedback // "none"), (.last_transition.reason // "none"), (.last_operational_failure.reason // "none")] | join("|")' <<<"$state")"
+          repeats=0
+          while IFS= read -r commit; do
+            past="$(git show "$commit":.factory/state.json 2>/dev/null || true)"
+            [[ -n "$past" ]] || continue
+            signature="$(jq -r '[.phase, (.lane // "none"), (.candidate.sha // "none"), (.repair_feedback // "none"), (.last_transition.reason // "none"), (.last_operational_failure.reason // "none")] | join("|")' <<<"$past" 2>/dev/null || true)"
+            [[ "$signature" == "$current_signature" ]] && repeats=$((repeats + 1))
+          done < <(git log -n 20 --format='%H' origin/main -- .factory/state.json)
+
+          if (( repeats >= 3 )); then
+            echo "Stagnation guard: identical semantic state seen $repeats times; yielding to watchdog cooldown."
+            exit 0
+          fi
 
           gh workflow run wix-build-loop.yml --repo "$GITHUB_REPOSITORY" --ref main
           echo "Dispatched next authoritative transition from phase $phase."

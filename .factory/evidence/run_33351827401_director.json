@@ -1,0 +1,5 @@
+{
+  "lane": "integration",
+  "task": "Repair the fresh deterministic gate failure (npm run check: typecheck + purity + vitest) that appeared after integration was applied. Identify the exact failure — typecheck error, test regression, or purity violation — against the base SHA ec916b75d5600e02d679d264648ac92333d721f1, fix it, and add a regression test if the failure was not covered by existing suites. Do not advance new feature work, governance, or real-Wix-binding tasks until npm run check exits 0 with all tests green and zero typecheck errors.",
+  "reason": "The deterministic gate (typecheck + purity + vitest) failed immediately after integration, which means the accepted product state is broken and no lane can safely progress. The integration lane owns the platform surface that was active in the prior cycle and is the only lane that may have introduced the regression. Same-lane repair is required before any further build-cycle progress or real-Wix-binding work."
+}

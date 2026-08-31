@@ -1,16 +1,19 @@
 {
   "architecture": "lane-machine/1",
-  "generation": 98,
-  "phase": "BUILD",
+  "generation": 99,
+  "phase": "AUDIT",
   "lane": "integration",
   "accepted_base": "ec916b75d5600e02d679d264648ac92333d721f1",
-  "candidate": null,
-  "repair_feedback": "INT-C7-REPAIR-F1-FIX: Replace the InMemoryConfirmedPlanStore with a durable storage mechanism so the confirm→apply flow survives across Wix serverless invocations. The current in-memory Map assumes single-instance execution, which contradicts the binding recon evidence (Wix-managed serverless with automatic scaling). Repair must persist the confirmed plan record so that POST /apply-plan can retrieve it from a different cold-started instance. Additionally harden by: (F3) recomputing the confirmation hash server-side from the canonical plan serialization and rejecting mismatches, (F5) deriving confirmedBy from the verified caller token instead of trusting the client. F4 (confirm-diff validation) may be addressed opportunistically. The repair must preserve the existing 31 passing confirm-diff/apply-plan tests, add tests for cross-invocation durability and hash-integrity rejection, and maintain deterministic checks green.",
+  "candidate": {
+    "sha": "810c8b88be41aa2dba5ca2f251182a93cdb81518",
+    "tag": "refs/tags/factory-candidate/integration/98"
+  },
+  "repair_feedback": null,
   "lease": null,
-  "last_run": 33355683219,
+  "last_run": 33355900264,
   "last_transition": {
-    "reason": "director_selected_lane",
-    "run_id": 33355683219
+    "reason": "candidate_created",
+    "run_id": 33355900264
   },
   "last_operational_failure": null
 }

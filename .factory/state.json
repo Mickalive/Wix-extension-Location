@@ -1,19 +1,16 @@
 {
   "architecture": "lane-machine/1",
-  "generation": 181,
-  "phase": "WIX_QA",
-  "lane": "rules",
+  "generation": 182,
+  "phase": "BUILD",
+  "lane": "integration",
   "accepted_base": "ec916b75d5600e02d679d264648ac92333d721f1",
-  "candidate": {
-    "sha": "ec916b75d5600e02d679d264648ac92333d721f1",
-    "tag": "refs/tags/factory-candidate/rules/178"
-  },
-  "repair_feedback": null,
+  "candidate": null,
+  "repair_feedback": "OFFICIAL_WIX_SCAFFOLD_REBASE_REQUIRED: real Wix CLI build failed on the deliverable; regenerate official scaffold and reconcile product wiring without hand-editing Wix identifiers.",
   "lease": null,
-  "last_run": 33405089836,
+  "last_run": 33406864611,
   "last_transition": {
-    "reason": "integrated_audit_accept",
-    "run_id": 33405089836
+    "reason": "wix_build_failed",
+    "run_id": 33406864611
   },
   "last_operational_failure": null
 }

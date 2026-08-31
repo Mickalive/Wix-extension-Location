@@ -15,5 +15,6 @@
     "reason": "recovered_semantic_lane_accept_after_parser_fix",
     "run_id": 33433113332
   },
-  "last_operational_failure": null
+  "last_operational_failure": null,
+  "control_revision": "ceb0cb9a944ee9fb047057ed0747ead186cfa2ba"
 }

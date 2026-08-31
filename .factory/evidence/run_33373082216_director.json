@@ -1,0 +1,5 @@
+{
+  "lane": "integration",
+  "task": "INT-REPAIR-DGATE",
+  "reason": "The integrated deterministic gate failed at SHA ec916b75d5600e02d679d264648ac92333d721f1, causing the cycle to be rejected and the accepted branch preserved at control_sha 86873e5e5bbcff1694ea9f0e356f6f1f1f9d30eb. Rules, Dashboard, and Billing are complete (their candidates are no-ops). Integration is the sole active lane and owns the deterministic gate failure. The builder must diagnose the exact failing check(s) against the accepted base, produce a minimal targeted repair that restores npm run check (strict tsc + purity gate + vitest), npm run build, and the dashboard lane suite to exit 0 with no test count regression, then emit a fresh candidate from the accepted HEAD. The authenticated Wix bootstrap binding (BOOTSTRAP_BINDING.md, App ID 3e9ec3af) is established and should not be disturbed. The repair must not touch governance, Rules, Dashboard, or Billing owned surfaces."
+}

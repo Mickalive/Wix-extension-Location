@@ -1,0 +1,5 @@
+{
+  "lane": "dashboard",
+  "task": "Fix cross-lane apply-plan contract mismatch: remove redundant `ops` field from bridge.requestApply so the POST /apply-plan body is exactly { confirmedDiffHash } matching the platform endpoint (mutationEndpoints.ts postApplyPlan). Update the call site in rulesEditorPage.js to stop passing ops. Fix bridge.test.js assertions to assert the corrected body shape. Add a regression test that validates the bridge request body matches the platform endpoint's accepted schema.",
+  "reason": "Cross-lane audit CRITICAL FINDING §5: dashboard bridge sends { ops, confirmedDiffHash } but platform endpoint rejects any body with keys other than confirmedDiffHash (INVALID_QUERY HTTP 400). The ops field is redundant — the endpoint resolves plans via confirmedPlanLookup.findByDiffHash(confirmedDiffHash) and never reads ops. Every requestApply from the dashboard therefore fails, breaking the core schedule-apply feature end-to-end. The platform contract (Contract §9.2) is correct and documented; the bridge must align. This is a same-lane dashboard fix: the bridge owns the request shape and its tests."
+}

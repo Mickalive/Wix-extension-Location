@@ -10,14 +10,14 @@
   },
   "repair_feedback": null,
   "lease": null,
-  "last_run": 33341575983,
+  "last_run": 33341889842,
   "last_transition": {
     "reason": "lane_audit_accept",
     "run_id": 33340789440
   },
   "last_operational_failure": {
     "phase": "INTEGRATED_AUDIT",
-    "reason": "invalid_integrated_verdict",
-    "run_id": 33341575983
+    "reason": "integrated_auditor_failed",
+    "run_id": 33341889842
   }
 }

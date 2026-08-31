@@ -293,12 +293,14 @@ export function createServicesBridge(options = {}) {
     },
     /**
      * Requests schedule application. The backend orchestrator only accepts a
-     * diff the user explicitly confirmed: ops plus the confirmed hash.
+     * diff the user explicitly confirmed: the confirmed-diff hash reference.
+     * The POST /apply-plan body must be exactly { confirmedDiffHash } — no
+     * ops or inline plan data (platform mutationEndpoints.ts postApplyPlan).
      */
-    requestApply(ops, confirmedDiffHash) {
+    requestApply(confirmedDiffHash) {
       return request('/apply-plan', {
         method: 'POST',
-        body: { ops, confirmedDiffHash },
+        body: { confirmedDiffHash },
       });
     },
     /**

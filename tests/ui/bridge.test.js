@@ -4,7 +4,7 @@
  * Repair regression (F-N5): a malformed 2xx body maps to a typed
  * BridgeError('BAD_RESPONSE'), never a raw SyntaxError. Also covered:
  * BRIDGE_NOT_CONFIGURED offline, 404 -> null semantics, HTTP_<status>,
- * TRANSPORT_FAILURE, and the apply-plan payload shape (ops + confirmed hash).
+ * TRANSPORT_FAILURE, and the apply-plan payload shape (confirmed hash only).
  */
 
 import test from 'node:test';
@@ -109,7 +109,7 @@ test('a healthy first transport is cached; later loader failures do not matter',
   assert.equal(calls, 1);
 });
 
-test('requestApply posts ops plus the confirmed diff hash', async () => {
+test('requestApply posts only the confirmed diff hash (no ops)', async () => {
   const seen = [];
   const bridge = createServicesBridge({
     transportLoader: async () =>
@@ -118,12 +118,35 @@ test('requestApply posts ops plus the confirmed diff hash', async () => {
         return okResponse({ accepted: true });
       },
   });
-  const result = await bridge.requestApply([{ kind: 'ADD_WINDOW', start: '09:00' }], 'abc12345');
+  const result = await bridge.requestApply('abc12345');
   assert.deepEqual(result, { accepted: true });
   assert.equal(seen[0].path, '/api/rules/apply-plan');
   assert.equal(seen[0].method, 'POST');
-  assert.deepEqual(seen[0].body.ops, [{ kind: 'ADD_WINDOW', start: '09:00' }]);
+  assert.deepEqual(Object.keys(seen[0].body).sort(), ['confirmedDiffHash']);
   assert.equal(seen[0].body.confirmedDiffHash, 'abc12345');
+});
+
+test('requestApply body matches the platform postApplyPlan schema exactly', async () => {
+  const seen = [];
+  const bridge = createServicesBridge({
+    transportLoader: async () =>
+      async (path, init) => {
+        seen.push({ body: JSON.parse(init.body) });
+        return okResponse({ summary: { planId: 'p1' }, requestedBy: 'user-1' });
+      },
+  });
+  await bridge.requestApply('hash-42');
+  const body = seen[0].body;
+  // Regression: the platform endpoint rejects any key beyond confirmedDiffHash
+  // (mutationEndpoints.ts postApplyPlan checks unexpectedKeys). The bridge
+  // must never send ops, plan, or any other field.
+  assert.equal(typeof body, 'object', 'body must be an object');
+  assert.equal(Array.isArray(body), false, 'body must not be an array');
+  const keys = Object.keys(body);
+  assert.equal(keys.length, 1, 'body must have exactly one key');
+  assert.equal(keys[0], 'confirmedDiffHash', 'the only accepted key is confirmedDiffHash');
+  assert.equal(typeof body.confirmedDiffHash, 'string', 'confirmedDiffHash must be a string');
+  assert.ok(body.confirmedDiffHash.length > 0, 'confirmedDiffHash must not be empty');
 });
 
 test('saveRuleSet PUTs the draft to the ruleset endpoint', async () => {

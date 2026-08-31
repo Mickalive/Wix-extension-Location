@@ -66,8 +66,8 @@ function setupConfirmedPage({ statuses = [], applyResponse = { summary: { planId
     async saveRuleSet(draft) {
       return draft;
     },
-    async requestApply(ops, confirmedHash) {
-      calls.requestApply.push({ ops, confirmedHash });
+    async requestApply(confirmedHash) {
+      calls.requestApply.push({ confirmedHash });
       return typeof applyResponse === 'function' ? applyResponse() : applyResponse;
     },
     async getMutationStatus(planId) {

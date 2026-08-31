@@ -920,8 +920,7 @@ export function renderRulesEditorPage(options) {
     const draftAtApply = JSON.parse(JSON.stringify(state.draft));
     store.dispatch({ type: 'APPLY_START' });
     try {
-      const { ops } = computeScheduleDiff(state.savedRuleSet, state.draft);
-      const response = await bridge.requestApply(ops, state.confirmedHash);
+      const response = await bridge.requestApply(state.confirmedHash);
       // The accepted apply-plan response carries `{ summary: MutationSummary }`;
       // its planId is the journal key the status endpoint polls.
       const planId = response?.summary?.planId;

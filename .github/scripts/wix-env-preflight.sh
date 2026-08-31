@@ -8,7 +8,7 @@ SITE_STATE="$GITHUB_WORKSPACE/.factory/wix-dev-site.json"
 phase="$(jq -r '.phase' "$STATE")"
 
 case "$phase" in
-  AUDIT|INTEGRATED_AUDIT|WIX_QA|RELEASE_AUDIT) ;;
+  AUDIT|INTEGRATED_AUDIT|WIX_QA|BLOCKED_EXTERNAL|RELEASE_AUDIT) ;;
   *) exit 0 ;;
 esac
 

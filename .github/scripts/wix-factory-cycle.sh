@@ -41,6 +41,14 @@ opfail(){
 provider_failure(){
   grep -Eqi 'Unexpected server error|UnknownError|network error|temporarily unavailable|service unavailable|provider unavailable|ECONNRESET|ETIMEDOUT|timed out|rate.?limit|HTTP[^0-9]*(401|403|404|408|409|429|500|502|503|504)|Forbidden|model[^[:alnum:]]*(not found|unavailable|unsupported|invalid)|unknown model|no such model' "$1" 2>/dev/null
 }
+parse_verdict(){
+  local report="$1"
+  tail -n20 "$report" \
+    | tr -d '\r' \
+    | sed -nE 's/^[[:space:]>*_`~.-]*VERDICT:[[:space:]]*(ACCEPT|FIX|BLOCKED_EXTERNAL|READY|NOT_READY)[[:space:]*_`~.-]*$/\1/Ip' \
+    | tail -n1 \
+    | tr '[:lower:]' '[:upper:]'
+}
 
 prepare(){
   local ref="$1"
@@ -191,7 +199,7 @@ phase_audit(){
   lane="$(sget '.lane')"; sha="$(sget '.candidate.sha')"; tag="$(sget '.candidate.tag')"; who="$(auditor_name "$lane")"; prepare "$sha"; report="reports/factory_lane_audit.md"; mkdir -p "$PRODUCT/reports"
   agent "$who" "Independently audit exact $lane candidate SHA $sha against accepted base $(sget '.accepted_base'). You are not its builder. For integration, verify Wix-owned scaffold/binding came from authenticated official generation rather than hand-authored guesses. Reproduce evidence and tests yourself. Never fix. Write only $report ending exactly VERDICT: ACCEPT or VERDICT: FIX; FIX must contain reproducible findings." || rc=$?
   rc=${rc:-0}; (( rc==0 )) && [[ -f "$PRODUCT/$report" ]] || { opfail AUDIT "$([[ $rc == 75 ]] && echo provider_transient || echo lane_auditor_failed)"; return; }
-  readonly_ok "$report" || { opfail AUDIT lane_auditor_scope_violation; return; }; evidence "${lane}_audit.md" "$report"; verdict="$(tail -n1 "$PRODUCT/$report" | sed -n 's/^VERDICT: //p')"
+  readonly_ok "$report" || { opfail AUDIT lane_auditor_scope_violation; return; }; evidence "${lane}_audit.md" "$report"; verdict="$(parse_verdict "$PRODUCT/$report")"
   if [[ "$verdict" == ACCEPT ]]; then transition INTEGRATED_AUDIT lane_audit_accept
   elif [[ "$verdict" == FIX ]]; then
     sedit --arg f "$(sed '$d' "$PRODUCT/$report" | tail -c 12000)" '.repair_feedback=$f|.candidate=null'; del_ref "$tag"; transition BUILD lane_audit_fix
@@ -205,7 +213,7 @@ phase_integrated(){
   report="reports/factory_integrated_audit.md"; mkdir -p "$PRODUCT/reports"
   agent integrated-auditor "Fresh independent cross-system audit of exact SHA $sha. You are distinct from all builders and lane auditors. Verify integration/rules/dashboard/billing contracts, booking enforcement, rollback/recovery, entitlements, accessibility-sensitive behavior and the real Wix scaffold assumptions. Never fix. Write only $report ending exactly VERDICT: ACCEPT or VERDICT: FIX." || rc=$?
   rc=${rc:-0}; (( rc==0 )) && [[ -f "$PRODUCT/$report" ]] || { opfail INTEGRATED_AUDIT "$([[ $rc == 75 ]] && echo provider_transient || echo integrated_auditor_failed)"; return; }
-  readonly_ok "$report" || { opfail INTEGRATED_AUDIT integrated_auditor_scope_violation; return; }; evidence integrated_audit.md "$report"; verdict="$(tail -n1 "$PRODUCT/$report" | sed -n 's/^VERDICT: //p')"
+  readonly_ok "$report" || { opfail INTEGRATED_AUDIT integrated_auditor_scope_violation; return; }; evidence integrated_audit.md "$report"; verdict="$(parse_verdict "$PRODUCT/$report")"
   if [[ "$verdict" == ACCEPT ]]; then transition WIX_QA integrated_audit_accept
   elif [[ "$verdict" == FIX ]]; then sedit --arg f "$(sed '$d' "$PRODUCT/$report" | tail -c 12000)" '.repair_feedback=$f|.candidate=null'; del_ref "$tag"; transition PLAN integrated_audit_fix
   else opfail INTEGRATED_AUDIT invalid_integrated_verdict; fi
@@ -226,7 +234,7 @@ phase_wix(){
   report="reports/factory_wix_live_audit.md"; mkdir -p "$PRODUCT/reports"
   agent wix-live-auditor "Empirically audit exact SHA $sha using Wix MCP after privileged CLI auth/build/dev-site resolution succeeded. Never inspect credentials/auth files, publish, release, delete, manage billing/domains/team/org, or touch production. Prefer reads; rollback any reversible QA mutation. Verify the real scaffold, actual app binding, Bookings contracts, generated/registered extension reality, dashboard compatibility, permissions, entitlement inputs and webhook assumptions where testable. Never fix. Write only $report ending exactly VERDICT: ACCEPT, VERDICT: FIX, or VERDICT: BLOCKED_EXTERNAL." || rc=$?
   rc=${rc:-0}; (( rc==0 )) && [[ -f "$PRODUCT/$report" ]] || { opfail WIX_QA "$([[ $rc == 75 ]] && echo provider_transient || echo wix_live_auditor_failed)"; return; }
-  readonly_ok "$report" || { opfail WIX_QA wix_live_scope_violation; return; }; evidence wix_live_audit.md "$report"; verdict="$(tail -n1 "$PRODUCT/$report" | sed -n 's/^VERDICT: //p')"
+  readonly_ok "$report" || { opfail WIX_QA wix_live_scope_violation; return; }; evidence wix_live_audit.md "$report"; verdict="$(parse_verdict "$PRODUCT/$report")"
   case "$verdict" in
     ACCEPT) transition RELEASE_AUDIT wix_live_accept;;
     BLOCKED_EXTERNAL) transition BLOCKED_EXTERNAL wix_live_blocked;;
@@ -241,7 +249,7 @@ phase_release(){
   proof="$(find "$GITHUB_WORKSPACE/.factory/evidence" -maxdepth 1 -type f -print0 | sort -z | xargs -0 cat 2>/dev/null | tail -c 40000)"
   agent release-readiness-auditor "FINAL independent release audit of exact SHA $sha. Sole READY authority. Current immutable factory evidence follows:\n$proof\nRequire fresh deterministic checks, fresh integrated ACCEPT, fresh Wix empirical ACCEPT, correct app binding $EXPECTED_WIX_APP_ID, real Wix-generated scaffold provenance, and no unresolved repair. If this run began from the already accepted benchmarked product without a new candidate diff, a fresh integrated audit substitutes for a new lane audit; otherwise require the independent lane audit too. Never fix or plan. Write only $report ending exactly VERDICT: READY or VERDICT: NOT_READY." || rc=$?
   rc=${rc:-0}; (( rc==0 )) && [[ -f "$PRODUCT/$report" ]] || { opfail RELEASE_AUDIT "$([[ $rc == 75 ]] && echo provider_transient || echo release_auditor_failed)"; return; }
-  readonly_ok "$report" || { opfail RELEASE_AUDIT release_scope_violation; return; }; evidence release_audit.md "$report"; verdict="$(tail -n1 "$PRODUCT/$report" | sed -n 's/^VERDICT: //p')"
+  readonly_ok "$report" || { opfail RELEASE_AUDIT release_scope_violation; return; }; evidence release_audit.md "$report"; verdict="$(parse_verdict "$PRODUCT/$report")"
   if [[ "$verdict" == READY ]]; then
     checks || { opfail RELEASE_AUDIT final_deterministic_gate_failed; return; }; fetch_product; remote="$(git -C "$GITHUB_WORKSPACE" rev-parse "$PRODUCT_REF")"; [[ "$remote" == "$accepted" ]] || { opfail RELEASE_AUDIT accepted_base_moved; return; }
     [[ "$sha" == "$accepted" ]] || push_ref "$sha" "refs/heads/$PRODUCT_BRANCH"; del_ref "$tag"; sedit --arg s "$sha" '.accepted_base=$s|.candidate=null|.repair_feedback=null'; transition READY final_release_ready

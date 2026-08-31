@@ -1,0 +1,126 @@
+{
+  "schemaVersion": 2,
+  "policy": "live headless tool-call health -> responsive tier -> task-specific capability order; OX/x-preview first when healthy; independent audit primary preferred; upstream models retained only as fallback",
+  "responsiveThresholdSeconds": 30,
+  "healthyCount": 4,
+  "responsiveCount": 4,
+  "current": {
+    "phase": "INTEGRATED_AUDIT",
+    "lane": "integration",
+    "role": "integrated-auditor",
+    "builderChain": "opencode/mimo-v2.5-free opencode/big-pickle opencode/muse-spark-1.2-contributor-free opencode/nemotron-3.5-lightning-free",
+    "reviewChain": "opencode/big-pickle opencode/nemotron-3.5-lightning-free opencode/mimo-v2.5-free opencode/muse-spark-1.2-contributor-free",
+    "builderPrimary": "opencode/mimo-v2.5-free",
+    "reviewPrimary": "opencode/big-pickle"
+  },
+  "probes": [
+    {
+      "schemaVersion": 1,
+      "model": "big-pickle",
+      "healthy": true,
+      "reason": "ok",
+      "exitStatus": 0,
+      "elapsedSeconds": 11,
+      "proof": "headless bash tool-call nonce round-trip"
+    },
+    {
+      "schemaVersion": 1,
+      "model": "deepseek-v4-flash-free",
+      "healthy": false,
+      "reason": "provider-error",
+      "exitStatus": 1,
+      "elapsedSeconds": 2,
+      "proof": "headless bash tool-call nonce round-trip"
+    },
+    {
+      "schemaVersion": 1,
+      "model": "hy3-free",
+      "healthy": false,
+      "reason": "provider-error",
+      "exitStatus": 1,
+      "elapsedSeconds": 2,
+      "proof": "headless bash tool-call nonce round-trip"
+    },
+    {
+      "schemaVersion": 1,
+      "model": "laguna-s-2.1-free",
+      "healthy": false,
+      "reason": "provider-error",
+      "exitStatus": 1,
+      "elapsedSeconds": 2,
+      "proof": "headless bash tool-call nonce round-trip"
+    },
+    {
+      "schemaVersion": 1,
+      "model": "ling-3.0-flash-free",
+      "healthy": false,
+      "reason": "provider-error",
+      "exitStatus": 1,
+      "elapsedSeconds": 2,
+      "proof": "headless bash tool-call nonce round-trip"
+    },
+    {
+      "schemaVersion": 1,
+      "model": "ling-3.0-tiny-free",
+      "healthy": false,
+      "reason": "provider-error",
+      "exitStatus": 1,
+      "elapsedSeconds": 2,
+      "proof": "headless bash tool-call nonce round-trip"
+    },
+    {
+      "schemaVersion": 1,
+      "model": "mimo-v2.5-free",
+      "healthy": true,
+      "reason": "ok",
+      "exitStatus": 0,
+      "elapsedSeconds": 12,
+      "proof": "headless bash tool-call nonce round-trip"
+    },
+    {
+      "schemaVersion": 1,
+      "model": "muse-spark-1.2-contributor-free",
+      "healthy": true,
+      "reason": "ok",
+      "exitStatus": 0,
+      "elapsedSeconds": 8,
+      "proof": "headless bash tool-call nonce round-trip"
+    },
+    {
+      "schemaVersion": 1,
+      "model": "nemotron-3-ultra-free",
+      "healthy": false,
+      "reason": "timeout",
+      "exitStatus": 124,
+      "elapsedSeconds": 90,
+      "proof": "headless bash tool-call nonce round-trip"
+    },
+    {
+      "schemaVersion": 1,
+      "model": "nemotron-3.5-lightning-free",
+      "healthy": true,
+      "reason": "ok",
+      "exitStatus": 0,
+      "elapsedSeconds": 27,
+      "proof": "headless bash tool-call nonce round-trip"
+    },
+    {
+      "schemaVersion": 1,
+      "model": "north-mini-code-free",
+      "healthy": false,
+      "reason": "provider-error",
+      "exitStatus": 1,
+      "elapsedSeconds": 2,
+      "proof": "headless bash tool-call nonce round-trip"
+    },
+    {
+      "schemaVersion": 1,
+      "model": "x-preview-f-free",
+      "healthy": false,
+      "reason": "provider-error",
+      "exitStatus": 1,
+      "elapsedSeconds": 2,
+      "proof": "headless bash tool-call nonce round-trip"
+    }
+  ]
+}

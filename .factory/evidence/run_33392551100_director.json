@@ -1,0 +1,5 @@
+{
+  "lane": "integration",
+  "task": "Repair the integrated deterministic gate failure at SHA ec916b75d5600e02d679d264648ac92333d721f1. Diagnose the exact failing deterministic check, fix the underlying platform integration code or scaffold metadata causing the failure, and ensure the integrated preview passes all deterministic checks (typecheck, build, tests). Rules, Dashboard, and Billing are complete; this is the sole remaining lane. Do not fabricate Wix bindings — surface exact blockers if authenticated tooling cannot complete registration.",
+  "reason": "NEXT_CYCLE.md designates integration as the only remaining active lane with rules/dashboard/billing complete. The fresh integrated deterministic gate failure blocks product progress. The integration builder must repair whatever caused the deterministic check failure on the integrated preview before any Wix Live QA or release-readiness step can proceed. State cycle 21 shows NOT_READY due to auditor unavailability; this cycle must resolve the code-level deterministic failure first."
+}

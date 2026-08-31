@@ -1,16 +1,16 @@
 {
   "architecture": "lane-machine/1",
-  "generation": 121,
-  "phase": "PLAN",
+  "generation": 122,
+  "phase": "BUILD",
   "lane": "integration",
   "accepted_base": "ec916b75d5600e02d679d264648ac92333d721f1",
   "candidate": null,
-  "repair_feedback": "Fresh integrated deterministic gate failed.",
+  "repair_feedback": "INT-C8-REPAIR-GATE: Diagnose and repair the fresh integrated deterministic gate failure. Run the full deterministic check suite (tsc, purity gate, vitest) on the current accepted tree at ec916b75d5600e02d679d264648ac92333d721f1, identify the specific file or import causing the failure, and produce a minimal repair candidate that restores all deterministic gates to green without altering domain semantics, billing policy, dashboard contracts, or governance. If the failure is caused by a missing dependency or stale lockfile rather than product code, repair that infrastructure root cause. The candidate must leave rules, dashboard, and billing lanes byte-untouched and must not advance INT-C7-LIVE Wix binding work until the gate is proven green.",
   "lease": null,
-  "last_run": 33365272481,
+  "last_run": 33365517200,
   "last_transition": {
-    "reason": "integrated_checks_failed",
-    "run_id": 33365272481
+    "reason": "director_selected_lane",
+    "run_id": 33365517200
   },
   "last_operational_failure": null
 }

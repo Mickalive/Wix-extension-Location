@@ -1,0 +1,5 @@
+{
+  "lane": "integration",
+  "task": "INT-C8-R1",
+  "reason": "The fresh integrated deterministic gate (npm run check / npm run build) is failing at SHA ec916b75d5600e02d679d264648ac92333d721f1. Rules, dashboard, and billing lanes are all complete with zero product diff, so the regression source is exclusively in integration territory (src/platform/registration or binding-state handling added by INT-C6-R1 / INT-C7-LIVE). The integration lane must diagnose the specific typecheck, purity, or test regression on the integrated tree, repair it without weakening accepted domain/platform/dashboard/billing behavior, and restore the deterministic gate to green so the product can advance toward the real Wix empirical gates (T-VP0+). This is a repair task — the product code must compile and all 548+ tests must pass before any new feature work or live-QA reattempt."
+}

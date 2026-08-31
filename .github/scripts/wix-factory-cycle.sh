@@ -223,8 +223,7 @@ phase_wix(){
   local sha tag report rc verdict
   sha="$(sget '.candidate.sha // .accepted_base')"; tag="$(sget '.candidate.tag // ""')"; prepare "$sha"
   [[ -f "$PRODUCT/wix.config.json" && "$(jq -r '.appId // empty' "$PRODUCT/wix.config.json")" == "$EXPECTED_WIX_APP_ID" ]] || { sedit '.lane="integration"|.repair_feedback="OFFICIAL_WIX_SCAFFOLD_REBASE_REQUIRED: real Wix binding missing or wrong; regenerate the exact existing app scaffold."|.candidate=null'; del_ref "$tag"; transition BUILD wix_binding_invalid; return; }
-  [[ -n "${WIX_API_KEY:-}" ]] || { transition BLOCKED_EXTERNAL wix_secret_unavailable; return; }
-  set +e; (cd "$PRODUCT" && npx -y "@wix/cli@${WIX_CLI_VERSION}" login --api-key "$WIX_API_KEY") >"$ROOT/wix-login.log" 2>&1; rc=$?; set -e; : >"$ROOT/wix-login.log"; (( rc==0 )) || { transition BLOCKED_EXTERNAL wix_auth_failed; return; }
+  [[ -n "${WIX_SITE_ID:-}" && -n "${WIX_CLIENT_ID:-}" ]] || { transition BLOCKED_EXTERNAL wix_preflight_missing; return; }
   set +e; (cd "$PRODUCT" && npx -y "@wix/cli@${WIX_CLI_VERSION}" build) >"$ROOT/wix-build.log" 2>&1; rc=$?; set -e
   if (( rc!=0 )); then
     sed -E 's/(token|secret|password|api[_ -]?key)[=: ][^ ]+/\1=[REDACTED]/Ig' "$ROOT/wix-build.log" | tail -n120 > "$GITHUB_WORKSPACE/.factory/evidence/run_${GITHUB_RUN_ID}_wix_build_failure.txt"

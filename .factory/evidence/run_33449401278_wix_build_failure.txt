@@ -1,0 +1,50 @@
+npm error npx canceled due to missing packages and no YES option: ["astro@7.2.10"]
+npm error A complete log of this run can be found in: /home/runner/.npm/_logs/2026-08-31T23_09_26_654Z-debug-0.log
+✖ Failed to build the application.
+
+💡 Please check the build output for more information
+
+----- CLI crash report at 2026-08-31T23:09:27.191Z
+Error Trace
+FailedToBuildAstroApp: FailedToBuildAstroApp
+    at reportFailure (/home/runner/.npm/_npx/5e750f7b329d56f4/node_modules/@wix/
+cli-astro-commands/src/commands/build.ts:85:32)
+    at astroBuild (/home/runner/.npm/_npx/5e750f7b329d56f4/node_modules/@wix/cli
+-astro-commands/src/commands/build.ts:138:7)
+    at process.processTicksAndRejections
+(node:internal/process/task_queues:105:5)
+    at async <anonymous> (/home/runner/.npm/_npx/5e750f7b329d56f4/node_modules/@
+wix/cli-astro-commands/src/commands/build.ts:161:11)
+    at async runCommand (/home/runner/.npm/_npx/5e750f7b329d56f4/node_modules/@w
+ix/cli-astro-commands/src/commands/render-command.tsx:207:5)
+    at async _Command.<anonymous> (/home/runner/.npm/_npx/5e750f7b329d56f4/node_
+modules/@wix/cli-astro-commands/src/commands/build.ts:157:7)
+    at async _Command.parseAsync (/home/runner/.npm/_npx/5e750f7b329d56f4/node_m
+odules/node_modules/commander/lib/command.js:1104:5)
+    at async <anonymous> (/home/runner/.npm/_npx/5e750f7b329d56f4/node_modules/@
+wix/cli/src/index.tsx:119:25)
+caused by: Error: Command failed with exit code 1: npx --no-install astro build
+npm error npx canceled due to missing packages and no YES option:
+["astro@7.2.10"]
+npm error A complete log of this run can be found in:
+/home/runner/.npm/_logs/2026-08-31T23_09_26_654Z-debug-0.log
+    at makeError (/home/runner/.npm/_npx/5e750f7b329d56f4/node_modules/node_modu
+les/execa/lib/error.js:60:11)
+    at handlePromise (/home/runner/.npm/_npx/5e750f7b329d56f4/node_modules/node_
+modules/execa/index.js:124:26)
+    at process.processTicksAndRejections
+(node:internal/process/task_queues:105:5)
+    at async astroBuild (/home/runner/.npm/_npx/5e750f7b329d56f4/node_modules/@w
+ix/cli-astro-commands/src/commands/build.ts:136:7)
+    at async <anonymous> (/home/runner/.npm/_npx/5e750f7b329d56f4/node_modules/@
+wix/cli-astro-commands/src/commands/build.ts:161:11)
+    at async runCommand (/home/runner/.npm/_npx/5e750f7b329d56f4/node_modules/@w
+ix/cli-astro-commands/src/commands/render-command.tsx:207:5)
+    at async _Command.<anonymous> (/home/runner/.npm/_npx/5e750f7b329d56f4/node_
+modules/@wix/cli-astro-commands/src/commands/build.ts:157:7)
+    at async _Command.parseAsync (/home/runner/.npm/_npx/5e750f7b329d56f4/node_m
+odules/node_modules/commander/lib/command.js:1104:5)
+    at async <anonymous> (/home/runner/.npm/_npx/5e750f7b329d56f4/node_modules/@
+wix/cli/src/index.tsx:119:25)
+Error Info
+{}

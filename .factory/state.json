@@ -1,7 +1,7 @@
 {
   "architecture": "lane-machine/1",
-  "generation": 220,
-  "phase": "AUDIT",
+  "generation": 221,
+  "phase": "INTEGRATED_AUDIT",
   "lane": "integration",
   "accepted_base": "ec916b75d5600e02d679d264648ac92333d721f1",
   "candidate": {
@@ -12,12 +12,8 @@
   "lease": null,
   "last_run": 33433113332,
   "last_transition": {
-    "reason": "candidate_created",
-    "run_id": 33432741238
-  },
-  "last_operational_failure": {
-    "phase": "AUDIT",
-    "reason": "invalid_lane_audit_verdict",
+    "reason": "recovered_semantic_lane_accept_after_parser_fix",
     "run_id": 33433113332
-  }
+  },
+  "last_operational_failure": null
 }

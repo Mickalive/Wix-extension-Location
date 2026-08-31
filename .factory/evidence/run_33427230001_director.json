@@ -1,0 +1,5 @@
+{
+  "lane": "integration",
+  "task": "INT-REPAIR-DET-GATE",
+  "reason": "The fresh integrated deterministic gate failed after the last integration merge. Rules, Dashboard, and Billing lanes are persistently complete per NEXT_CYCLE.json and docs/state.json (cycle 21). The only active lane is integration, and the deterministic gate failure is a post-integration regression that the integration lane must diagnose and repair before the product can progress. The integration lane must run npm ci && npm run check && npm run build against the accepted base at SHA ec916b75d5600e02d679d264648ac92333d721f1, identify the specific test/typecheck/build failure, produce a repair candidate that restores the deterministic gate to green, and obtain a fresh integration audit ending VERDICT: ACCEPT. No lane reassignment is warranted: the other three lanes have zero open tasks and their last cycle audits were no-op ACCEPT with no product diff."
+}

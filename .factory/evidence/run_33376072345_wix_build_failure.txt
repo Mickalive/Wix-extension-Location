@@ -1,0 +1,21 @@
+✖ A configuration file was found, but it is either malformed or missing required
+ fields, preventing project type identification.
+
+💡 Ensure that you are executing the command from inside a project directory.
+
+----- CLI crash report at 2026-08-31T09:09:40.738Z
+Error Trace
+FailedToIdentifyProgramFlow: FailedToIdentifyProgramFlow
+    at _Command.<anonymous> (/home/runner/.npm/_npx/5e750f7b329d56f4/node_module
+s/@wix/cli/src/program.ts:80:15)
+    at _Command.emit (node:events:519:28)
+    at _Command._parseCommand (/home/runner/.npm/_npx/5e750f7b329d56f4/node_modu
+les/node_modules/commander/lib/command.js:1607:14)
+    at _Command.parseAsync (/home/runner/.npm/_npx/5e750f7b329d56f4/node_modules
+/node_modules/commander/lib/command.js:1104:16)
+    at <anonymous> (/home/runner/.npm/_npx/5e750f7b329d56f4/node_modules/@wix/cl
+i/src/index.tsx:119:39)
+    at process.processTicksAndRejections
+(node:internal/process/task_queues:105:5)
+Error Info
+{}

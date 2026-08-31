@@ -1,0 +1,61 @@
+# Integrated Audit — cross-system contract verification
+
+- **Auditor:** independent integrated auditor (read-only except this report; no product code, planning, governance, or tests modified).
+- **Subject SHA:** `ec916b75d5600e02d679d264648ac92333d721f1` (HEAD of the working tree; product tree clean — `git status --short` shows only governance-file drift, out of scope).
+- **Date:** 2026-08-31.
+- **Scope:** integration ↔ rules ↔ dashboard ↔ billing contracts: booking-time enforcement, schedule mutation apply/rollback/recovery, entitlement gating, webhook ingestion, registration honesty, and the real-Wix scaffold assumptions. Adversarial cross-lane tracing of the full apply flow, not just per-lane suites.
+- **Executed gates:** `npm run check` (typecheck + purity + vitest) → exit 0, 548/548 tests in 49 files; `npm test` in `tests/ui` (node --test) → 210/210. The `PURITY GATE FAILED` stdout lines during `npm run check` are the asserted negative-control fixture inside `tests/platform/purity-gate.spec.ts` (expected; the real gate printed "Purity gate passed").
+
+---
+
+## 1. CRITICAL — F1: cross-lane contract contradiction on the apply-plan request body (dashboard ↔ integration)
+
+The dashboard's apply request and the platform's apply endpoint contradict each other, and **each lane's own test suite pins its side of the contradiction**. In the integrated product, every "Apply to schedules" click fails with HTTP 400 before any lookup or execution.
+
+**Dashboard side (sends `ops`):**
+- `src/ui/services/bridge.js:298-303` — `requestApply(ops, confirmedDiffHash)` POSTs to `/apply-plan` with body `{ ops, confirmedDiffHash }`.
+- `src/ui/pages/rulesEditorPage.js:923-924` — `handleApply` calls `bridge.requestApply(ops, state.confirmedHash)` where `ops = computeScheduleDiff(...).ops`.
+- Pinned by `tests/ui/bridge.test.js:112-127` — "requestApply posts ops plus the confirmed diff hash" asserts `seen[0].body.ops` and `seen[0].body.confirmedDiffHash`.
+
+**Platform side (rejects `ops`):**
+- `src/platform/http/mutationEndpoints.ts:90-98` — `postApplyPlan` rejects ANY key other than `confirmedDiffHash` with `INVALID_QUERY` (400) and `details.unexpectedKeys`. The docstring states inline plans are "structurally impossible to submit".
+- Pinned by `tests/platform/http-mutations.spec.ts:107-119` — "rejects any extra key next to confirmedDiffHash" asserts `unexpectedKeys: ['planId']` for `{ confirmedDiffHash, planId }`; `{ confirmedDiffHash, ops }` fails identically with `unexpectedKeys: ['ops']`.
+
+**Why the suites miss it:** `tests/ui/applyFlow.test.js:63-83` injects a fake bridge whose `requestApply` returns a canned response; `tests/ui/mutationBridge.test.js` never tests `requestApply`; `tests/platform/http-mutations.spec.ts` never exercises the real bridge. No test runs the real bridge against the real endpoint. The bridge header (`src/ui/services/bridge.js:18-20`) claims the DTOs "mirror the accepted platform handlers ... verbatim" — false for `requestApply`.
+
+**Consequence:** the Contract §9 / Blueprint §4 flow-3 schedule-application path — the product's central destructive-but-consented mutation flow — cannot execute end-to-end. The user sees "Apply is unavailable right now" (`APPLY_UNAVAILABLE` via `describeBridgeFailure`), and no schedule change is ever applied.
+
+## 2. CRITICAL — F2: no production writer or resolver for the confirmed-diff reference (integration-internal)
+
+Even if F1 were fixed, the apply endpoint could never resolve the hash to a plan.
+
+- `src/platform/http/mutationEndpoints.ts:104-111` — `postApplyPlan` resolves the plan ONLY via `confirmedPlanLookup.findByDiffHash(hash)`; unknown hash → `NOT_FOUND` (404). The docstring says the record is "written when the user explicitly confirmed the reviewed diff".
+- **No production module implements `ConfirmedPlanLookup` or writes `ConfirmedPlanReference` anywhere in the repository.** The only implementations are test spies (`tests/platform/helpers/httpTestDoubles.ts:88-93`, `makeConfirmedPlanSpy`). The composition root (`src/platform/composition/index.ts`) wires only entitlement gate, reconciliation, and projector compaction. No `src/pages/**` adapters exist (deferred to the authenticated scaffold per `src/platform/http/README.md`), and the README's endpoint map lists no confirm/register endpoint.
+- The dashboard's `confirmedHash` is a locally computed FNV-1a digest of the diff ops (`src/ui/diff/computeScheduleDiff.js:194-204`, `fnv1aHex(stableStringify(ops))`), stored only in the editor store (`src/ui/state/editorStore.js:293-303`, `CONFIRM_DIFF_PREVIEW`). It is never transmitted to the platform except inside the F1-rejected body.
+
+**Consequence:** with the current code, the platform can never obtain the `MutationPlan` from the hash. The apply flow is doubly broken: F1 blocks at the body schema; F2 blocks at the lookup. Both must be repaired together (e.g., a confirm-time registration path that writes the `ConfirmedPlanReference` bound to the dashboard's hash, plus a bridge body that sends only `{ confirmedDiffHash }`), with a cross-lane test that runs the real bridge against the real endpoint.
+
+## 3. SECONDARY — S1: dashboard lane tests are not part of the deterministic gate
+
+- `src/platform/vitest.config.ts:16` — `include: ['tests/**/*.spec.ts']`; every `tests/ui/*.test.js` (210 tests) is excluded from `npm run check` / `npm test`.
+- The UI suite runs only via the nested `tests/ui/package.json` (`node --test`), which is not wired into the root `package.json` scripts. The dashboard lane's suite is therefore not enforced by the standard gate. (Even if wired, the current UI tests use fake bridges and would not catch F1.)
+
+## 4. SECONDARY — S2: bridge docstring overclaims verbatim mirroring
+
+`src/ui/services/bridge.js:18-20` states the mutation-lifecycle DTOs mirror `src/platform/http/mutationEndpoints.ts` "verbatim". `requestApply` demonstrably does not (F1). The claim masks the drift instead of surfacing it.
+
+## 5. Verified-clean areas (no findings)
+
+- **Deterministic gates:** `npm run check` exit 0 — strict `tsc --noEmit`, purity gate green over all protected roots (`src/domain`, `src/billing/pure`, `src/platform/{http,webhooks,validation-plugin,composition,registration}`), 548/548 tests. UI suite 210/210.
+- **Booking-time enforcement:** validation-plugin handlers/targets/payload/counters/incidents consistent with the six-target matrix and `failureSemanticsFor` (CREATE/CANCEL fail-closed, RESCHEDULE fail-open); domain `evaluate`/`validate`/`explain` semantics match the contract; no overclaim of reschedule enforcement or hard caps.
+- **Schedule-mutation machinery (aside from F1/F2):** orchestrator snapshot→diff→idempotent-writes→revision-check→verify→rollback→audit sequence, UUIDv5 idempotency keys, crash `APPLY_IN_PROGRESS` semantics, and explicit `postRecover` are internally consistent and test-pinned (orchestrator-terminal-states, idempotency, webhooks-chaos all green).
+- **Entitlement/billing:** projection→snapshot→gate composition, fail-open degraded posture, tier table, billable-location counting with floor, and the pinned meter DTO are consistent across `src/billing/**`, `src/platform/composition/**`, `src/platform/http/meterEndpoint.ts`, and the dashboard meter consumption (DASH-C4-1/DASH-C5-1).
+- **Registration honesty:** `wix.config.example.json` uses only the scaffold placeholder; classifier can only under-report linkage; all extension inventory rows `PLANNED_UNTIL_T_VP0`; no fabricated identifiers.
+- **Identifier hygiene:** the real App ID `3e9ec3af-001b-4684-a197-a5133677844d` appears in exactly one committed file, `reports/wix-live/BOOTSTRAP_BINDING.md` (tracked, unmodified at HEAD) — legitimate persisted live-evidence, not a product-code leak. No identifier-shaped strings in product code.
+- **Failure posture:** fail-closed auth before any store, fail-open entitlement degradation with persisted warnings, bounded polling, explicit-only recovery — all consistent with the contract.
+
+## 6. Verdict rationale
+
+The per-lane suites are green and the domain/platform/billing machinery is internally sound, but the integrated product's central schedule-application flow cannot function: the dashboard bridge and the platform endpoint are pinned by their own tests to contradictory request-body contracts (F1), and no production code can resolve the confirmed-diff hash to a plan (F2). Both are critical cross-lane integration defects that no current test exercises end-to-end. This is a genuine FIX, not an infrastructure or external-blocker condition.
+
+VERDICT: FIX

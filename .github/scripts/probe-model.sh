@@ -4,7 +4,8 @@ set -euo pipefail
 model="${1:?model id required}"
 out="${RUNNER_TEMP:?}/model-probe-$model"
 mkdir -p "$out"
-target=".factory-probe-target"
+slug="${model//[^A-Za-z0-9_.-]/_}"
+target=".factory-probe-target-$slug"
 nonce="WIX_PROBE_${GITHUB_RUN_ID:-local}_${RANDOM}_${RANDOM}_$(date +%s)"
 printf '%s\n' "$nonce" > "$target"
 log="$out/probe.log"
@@ -13,7 +14,7 @@ started=$(date +%s)
 set +e
 timeout --signal=TERM --kill-after=10s 90s \
   opencode run --model "opencode/$model" --agent model-probe \
-  "This is a health probe. You MUST use the bash tool to run exactly: cat .factory-probe-target . Then reply with exactly the file content and nothing else. Do not guess it." \
+  "This is a health probe. You MUST use the bash tool to run exactly: cat $target . Then reply with exactly the file content and nothing else. Do not guess it." \
   >"$log" 2>&1
 status=$?
 set -e

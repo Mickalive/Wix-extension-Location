@@ -1,0 +1,5 @@
+{
+  "lane": "integration",
+  "task": "Repair deterministic npm run check gate broken by scaffold reference to .astro/types.d.ts",
+  "reason": "The candidate introduced src/env.d.ts (containing /// <reference path='../.astro/types.d.ts' />) and modified tsconfig.json to extend astro/tsconfigs/strict and include .astro/types.d.ts. The .astro/ directory is gitignored and generated only by astro sync / wix dev / wix build. In the credential-free acceptance sequence (npm ci --ignore-scripts && npm run check && npm run build), .astro/types.d.ts does not exist, causing tsc --noEmit to fail with TS6053 before vitest or purity gates run. This is a same-lane integration repair: the integration builder owns scaffold metadata (tsconfig.json, src/env.d.ts, build/check scripts). The repair must adapt the scaffold surface so the deterministic gate passes without credentials—e.g., add astro sync to the typecheck or check script chain before tsc --noEmit, or commit a minimal stub .astro/types.d.ts that satisfies the reference, ensuring npm run check succeeds in a credential-free environment while keeping the real Wix build path intact."
+}

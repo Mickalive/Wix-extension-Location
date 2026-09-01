@@ -79,6 +79,7 @@ jobs:
 
       - name: Prepare Wix candidate environment
         if: ${{ steps.state.outputs.final != 'true' }}
+        continue-on-error: true
         shell: bash
         env:
           WIX_API_KEY: ${{ secrets.WIX_API_KEY }}
@@ -110,7 +111,7 @@ jobs:
           fi
 
           case "$failure_reason" in
-            none|provider_transient|director_failed|lane_auditor_failed|integrated_auditor_failed|wix_live_auditor_failed|release_auditor_failed|invalid_lane_audit_verdict|invalid_integrated_verdict|invalid_wix_live_verdict|invalid_release_verdict) ;;
+            none|provider_transient|director_failed|lane_auditor_failed|integrated_auditor_failed|wix_live_auditor_failed|release_auditor_failed|invalid_lane_audit_verdict|invalid_integrated_verdict|invalid_wix_live_verdict|invalid_release_verdict|deterministic_dependency_transient|wix_build_transient) ;;
             *) echo "Non-recoverable operational failure: $failure_reason"; exit 0 ;;
           esac
 

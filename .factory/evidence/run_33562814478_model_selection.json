@@ -1,0 +1,72 @@
+{
+  "schemaVersion": 2,
+  "policy": "live headless tool-call health -> responsive tier -> task-specific capability order; OX/x-preview first when healthy; independent audit primary preferred; upstream models retained only as fallback",
+  "responsiveThresholdSeconds": 30,
+  "healthyCount": 3,
+  "responsiveCount": 3,
+  "current": {
+    "phase": "INTEGRATED_AUDIT",
+    "lane": "integration",
+    "role": "integrated-auditor",
+    "builderChain": "opencode/mimo-v2.5-free opencode/big-pickle opencode/muse-spark-1.2-contributor-free",
+    "reviewChain": "opencode/big-pickle opencode/mimo-v2.5-free opencode/muse-spark-1.2-contributor-free",
+    "builderPrimary": "opencode/mimo-v2.5-free",
+    "reviewPrimary": "opencode/big-pickle"
+  },
+  "probes": [
+    {
+      "schemaVersion": 1,
+      "model": "big-pickle",
+      "healthy": true,
+      "reason": "ok",
+      "exitStatus": 0,
+      "elapsedSeconds": 10,
+      "proof": "headless bash tool-call nonce round-trip"
+    },
+    {
+      "schemaVersion": 1,
+      "model": "laguna-s-2.1-free",
+      "healthy": false,
+      "reason": "provider-error",
+      "exitStatus": 1,
+      "elapsedSeconds": 5,
+      "proof": "headless bash tool-call nonce round-trip"
+    },
+    {
+      "schemaVersion": 1,
+      "model": "mimo-v2.5-free",
+      "healthy": true,
+      "reason": "ok",
+      "exitStatus": 0,
+      "elapsedSeconds": 11,
+      "proof": "headless bash tool-call nonce round-trip"
+    },
+    {
+      "schemaVersion": 1,
+      "model": "muse-spark-1.2-contributor-free",
+      "healthy": true,
+      "reason": "ok",
+      "exitStatus": 0,
+      "elapsedSeconds": 9,
+      "proof": "headless bash tool-call nonce round-trip"
+    },
+    {
+      "schemaVersion": 1,
+      "model": "north-mini-code-free",
+      "healthy": false,
+      "reason": "provider-error",
+      "exitStatus": 1,
+      "elapsedSeconds": 5,
+      "proof": "headless bash tool-call nonce round-trip"
+    },
+    {
+      "schemaVersion": 1,
+      "model": "x-preview-f-free",
+      "healthy": false,
+      "reason": "provider-error",
+      "exitStatus": 1,
+      "elapsedSeconds": 4,
+      "proof": "headless bash tool-call nonce round-trip"
+    }
+  ]
+}

@@ -16,9 +16,8 @@ permission:
     "npm test*": allow
     "npm run check*": allow
     "npm run typecheck*": allow
-    "npm run build*": allow
   task: deny
   external_directory: deny
   question: deny
 ---
-Audit only the exact dashboard candidate named by the workflow. Reproduce UI, accessibility-sensitive, state and contract evidence yourself. Never fix code. Write only the requested lane-audit report and end with exactly VERDICT: ACCEPT or VERDICT: FIX.
+Audit only the exact dashboard candidate named by the workflow. Reproduce UI, accessibility-sensitive, state and cross-lane contract evidence using credential-free deterministic checks. Do not run the real Wix build; that belongs exclusively to WIX_QA and the final release gate. Never fix code. Write only the requested lane-audit report and end with exactly VERDICT: ACCEPT or VERDICT: FIX.

@@ -51,8 +51,15 @@ jobs:
           grep -Fq "cron: '*/15 * * * *'" .github/workflows/wix-build-loop.yml
           grep -Fq 'group: wix-product-factory-' .github/workflows/wix-build-loop.yml
           grep -Fq 'Stagnation guard:' .github/workflows/wix-build-loop.yml
+          grep -Fq 'continue-on-error: true' .github/workflows/wix-build-loop.yml
           grep -Fq 'x-preview-f-free' .github/scripts/probe-and-select-models.sh
           grep -Fq 'WIX_CLIENT_ID' .github/scripts/wix-env-preflight.sh
+          grep -Fq 'WIX_MCP_READY' .github/scripts/wix-env-preflight.sh
+          grep -Fq '@wix/mcp@1.0.72' .github/scripts/wix-env-preflight.sh
+          grep -Fq 'blocked_resume_phase' .github/scripts/wix-factory-cycle.sh
+          grep -Fq 'gate_proofs' .github/scripts/wix-factory-cycle.sh
+          grep -Fq 'deterministic_checks' .github/scripts/wix-factory-cycle.sh
+          grep -Fq 'wix_build_check' .github/scripts/wix-factory-cycle.sh
           grep -Fq 'OFFICIAL_WIX_SCAFFOLD_REBASE_REQUIRED' .github/scripts/wix-factory-cycle.sh
           grep -Fq -- '--extend-app-id "$EXPECTED_WIX_APP_ID"' .github/scripts/wix-official-scaffold.sh
           grep -Fq 'schemaVersion:2' .github/scripts/select-models.sh
@@ -87,8 +94,9 @@ jobs:
             cd "$product"
             test -f package-lock.json
             npm ci --ignore-scripts --no-audit --no-fund
+            # CI is intentionally credential-free. The real Wix build is proven
+            # in WIX_QA and re-run immediately before READY promotion.
             npm run check
-            npm run build
           )
           git worktree remove --force "$product"
           git worktree prune

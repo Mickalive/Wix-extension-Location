@@ -8,7 +8,7 @@ name: Wix Product Factory
     branches: ["main"]
     paths:
       - ".factory/state.json"
-      - ".github/workflows/wix-build-loop.yml"
+      - ".github/workflows/**"
       - ".github/scripts/**"
       - ".github/actions/setup-opencode/**"
       - ".opencode/agents/**"

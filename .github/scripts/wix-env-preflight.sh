@@ -6,19 +6,14 @@ set -Eeuo pipefail
 STATE="$GITHUB_WORKSPACE/.factory/state.json"
 SITE_STATE="$GITHUB_WORKSPACE/.factory/wix-dev-site.json"
 phase="$(jq -r '.phase' "$STATE")"
-lane="$(jq -r '.lane // ""' "$STATE")"
 effective_phase="$phase"
 if [[ "$phase" == BLOCKED_EXTERNAL ]]; then
   effective_phase="$(jq -r '.blocked_resume_phase // "WIX_QA"' "$STATE")"
 fi
 
-# Wix runtime state is mandatory for live/release gates and is also made
-# available to integration/integrated auditors so an independent auditor that
-# chooses to reproduce `npm run build` does not create a false FIX. Other lane
-# audits remain credential-free. BUILD retries own their own authentication.
+# Wix runtime preparation belongs only to empirical Wix/release gates.
 case "$effective_phase" in
-  WIX_QA|RELEASE_AUDIT|INTEGRATED_AUDIT) ;;
-  AUDIT) [[ "$lane" == integration ]] || exit 0 ;;
+  WIX_QA|RELEASE_AUDIT) ;;
   *) exit 0 ;;
 esac
 
@@ -35,8 +30,8 @@ trap cleanup EXIT
 rm -rf "$TMP"
 git -C "$GITHUB_WORKSPACE" worktree add --detach "$TMP" "$ref" >/dev/null
 
-# Malformed/core-only candidates are product defects, not preflight crashes.
-# Let the authoritative state machine route them to integration repair.
+# Malformed/core-only candidates are product defects, not auth/network defects.
+# Let the authoritative state machine classify them through its real Wix build.
 [[ -f "$TMP/wix.config.json" ]] || exit 0
 if ! jq -e --arg id "$EXPECTED_WIX_APP_ID" '.appId==$id and (.projectId|type=="string" and length>0) and (.projectType|type=="string" and length>0)' "$TMP/wix.config.json" >/dev/null 2>&1; then
   exit 0
@@ -73,6 +68,17 @@ set +e
 rc=$?
 set -e
 if (( rc != 0 )); then
+  if grep -Eqi 'FailedToIdentifyProgramFlow|configuration file.*(malformed|missing required)|project type identification' "$SELECT_LOG"; then
+    # Do not misclassify an incomplete Wix project as BLOCKED_EXTERNAL. These
+    # sentinels let phase_wix reach its real wix build, whose structural-failure
+    # classifier deterministically routes the cumulative candidate to integration repair.
+    printf 'WIX_SITE_ID=__STRUCTURE_INVALID__\n' >>"$GITHUB_ENV"
+    printf 'WIX_CLIENT_ID=__STRUCTURE_INVALID__\n' >>"$GITHUB_ENV"
+    printf 'WIX_PREFLIGHT_STRUCTURE_INVALID=1\n' >>"$GITHUB_ENV"
+    echo "::warning::Wix CLI cannot identify the candidate project; handing this to the product/scaffold repair path rather than BLOCKED_EXTERNAL."
+    : >"$SELECT_LOG"
+    exit 0
+  fi
   tail -n80 "$SELECT_LOG" >&2
   : >"$SELECT_LOG"
   exit 44
@@ -106,8 +112,6 @@ done <"$TMP/.env.local"
 printf 'WIX_SITE_ID=%s\n' "$site_id" >>"$GITHUB_ENV"
 
 # WIX_QA needs a real Wix MCP, not merely agent permissions named wix_*.
-# Configure it only for the empirical gate. @wix/mcp is pinned and consumes
-# Wix CLI auth without exposing the auth files to the LLM.
 if [[ "$effective_phase" == WIX_QA ]]; then
   mcp_config='{"mcp":{"wix":{"type":"local","command":["npx","-y","@wix/mcp@1.0.72","--wixCliAuth"],"enabled":true,"timeout":20000}}}'
   MCP_LOG="$RUNNER_TEMP/wix-mcp-probe-$GITHUB_RUN_ID.log"

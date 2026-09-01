@@ -1,22 +1,24 @@
 {
   "architecture": "lane-machine/1",
-  "generation": 234,
-  "phase": "BUILD",
+  "generation": 235,
+  "phase": "AUDIT",
   "lane": "integration",
   "accepted_base": "ec916b75d5600e02d679d264648ac92333d721f1",
   "candidate": {
-    "sha": "26d479ad20552d06a930341ac029af3084471917",
-    "tag": "refs/tags/factory-candidate/dashboard/228"
+    "sha": "704a639c1d03a1556d185efdbc0f009ea9b32063",
+    "tag": "refs/tags/factory-candidate/integration/234",
+    "base": "26d479ad20552d06a930341ac029af3084471917",
+    "lane": "integration"
   },
-  "repair_feedback": "OFFICIAL_WIX_SCAFFOLD_REBASE_REQUIRED: Wix CLI cannot identify the cumulative candidate as a valid Wix app (FailedToIdentifyProgramFlow). Preserve the current dashboard candidate 26d479ad20552d06a930341ac029af3084471917 exactly as the cumulative base, overlay the authenticated official existing-app scaffold for app 3e9ec3af-001b-4684-a197-a5133677844d, preserve all dashboard/domain/billing work, regenerate package-lock, keep .astro generated-only, then run deterministic checks before creating the new integration candidate.",
+  "repair_feedback": null,
   "lease": null,
-  "last_run": 33546009134,
+  "last_run": 33554801468,
   "last_transition": {
-    "reason": "reclassify_wix_preflight_as_scaffold_repair",
-    "run_id": 33546009134
+    "reason": "candidate_created",
+    "run_id": 33554801468
   },
   "last_operational_failure": null,
-  "control_revision": "acddbe39a17e3f1b61d18b53321cc2789508245f",
+  "control_revision": "45782c75d8a8ea222a3e1592b3b7714d2a053a7f",
   "gate_proofs": {},
   "blocked_resume_phase": null
 }

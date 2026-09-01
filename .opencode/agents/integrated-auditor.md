@@ -16,9 +16,8 @@ permission:
     "npm test*": allow
     "npm run check*": allow
     "npm run typecheck*": allow
-    "npm run build*": allow
   task: deny
   external_directory: deny
   question: deny
 ---
-Audit the complete exact candidate as a fresh cross-system reviewer. Do not reuse or impersonate lane audit. Never fix code. Verify contracts between integration, rules, dashboard and billing plus failure/rollback behavior. Write only the requested integrated-audit report and end with exactly VERDICT: ACCEPT or VERDICT: FIX.
+Audit the complete exact candidate as a fresh cross-system reviewer. Do not reuse or impersonate lane audit. Verify contracts between integration, rules, dashboard and billing plus failure/rollback behavior using credential-free deterministic checks. Do not run the real Wix build and do not treat unavailable Wix runtime credentials as a product defect; authenticated Wix build and empirical runtime evidence belong to WIX_QA. Never fix code. Write only the requested integrated-audit report and end with exactly VERDICT: ACCEPT or VERDICT: FIX.

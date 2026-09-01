@@ -135,7 +135,8 @@ push_ref(){ git -C "$PRODUCT" -c "http.extraheader=AUTHORIZATION: basic $(auth)"
 del_ref(){ [[ -z "${1:-}" || "$1" == null ]] && return 0; git -C "$PRODUCT" -c "http.extraheader=AUTHORIZATION: basic $(auth)" push origin ":$1" >/dev/null 2>&1 || true; }
 
 commit_candidate(){
-  local base="$1" lane="$2" candidate tag actor="wix-$lane-builder"
+  local base="$1" lane="$2" candidate tag old_tag actor="wix-$lane-builder"
+  old_tag="$(sget '.candidate.tag // ""')"
   if [[ "$lane" == integration && "$(sget '.repair_feedback // ""')" == OFFICIAL_WIX_SCAFFOLD_REBASE_REQUIRED* ]]; then actor="wix-official-scaffold"; fi
   git -C "$PRODUCT" config user.name "$actor"
   git -C "$PRODUCT" config user.email "$actor@users.noreply.github.com"
@@ -143,6 +144,7 @@ commit_candidate(){
   if git -C "$PRODUCT" diff --cached --quiet; then candidate="$base"; else git -C "$PRODUCT" commit -m "candidate($lane): generation $(sget '.generation')" >/dev/null; candidate="$(git -C "$PRODUCT" rev-parse HEAD)"; fi
   tag="refs/tags/factory-candidate/$lane/$(sget '.generation')"
   push_ref "$candidate" "$tag"
+  if [[ -n "$old_tag" && "$old_tag" != null && "$old_tag" != "$tag" ]]; then del_ref "$old_tag"; fi
   sedit --arg s "$candidate" --arg t "$tag" '.candidate={sha:$s,tag:$t}|.repair_feedback=null'
   transition AUDIT candidate_created
 }
@@ -155,12 +157,12 @@ phase_plan(){
   readonly_ok "$report" || { opfail PLAN director_scope_violation; return; }
   jq -e '.lane and .task and .reason and (.lane=="integration" or .lane=="rules" or .lane=="dashboard" or .lane=="billing")' "$PRODUCT/$report" >/dev/null || { opfail PLAN invalid_director_json; return; }
   evidence director.json "$report"; lane="$(jq -r .lane "$PRODUCT/$report")"; task="$(jq -r .task "$PRODUCT/$report")"
-  sedit --arg l "$lane" --arg t "$task" '.lane=$l|.repair_feedback=$t|.candidate=null'; transition BUILD director_selected_lane
+  sedit --arg l "$lane" --arg t "$task" '.lane=$l|.repair_feedback=$t'; transition BUILD director_selected_lane
 }
 
 phase_build(){
   local base lane who rc feedback
-  base="$(sget '.accepted_base')"; lane="$(sget '.lane')"; who="$(builder_name "$lane")"; feedback="$(sget '.repair_feedback // ""')"; prepare "$base"
+  base="$(sget '.candidate.sha // .accepted_base')"; lane="$(sget '.lane')"; who="$(builder_name "$lane")"; feedback="$(sget '.repair_feedback // ""')"; prepare "$base"
 
   if [[ "$lane" == integration && "$feedback" == OFFICIAL_WIX_SCAFFOLD_REBASE_REQUIRED* ]]; then
     [[ -n "${WIX_API_KEY:-}" ]] || { transition BLOCKED_EXTERNAL wix_secret_unavailable; return; }
@@ -177,7 +179,7 @@ phase_build(){
       return
     fi
   else
-    agent "$who" "Build only lane $lane from accepted SHA $base. Current task/repair feedback: $feedback. Produce product progress toward a finished Wix app. Modify only your lane product files. Never edit orchestration, factory state, reports, prompts, agent definitions, refs or secrets. For Wix-owned binding/scaffold files, never guess identifiers or dependency versions: only preserve or consume official generated values. Do not audit yourself." || rc=$?
+    agent "$who" "Build only lane $lane from base SHA $base. Current task/repair feedback: $feedback. Preserve all already-audited work outside your lane and produce only the requested lane repair/progress toward a finished Wix app. Modify only your lane product files. Never edit orchestration, factory state, reports, prompts, agent definitions, refs or secrets. For Wix-owned binding/scaffold files, never guess identifiers or dependency versions: only preserve or consume official generated values. Do not audit yourself." || rc=$?
     rc=${rc:-0}; (( rc==0 )) || { opfail BUILD "$([[ $rc == 75 ]] && echo provider_transient || echo builder_failed)"; return; }
   fi
 
@@ -202,32 +204,34 @@ phase_audit(){
   readonly_ok "$report" || { opfail AUDIT lane_auditor_scope_violation; return; }; evidence "${lane}_audit.md" "$report"; verdict="$(parse_verdict "$PRODUCT/$report")"
   if [[ "$verdict" == ACCEPT ]]; then transition INTEGRATED_AUDIT lane_audit_accept
   elif [[ "$verdict" == FIX ]]; then
-    sedit --arg f "$(sed '$d' "$PRODUCT/$report" | tail -c 12000)" '.repair_feedback=$f|.candidate=null'; del_ref "$tag"; transition BUILD lane_audit_fix
+    sedit --arg f "$(sed '$d' "$PRODUCT/$report" | tail -c 12000)" '.repair_feedback=$f'; transition BUILD lane_audit_fix
   else opfail AUDIT invalid_lane_audit_verdict; fi
 }
 
 phase_integrated(){
   local sha tag report rc verdict
   sha="$(sget '.candidate.sha // .accepted_base')"; tag="$(sget '.candidate.tag // ""')"; prepare "$sha"
-  checks || { sedit '.repair_feedback="Fresh integrated deterministic gate failed."|.candidate=null'; del_ref "$tag"; transition PLAN integrated_checks_failed; return; }
+  checks || { sedit '.repair_feedback="Fresh integrated deterministic gate failed."'; transition PLAN integrated_checks_failed; return; }
   report="reports/factory_integrated_audit.md"; mkdir -p "$PRODUCT/reports"
   agent integrated-auditor "Fresh independent cross-system audit of exact SHA $sha. You are distinct from all builders and lane auditors. Verify integration/rules/dashboard/billing contracts, booking enforcement, rollback/recovery, entitlements, accessibility-sensitive behavior and the real Wix scaffold assumptions. Never fix. Write only $report ending exactly VERDICT: ACCEPT or VERDICT: FIX." || rc=$?
   rc=${rc:-0}; (( rc==0 )) && [[ -f "$PRODUCT/$report" ]] || { opfail INTEGRATED_AUDIT "$([[ $rc == 75 ]] && echo provider_transient || echo integrated_auditor_failed)"; return; }
   readonly_ok "$report" || { opfail INTEGRATED_AUDIT integrated_auditor_scope_violation; return; }; evidence integrated_audit.md "$report"; verdict="$(parse_verdict "$PRODUCT/$report")"
   if [[ "$verdict" == ACCEPT ]]; then transition WIX_QA integrated_audit_accept
-  elif [[ "$verdict" == FIX ]]; then sedit --arg f "$(sed '$d' "$PRODUCT/$report" | tail -c 12000)" '.repair_feedback=$f|.candidate=null'; del_ref "$tag"; transition PLAN integrated_audit_fix
+  elif [[ "$verdict" == FIX ]]; then sedit --arg f "$(sed '$d' "$PRODUCT/$report" | tail -c 12000)" '.repair_feedback=$f'; transition PLAN integrated_audit_fix
   else opfail INTEGRATED_AUDIT invalid_integrated_verdict; fi
 }
 
 phase_wix(){
   local sha tag report rc verdict
   sha="$(sget '.candidate.sha // .accepted_base')"; tag="$(sget '.candidate.tag // ""')"; prepare "$sha"
-  [[ -f "$PRODUCT/wix.config.json" && "$(jq -r '.appId // empty' "$PRODUCT/wix.config.json")" == "$EXPECTED_WIX_APP_ID" ]] || { sedit '.lane="integration"|.repair_feedback="OFFICIAL_WIX_SCAFFOLD_REBASE_REQUIRED: real Wix binding missing or wrong; regenerate the exact existing app scaffold."|.candidate=null'; del_ref "$tag"; transition BUILD wix_binding_invalid; return; }
+  [[ -f "$PRODUCT/wix.config.json" && "$(jq -r '.appId // empty' "$PRODUCT/wix.config.json")" == "$EXPECTED_WIX_APP_ID" ]] || { sedit '.lane="integration"|.repair_feedback="OFFICIAL_WIX_SCAFFOLD_REBASE_REQUIRED: real Wix binding missing or wrong; regenerate the exact existing app scaffold."'; transition BUILD wix_binding_invalid; return; }
   [[ -n "${WIX_SITE_ID:-}" && -n "${WIX_CLIENT_ID:-}" ]] || { transition BLOCKED_EXTERNAL wix_preflight_missing; return; }
+  set +e; (cd "$PRODUCT" && npm ci --ignore-scripts --no-audit --no-fund) >"$ROOT/wix-npm-ci.log" 2>&1; rc=$?; set -e
+  (( rc==0 )) || { opfail WIX_QA wix_dependency_install_failed; return; }
   set +e; (cd "$PRODUCT" && npx -y "@wix/cli@${WIX_CLI_VERSION}" build) >"$ROOT/wix-build.log" 2>&1; rc=$?; set -e
   if (( rc!=0 )); then
     sed -E 's/(token|secret|password|api[_ -]?key)[=: ][^ ]+/\1=[REDACTED]/Ig' "$ROOT/wix-build.log" | tail -n120 > "$GITHUB_WORKSPACE/.factory/evidence/run_${GITHUB_RUN_ID}_wix_build_failure.txt"
-    sedit '.lane="integration"|.repair_feedback="OFFICIAL_WIX_SCAFFOLD_REBASE_REQUIRED: real Wix CLI build failed on the deliverable; regenerate official scaffold and reconcile product wiring without hand-editing Wix identifiers."|.candidate=null'; del_ref "$tag"; transition BUILD wix_build_failed; return
+    sedit '.lane="integration"|.repair_feedback="OFFICIAL_WIX_SCAFFOLD_REBASE_REQUIRED: real Wix CLI build failed on the deliverable; regenerate official scaffold and reconcile product wiring without hand-editing Wix identifiers."'; transition BUILD wix_build_failed; return
   fi
   set +e; (cd "$PRODUCT" && npx -y "@wix/cli@${WIX_CLI_VERSION}" dev-site list) >"$ROOT/wix-dev.log" 2>&1; rc=$?; set -e; (( rc==0 )) || { transition BLOCKED_EXTERNAL wix_dev_site_unavailable; return; }
   report="reports/factory_wix_live_audit.md"; mkdir -p "$PRODUCT/reports"
@@ -237,7 +241,7 @@ phase_wix(){
   case "$verdict" in
     ACCEPT) transition RELEASE_AUDIT wix_live_accept;;
     BLOCKED_EXTERNAL) transition BLOCKED_EXTERNAL wix_live_blocked;;
-    FIX) sedit --arg f "$(sed '$d' "$PRODUCT/$report" | tail -c 12000)" '.lane="integration"|.repair_feedback=$f|.candidate=null'; del_ref "$tag"; transition BUILD wix_live_fix;;
+    FIX) sedit --arg f "$(sed '$d' "$PRODUCT/$report" | tail -c 12000)" '.lane="integration"|.repair_feedback=$f'; transition BUILD wix_live_fix;;
     *) opfail WIX_QA invalid_wix_live_verdict;;
   esac
 }
@@ -253,7 +257,7 @@ phase_release(){
     checks || { opfail RELEASE_AUDIT final_deterministic_gate_failed; return; }; fetch_product; remote="$(git -C "$GITHUB_WORKSPACE" rev-parse "$PRODUCT_REF")"; [[ "$remote" == "$accepted" ]] || { opfail RELEASE_AUDIT accepted_base_moved; return; }
     [[ "$sha" == "$accepted" ]] || push_ref "$sha" "refs/heads/$PRODUCT_BRANCH"; del_ref "$tag"; sedit --arg s "$sha" '.accepted_base=$s|.candidate=null|.repair_feedback=null'; transition READY final_release_ready
   elif [[ "$verdict" == NOT_READY ]]; then
-    sedit --arg f "$(sed '$d' "$PRODUCT/$report" | tail -c 12000)" '.repair_feedback=$f|.candidate=null'; del_ref "$tag"; transition PLAN final_release_not_ready
+    sedit --arg f "$(sed '$d' "$PRODUCT/$report" | tail -c 12000)" '.repair_feedback=$f'; transition PLAN final_release_not_ready
   else opfail RELEASE_AUDIT invalid_release_verdict; fi
 }
 

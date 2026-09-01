@@ -1,13 +1,7 @@
 {
   "name": "wix-bookings-advanced-rules",
-  "version": "0.1.0",
-  "private": true,
-  "license": "UNLICENSED",
-  "description": "Advanced availability and booking rules for Wix Bookings - credential-free platform foundation (build cycle 1, task INT-C1-1).",
   "type": "module",
-  "engines": {
-    "node": ">=20.11.0"
-  },
+  "version": "0.1.0",
   "scripts": {
     "test": "npm run test:unit",
     "test:unit": "npm run check:purity && vitest run --config src/platform/vitest.config.ts",
@@ -15,11 +9,37 @@
     "typecheck": "tsc --noEmit",
     "check": "npm run typecheck && npm run check:purity && vitest run --config src/platform/vitest.config.ts",
     "check:offline": "HTTP_PROXY=http://127.0.0.1:9 HTTPS_PROXY=http://127.0.0.1:9 http_proxy=http://127.0.0.1:9 https_proxy=http://127.0.0.1:9 npm run check",
-    "build": "npm run check"
+    "build": "wix build",
+    "dev": "wix dev",
+    "release": "wix release",
+    "preview": "wix preview",
+    "generate": "wix generate"
+  },
+  "dependencies": {
+    "@wix/astro": "^2.39.0",
+    "@wix/dashboard": "^1.3.43",
+    "@wix/design-system": "^1.154.0",
+    "@wix/essentials": "^0.1.23",
+    "astro": "^5.8.0",
+    "typescript": "^5.8.3"
   },
   "devDependencies": {
     "@types/node": "^20.14.9",
-    "typescript": "^5.5.4",
-    "vitest": "^2.1.9"
+    "vitest": "^2.1.9",
+    "@astrojs/check": "^0.9.9",
+    "@astrojs/react": "^4.3.0",
+    "@types/react": "^18.3.1",
+    "@types/react-dom": "^18.3.1",
+    "@wix/astro-wix-hosting-adapter": "^2.0.0",
+    "@wix/cli": "^1.1.135",
+    "@wix/sdk-types": "^1.0.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "private": true,
+  "license": "UNLICENSED",
+  "description": "Advanced availability and booking rules for Wix Bookings - credential-free platform foundation (build cycle 1, task INT-C1-1).",
+  "engines": {
+    "node": ">=20.11.0"
   }
 }

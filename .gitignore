@@ -21,3 +21,6 @@ wix.config.json
 # OS / editor noise
 .DS_Store
 *.log
+
+# Astro/Wix generated state
+.astro/

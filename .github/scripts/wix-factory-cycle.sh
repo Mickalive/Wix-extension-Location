@@ -33,13 +33,26 @@ persist(){
 }
 
 transition(){
-  sedit --arg p "$1" --arg r "$2" --argjson run "$GITHUB_RUN_ID" '.phase=$p|.generation+=1|.last_transition={reason:$r,run_id:$run}|.last_run=$run|.last_operational_failure=null|.lease=null'
+  sedit --arg p "$1" --arg r "$2" --argjson run "$GITHUB_RUN_ID" '.phase=$p|.generation+=1|.last_transition={reason:$r,run_id:$run}|.last_run=$run|.last_operational_failure=null|.lease=null|.blocked_resume_phase=null'
+}
+block_external(){
+  local resume="$1" reason="$2"
+  sedit --arg resume "$resume" --arg r "$reason" --argjson run "$GITHUB_RUN_ID" '.phase="BLOCKED_EXTERNAL"|.blocked_resume_phase=$resume|.generation+=1|.last_transition={reason:$r,run_id:$run}|.last_run=$run|.last_operational_failure=null|.lease=null'
 }
 opfail(){
   sedit --arg p "$1" --arg r "$2" --argjson run "$GITHUB_RUN_ID" '.last_run=$run|.last_operational_failure={phase:$p,reason:$r,run_id:$run}|.lease=null'
 }
 provider_failure(){
   grep -Eqi 'Unexpected server error|UnknownError|network error|temporarily unavailable|service unavailable|provider unavailable|ECONNRESET|ETIMEDOUT|timed out|rate.?limit|HTTP[^0-9]*(401|403|404|408|409|429|500|502|503|504)|Forbidden|model[^[:alnum:]]*(not found|unavailable|unsupported|invalid)|unknown model|no such model' "$1" 2>/dev/null
+}
+external_io_failure(){
+  grep -Eqi 'ECONNRESET|ECONNREFUSED|ETIMEDOUT|EAI_AGAIN|ENETUNREACH|network error|network request failed|temporarily unavailable|service unavailable|rate.?limit|HTTP[^0-9]*(408|429|500|502|503|504)|npm ERR! code (EAI_AGAIN|ECONN|E401|E403)|fetch failed|socket hang up' "$1" 2>/dev/null
+}
+external_access_failure(){
+  grep -Eqi 'Unauthorized|Forbidden|permission denied|access denied|HTTP[^0-9]*(401|403)|status[^0-9]*(401|403)' "$1" 2>/dev/null
+}
+scaffold_structure_failure(){
+  grep -Eqi 'configuration file.*(malformed|missing required)|FailedToIdentifyProgramFlow|project type identification|wix\.config|projectType|projectId' "$1" 2>/dev/null
 }
 parse_verdict(){
   local report="$1"
@@ -105,7 +118,24 @@ agent(){
   return 75
 }
 
-checks(){ (cd "$PRODUCT" && npm ci --ignore-scripts --no-audit --no-fund && npm run check && npm run build); }
+deterministic_checks(){
+  local logf="$ROOT/deterministic-checks.log" rc
+  : >"$logf"
+  set +e
+  (cd "$PRODUCT" && npm ci --ignore-scripts --no-audit --no-fund && npm run check) > >(tee "$logf") 2>&1
+  rc=$?
+  set -e
+  return "$rc"
+}
+wix_build_check(){
+  local logf="$ROOT/wix-build.log" rc
+  : >"$logf"
+  set +e
+  (cd "$PRODUCT" && npx -y "@wix/cli@${WIX_CLI_VERSION}" build) >"$logf" 2>&1
+  rc=$?
+  set -e
+  return "$rc"
+}
 evidence(){ cp "$PRODUCT/$2" "$GITHUB_WORKSPACE/.factory/evidence/run_${GITHUB_RUN_ID}_$1"; }
 readonly_ok(){
   local allowed="$1" p
@@ -113,6 +143,14 @@ readonly_ok(){
 }
 builder_name(){ case "$1" in integration) echo wix-integration-builder;; rules) echo rules-engine-builder;; dashboard) echo dashboard-builder;; billing) echo billing-builder;; *) die "unknown lane $1";; esac; }
 auditor_name(){ case "$1" in integration) echo integration-auditor;; rules) echo rules-auditor;; dashboard) echo dashboard-auditor;; billing) echo billing-auditor;; *) die "unknown lane $1";; esac; }
+record_lane_gate(){
+  local sha="$1" lane="$2"
+  sedit --arg s "$sha" --arg l "$lane" --argjson run "$GITHUB_RUN_ID" '.gate_proofs=(.gate_proofs // {})|.gate_proofs.lane={sha:$s,lane:$l,run_id:$run,verdict:"ACCEPT"}'
+}
+record_gate(){
+  local gate="$1" sha="$2"
+  sedit --arg g "$gate" --arg s "$sha" --argjson run "$GITHUB_RUN_ID" '.gate_proofs=(.gate_proofs // {})|.gate_proofs[$g]={sha:$s,run_id:$run,verdict:"ACCEPT"}'
+}
 
 allowed(){
   case "$1:$2" in
@@ -145,7 +183,7 @@ commit_candidate(){
   tag="refs/tags/factory-candidate/$lane/$(sget '.generation')"
   push_ref "$candidate" "$tag"
   if [[ -n "$old_tag" && "$old_tag" != null && "$old_tag" != "$tag" ]]; then del_ref "$old_tag"; fi
-  sedit --arg s "$candidate" --arg t "$tag" '.candidate={sha:$s,tag:$t}|.repair_feedback=null'
+  sedit --arg s "$candidate" --arg t "$tag" --arg b "$base" --arg l "$lane" '.candidate={sha:$s,tag:$t,base:$b,lane:$l}|.repair_feedback=null|.gate_proofs={}'
   transition AUDIT candidate_created
 }
 
@@ -161,18 +199,24 @@ phase_plan(){
 }
 
 phase_build(){
-  local base lane who rc feedback
+  local base lane who rc feedback preserved_extensions failure_tail
   base="$(sget '.candidate.sha // .accepted_base')"; lane="$(sget '.lane')"; who="$(builder_name "$lane")"; feedback="$(sget '.repair_feedback // ""')"; prepare "$base"
 
   if [[ "$lane" == integration && "$feedback" == OFFICIAL_WIX_SCAFFOLD_REBASE_REQUIRED* ]]; then
-    [[ -n "${WIX_API_KEY:-}" ]] || { transition BLOCKED_EXTERNAL wix_secret_unavailable; return; }
+    [[ -n "${WIX_API_KEY:-}" ]] || { block_external BUILD wix_secret_unavailable; return; }
     log "integration bootstrap: regenerating authenticated official Wix scaffold for exact app $EXPECTED_WIX_APP_ID"
+    preserved_extensions="$ROOT/extensions.before-scaffold.ts"
+    rm -f "$preserved_extensions"
+    [[ -f "$PRODUCT/extensions.ts" ]] && cp "$PRODUCT/extensions.ts" "$preserved_extensions"
     set +e
     bash "$GITHUB_WORKSPACE/.github/scripts/wix-official-scaffold.sh" "$PRODUCT" "$ROOT/official-scaffold"
     rc=$?
     set -e
-    if (( rc == 42 || rc == 43 || rc == 44 )); then
-      transition BLOCKED_EXTERNAL official_wix_scaffold_external_failure
+    if (( rc == 0 )) && [[ -f "$preserved_extensions" ]]; then
+      cp "$preserved_extensions" "$PRODUCT/extensions.ts"
+    fi
+    if (( rc == 9 || rc == 42 || rc == 43 || rc == 44 )); then
+      block_external BUILD official_wix_scaffold_external_failure
       return
     elif (( rc != 0 )); then
       opfail BUILD official_wix_scaffold_failed
@@ -184,11 +228,16 @@ phase_build(){
   fi
 
   builder_scope "$lane" || { opfail BUILD builder_scope_violation; return; }
-  if ! checks; then
+  if ! deterministic_checks; then
+    if external_io_failure "$ROOT/deterministic-checks.log"; then
+      opfail BUILD deterministic_dependency_transient
+      return
+    fi
+    failure_tail="$(tail -c 8000 "$ROOT/deterministic-checks.log")"
     if [[ "$lane" == integration ]]; then
-      sedit '.repair_feedback="OFFICIAL_WIX_SCAFFOLD_REBASE_REQUIRED: merged scaffold or deterministic product checks failed; regenerate from the exact existing Wix app and preserve generated dependency versions."'
+      sedit --arg f "OFFICIAL_WIX_SCAFFOLD_REBASE_REQUIRED: deterministic product checks failed after scaffold reconciliation. Evidence: $failure_tail" '.repair_feedback=$f'
     else
-      sedit '.repair_feedback="Deterministic checks failed; repair the same lane."'
+      sedit --arg f "Deterministic checks failed in the same lane. Evidence: $failure_tail" '.repair_feedback=$f'
     fi
     transition BUILD deterministic_checks_failed
     return
@@ -199,63 +248,121 @@ phase_build(){
 phase_audit(){
   local lane sha tag who report rc verdict
   lane="$(sget '.lane')"; sha="$(sget '.candidate.sha')"; tag="$(sget '.candidate.tag')"; who="$(auditor_name "$lane")"; prepare "$sha"; report="reports/factory_lane_audit.md"; mkdir -p "$PRODUCT/reports"
-  agent "$who" "Independently audit exact $lane candidate SHA $sha against accepted base $(sget '.accepted_base'). You are not its builder. For integration, verify Wix-owned scaffold/binding came from authenticated official generation rather than hand-authored guesses. Reproduce evidence and tests yourself. Never fix. Write only $report ending exactly VERDICT: ACCEPT or VERDICT: FIX; FIX must contain reproducible findings." || rc=$?
+  agent "$who" "Independently audit exact $lane candidate SHA $sha. Its lane repair base is $(sget '.candidate.base // .accepted_base'); inherited cumulative changes outside $lane predate this lane repair and must not be misclassified as this builder's scope. You are not its builder. For integration, verify Wix-owned scaffold/binding came from authenticated official generation rather than hand-authored guesses. Reproduce evidence and tests yourself. Never fix. Write only $report ending exactly VERDICT: ACCEPT or VERDICT: FIX; FIX must contain reproducible findings." || rc=$?
   rc=${rc:-0}; (( rc==0 )) && [[ -f "$PRODUCT/$report" ]] || { opfail AUDIT "$([[ $rc == 75 ]] && echo provider_transient || echo lane_auditor_failed)"; return; }
   readonly_ok "$report" || { opfail AUDIT lane_auditor_scope_violation; return; }; evidence "${lane}_audit.md" "$report"; verdict="$(parse_verdict "$PRODUCT/$report")"
-  if [[ "$verdict" == ACCEPT ]]; then transition INTEGRATED_AUDIT lane_audit_accept
+  if [[ "$verdict" == ACCEPT ]]; then record_lane_gate "$sha" "$lane"; transition INTEGRATED_AUDIT lane_audit_accept
   elif [[ "$verdict" == FIX ]]; then
-    sedit --arg f "$(sed '$d' "$PRODUCT/$report" | tail -c 12000)" '.repair_feedback=$f'; transition BUILD lane_audit_fix
+    sedit --arg f "$(sed '$d' "$PRODUCT/$report" | tail -c 12000)" '.repair_feedback=$f|.gate_proofs={}'; transition BUILD lane_audit_fix
   else opfail AUDIT invalid_lane_audit_verdict; fi
 }
 
 phase_integrated(){
-  local sha tag report rc verdict
+  local sha tag report rc verdict failure_tail
   sha="$(sget '.candidate.sha // .accepted_base')"; tag="$(sget '.candidate.tag // ""')"; prepare "$sha"
-  checks || { sedit '.repair_feedback="Fresh integrated deterministic gate failed."'; transition PLAN integrated_checks_failed; return; }
+  if ! deterministic_checks; then
+    if external_io_failure "$ROOT/deterministic-checks.log"; then
+      opfail INTEGRATED_AUDIT deterministic_dependency_transient
+      return
+    fi
+    failure_tail="$(tail -c 8000 "$ROOT/deterministic-checks.log")"
+    sedit --arg f "Fresh integrated deterministic gate failed. Evidence: $failure_tail" '.repair_feedback=$f|.gate_proofs.integrated=null|.gate_proofs.wix=null'
+    transition PLAN integrated_checks_failed
+    return
+  fi
   report="reports/factory_integrated_audit.md"; mkdir -p "$PRODUCT/reports"
   agent integrated-auditor "Fresh independent cross-system audit of exact SHA $sha. You are distinct from all builders and lane auditors. Verify integration/rules/dashboard/billing contracts, booking enforcement, rollback/recovery, entitlements, accessibility-sensitive behavior and the real Wix scaffold assumptions. Never fix. Write only $report ending exactly VERDICT: ACCEPT or VERDICT: FIX." || rc=$?
   rc=${rc:-0}; (( rc==0 )) && [[ -f "$PRODUCT/$report" ]] || { opfail INTEGRATED_AUDIT "$([[ $rc == 75 ]] && echo provider_transient || echo integrated_auditor_failed)"; return; }
   readonly_ok "$report" || { opfail INTEGRATED_AUDIT integrated_auditor_scope_violation; return; }; evidence integrated_audit.md "$report"; verdict="$(parse_verdict "$PRODUCT/$report")"
-  if [[ "$verdict" == ACCEPT ]]; then transition WIX_QA integrated_audit_accept
-  elif [[ "$verdict" == FIX ]]; then sedit --arg f "$(sed '$d' "$PRODUCT/$report" | tail -c 12000)" '.repair_feedback=$f'; transition PLAN integrated_audit_fix
+  if [[ "$verdict" == ACCEPT ]]; then record_gate integrated "$sha"; transition WIX_QA integrated_audit_accept
+  elif [[ "$verdict" == FIX ]]; then sedit --arg f "$(sed '$d' "$PRODUCT/$report" | tail -c 12000)" '.repair_feedback=$f|.gate_proofs.integrated=null|.gate_proofs.wix=null'; transition PLAN integrated_audit_fix
   else opfail INTEGRATED_AUDIT invalid_integrated_verdict; fi
 }
 
 phase_wix(){
-  local sha tag report rc verdict
+  local sha tag report rc verdict failure_tail
   sha="$(sget '.candidate.sha // .accepted_base')"; tag="$(sget '.candidate.tag // ""')"; prepare "$sha"
-  [[ -f "$PRODUCT/wix.config.json" && "$(jq -r '.appId // empty' "$PRODUCT/wix.config.json")" == "$EXPECTED_WIX_APP_ID" ]] || { sedit '.lane="integration"|.repair_feedback="OFFICIAL_WIX_SCAFFOLD_REBASE_REQUIRED: real Wix binding missing or wrong; regenerate the exact existing app scaffold."'; transition BUILD wix_binding_invalid; return; }
-  [[ -n "${WIX_SITE_ID:-}" && -n "${WIX_CLIENT_ID:-}" ]] || { transition BLOCKED_EXTERNAL wix_preflight_missing; return; }
-  set +e; (cd "$PRODUCT" && npm ci --ignore-scripts --no-audit --no-fund) >"$ROOT/wix-npm-ci.log" 2>&1; rc=$?; set -e
-  (( rc==0 )) || { opfail WIX_QA wix_dependency_install_failed; return; }
-  set +e; (cd "$PRODUCT" && npx -y "@wix/cli@${WIX_CLI_VERSION}" build) >"$ROOT/wix-build.log" 2>&1; rc=$?; set -e
-  if (( rc!=0 )); then
-    sed -E 's/(token|secret|password|api[_ -]?key)[=: ][^ ]+/\1=[REDACTED]/Ig' "$ROOT/wix-build.log" | tail -n120 > "$GITHUB_WORKSPACE/.factory/evidence/run_${GITHUB_RUN_ID}_wix_build_failure.txt"
-    sedit '.lane="integration"|.repair_feedback="OFFICIAL_WIX_SCAFFOLD_REBASE_REQUIRED: real Wix CLI build failed on the deliverable; regenerate official scaffold and reconcile product wiring without hand-editing Wix identifiers."'; transition BUILD wix_build_failed; return
+  [[ -f "$PRODUCT/wix.config.json" && "$(jq -r '.appId // empty' "$PRODUCT/wix.config.json")" == "$EXPECTED_WIX_APP_ID" ]] || { sedit '.lane="integration"|.repair_feedback="OFFICIAL_WIX_SCAFFOLD_REBASE_REQUIRED: real Wix binding missing or wrong; regenerate the exact existing app scaffold."|.gate_proofs.wix=null'; transition BUILD wix_binding_invalid; return; }
+  [[ -n "${WIX_SITE_ID:-}" && -n "${WIX_CLIENT_ID:-}" ]] || { block_external WIX_QA wix_preflight_missing; return; }
+
+  if ! deterministic_checks; then
+    if external_io_failure "$ROOT/deterministic-checks.log"; then opfail WIX_QA deterministic_dependency_transient; return; fi
+    failure_tail="$(tail -c 8000 "$ROOT/deterministic-checks.log")"
+    sedit --arg f "Wix QA deterministic gate failed before live build. Evidence: $failure_tail" '.repair_feedback=$f|.gate_proofs.wix=null'
+    transition PLAN wix_deterministic_gate_failed
+    return
   fi
-  set +e; (cd "$PRODUCT" && npx -y "@wix/cli@${WIX_CLI_VERSION}" dev-site list) >"$ROOT/wix-dev.log" 2>&1; rc=$?; set -e; (( rc==0 )) || { transition BLOCKED_EXTERNAL wix_dev_site_unavailable; return; }
+  if ! wix_build_check; then
+    if external_access_failure "$ROOT/wix-build.log"; then block_external WIX_QA wix_build_external_access; return; fi
+    if external_io_failure "$ROOT/wix-build.log"; then opfail WIX_QA wix_build_transient; return; fi
+    sed -E 's/(token|secret|password|api[_ -]?key)[=: ][^ ]+/\1=[REDACTED]/Ig' "$ROOT/wix-build.log" | tail -n120 > "$GITHUB_WORKSPACE/.factory/evidence/run_${GITHUB_RUN_ID}_wix_build_failure.txt"
+    failure_tail="$(tail -c 8000 "$GITHUB_WORKSPACE/.factory/evidence/run_${GITHUB_RUN_ID}_wix_build_failure.txt")"
+    if scaffold_structure_failure "$ROOT/wix-build.log"; then
+      sedit --arg f "OFFICIAL_WIX_SCAFFOLD_REBASE_REQUIRED: Wix project structure/configuration is invalid. Evidence: $failure_tail" '.lane="integration"|.repair_feedback=$f|.gate_proofs.wix=null'
+      transition BUILD wix_scaffold_structure_failed
+    else
+      sedit --arg f "WIX_BUILD_REPAIR_REQUIRED: real Wix CLI build failed in application/extension code. Preserve the authenticated scaffold and repair integration from this exact cumulative candidate. Evidence: $failure_tail" '.lane="integration"|.repair_feedback=$f|.gate_proofs.wix=null'
+      transition BUILD wix_build_code_failed
+    fi
+    return
+  fi
+  set +e; (cd "$PRODUCT" && npx -y "@wix/cli@${WIX_CLI_VERSION}" dev-site list) >"$ROOT/wix-dev.log" 2>&1; rc=$?; set -e; (( rc==0 )) || { block_external WIX_QA wix_dev_site_unavailable; return; }
+  [[ "${WIX_MCP_READY:-0}" == 1 ]] || { block_external WIX_QA wix_mcp_unavailable; return; }
+
   report="reports/factory_wix_live_audit.md"; mkdir -p "$PRODUCT/reports"
-  agent wix-live-auditor "Empirically audit exact SHA $sha using Wix MCP after privileged CLI auth/build/dev-site resolution succeeded. Never inspect credentials/auth files, publish, release, delete, manage billing/domains/team/org, or touch production. Prefer reads; rollback any reversible QA mutation. Verify the real scaffold, actual app binding, Bookings contracts, generated/registered extension reality, dashboard compatibility, permissions, entitlement inputs and webhook assumptions where testable. Never fix. Write only $report ending exactly VERDICT: ACCEPT, VERDICT: FIX, or VERDICT: BLOCKED_EXTERNAL." || rc=$?
+  agent wix-live-auditor "Empirically audit exact SHA $sha using the configured Wix MCP on development site ${WIX_SITE_ID}. Never inspect credentials/auth files, publish, release, delete, manage billing/domains/team/org, or touch production. Prefer read-only CallWixSiteAPI/ListWixSites operations; rollback any indispensable reversible QA mutation. Verify the real scaffold, actual app binding, Bookings contracts, generated/registered extension reality, dashboard compatibility, permissions, entitlement inputs and webhook assumptions where testable. Never fix. Write only $report ending exactly VERDICT: ACCEPT, VERDICT: FIX, or VERDICT: BLOCKED_EXTERNAL." || rc=$?
   rc=${rc:-0}; (( rc==0 )) && [[ -f "$PRODUCT/$report" ]] || { opfail WIX_QA "$([[ $rc == 75 ]] && echo provider_transient || echo wix_live_auditor_failed)"; return; }
   readonly_ok "$report" || { opfail WIX_QA wix_live_scope_violation; return; }; evidence wix_live_audit.md "$report"; verdict="$(parse_verdict "$PRODUCT/$report")"
   case "$verdict" in
-    ACCEPT) transition RELEASE_AUDIT wix_live_accept;;
-    BLOCKED_EXTERNAL) transition BLOCKED_EXTERNAL wix_live_blocked;;
-    FIX) sedit --arg f "$(sed '$d' "$PRODUCT/$report" | tail -c 12000)" '.lane="integration"|.repair_feedback=$f'; transition BUILD wix_live_fix;;
+    ACCEPT) record_gate wix "$sha"; transition RELEASE_AUDIT wix_live_accept;;
+    BLOCKED_EXTERNAL) block_external WIX_QA wix_live_blocked;;
+    FIX) sedit --arg f "$(sed '$d' "$PRODUCT/$report" | tail -c 12000)" '.lane="integration"|.repair_feedback=$f|.gate_proofs.wix=null'; transition BUILD wix_live_fix;;
     *) opfail WIX_QA invalid_wix_live_verdict;;
   esac
 }
 
 phase_release(){
-  local sha tag accepted report rc verdict proof remote
+  local sha tag accepted report rc verdict proof remote lane_sha integrated_sha wix_sha lane_run integrated_run wix_run failure_tail
   sha="$(sget '.candidate.sha // .accepted_base')"; tag="$(sget '.candidate.tag // ""')"; accepted="$(sget '.accepted_base')"; prepare "$sha"; report="reports/factory_release_audit.md"; mkdir -p "$PRODUCT/reports"
-  proof="$(find "$GITHUB_WORKSPACE/.factory/evidence" -maxdepth 1 -type f -print0 | sort -z | xargs -0 cat 2>/dev/null | tail -c 40000)"
-  agent release-readiness-auditor "FINAL independent release audit of exact SHA $sha. Sole READY authority. Current immutable factory evidence follows:\n$proof\nRequire fresh deterministic checks, fresh integrated ACCEPT, fresh Wix empirical ACCEPT, correct app binding $EXPECTED_WIX_APP_ID, real Wix-generated scaffold provenance, and no unresolved repair. If this run began from the already accepted benchmarked product without a new candidate diff, a fresh integrated audit substitutes for a new lane audit; otherwise require the independent lane audit too. Never fix or plan. Write only $report ending exactly VERDICT: READY or VERDICT: NOT_READY." || rc=$?
+  [[ -n "${WIX_SITE_ID:-}" && -n "${WIX_CLIENT_ID:-}" ]] || { block_external RELEASE_AUDIT release_wix_preflight_missing; return; }
+
+  lane_sha="$(sget '.gate_proofs.lane.sha // ""')"; integrated_sha="$(sget '.gate_proofs.integrated.sha // ""')"; wix_sha="$(sget '.gate_proofs.wix.sha // ""')"
+  if [[ "$sha" != "$accepted" && "$lane_sha" != "$sha" ]]; then transition AUDIT release_missing_lane_proof; return; fi
+  [[ "$integrated_sha" == "$sha" ]] || { transition INTEGRATED_AUDIT release_missing_integrated_proof; return; }
+  [[ "$wix_sha" == "$sha" ]] || { transition WIX_QA release_missing_wix_proof; return; }
+  [[ -f "$PRODUCT/wix.config.json" && "$(jq -r '.appId // empty' "$PRODUCT/wix.config.json")" == "$EXPECTED_WIX_APP_ID" ]] || { sedit '.lane="integration"|.repair_feedback="OFFICIAL_WIX_SCAFFOLD_REBASE_REQUIRED: release binding proof missing or wrong."'; transition BUILD release_binding_invalid; return; }
+
+  lane_run="$(sget '.gate_proofs.lane.run_id // ""')"; integrated_run="$(sget '.gate_proofs.integrated.run_id // ""')"; wix_run="$(sget '.gate_proofs.wix.run_id // ""')"
+  proof="$(
+    for run in "$lane_run" "$integrated_run" "$wix_run"; do
+      [[ -n "$run" ]] || continue
+      find "$GITHUB_WORKSPACE/.factory/evidence" -maxdepth 1 -type f -name "run_${run}_*" -print0
+    done | sort -zu | xargs -0 cat 2>/dev/null
+    find "$GITHUB_WORKSPACE/.factory/evidence" -maxdepth 1 -type f -name '*official_scaffold*.json' -print0 | sort -z | tail -z -n1 | xargs -0 cat 2>/dev/null || true
+  )"
+  proof="$(printf '%s' "$proof" | tail -c 40000)"
+
+  agent release-readiness-auditor "FINAL independent release audit of exact SHA $sha. Sole READY authority. Deterministic state proves the lane/integrated/Wix-live ACCEPT gates below all target this SHA; the attached evidence is restricted to those gate runs plus authenticated scaffold provenance. Evidence:\n$proof\nRequire fresh deterministic checks, correct app binding $EXPECTED_WIX_APP_ID, real Wix-generated scaffold provenance, and no unresolved repair. Never fix or plan. Write only $report ending exactly VERDICT: READY or VERDICT: NOT_READY." || rc=$?
   rc=${rc:-0}; (( rc==0 )) && [[ -f "$PRODUCT/$report" ]] || { opfail RELEASE_AUDIT "$([[ $rc == 75 ]] && echo provider_transient || echo release_auditor_failed)"; return; }
   readonly_ok "$report" || { opfail RELEASE_AUDIT release_scope_violation; return; }; evidence release_audit.md "$report"; verdict="$(parse_verdict "$PRODUCT/$report")"
   if [[ "$verdict" == READY ]]; then
-    checks || { opfail RELEASE_AUDIT final_deterministic_gate_failed; return; }; fetch_product; remote="$(git -C "$GITHUB_WORKSPACE" rev-parse "$PRODUCT_REF")"; [[ "$remote" == "$accepted" ]] || { opfail RELEASE_AUDIT accepted_base_moved; return; }
-    [[ "$sha" == "$accepted" ]] || push_ref "$sha" "refs/heads/$PRODUCT_BRANCH"; del_ref "$tag"; sedit --arg s "$sha" '.accepted_base=$s|.candidate=null|.repair_feedback=null'; transition READY final_release_ready
+    if ! deterministic_checks; then
+      if external_io_failure "$ROOT/deterministic-checks.log"; then opfail RELEASE_AUDIT deterministic_dependency_transient; return; fi
+      failure_tail="$(tail -n80 "$ROOT/deterministic-checks.log" 2>/dev/null || true)"; sedit --arg f "Final deterministic release gate failed. Evidence: $failure_tail" '.repair_feedback=$f'; transition PLAN final_deterministic_gate_failed; return
+    fi
+    if ! wix_build_check; then
+      if external_access_failure "$ROOT/wix-build.log"; then block_external RELEASE_AUDIT wix_build_external_access; return; fi
+      if external_io_failure "$ROOT/wix-build.log"; then opfail RELEASE_AUDIT wix_build_transient; return; fi
+      failure_tail="$(tail -n80 "$ROOT/wix-build.log" 2>/dev/null || true)"
+      if scaffold_structure_failure "$ROOT/wix-build.log"; then
+        sedit --arg f "OFFICIAL_WIX_SCAFFOLD_REBASE_REQUIRED: final Wix project structure/configuration failed. Evidence: $failure_tail" '.lane="integration"|.repair_feedback=$f|.gate_proofs.wix=null'; transition BUILD final_wix_scaffold_failed
+      else
+        sedit --arg f "WIX_BUILD_REPAIR_REQUIRED: final Wix build failed in application/extension code; preserve the cumulative scaffold and repair integration. Evidence: $failure_tail" '.lane="integration"|.repair_feedback=$f|.gate_proofs.wix=null'; transition BUILD final_wix_build_code_failed
+      fi
+      return
+    fi
+    fetch_product; remote="$(git -C "$GITHUB_WORKSPACE" rev-parse "$PRODUCT_REF")"; [[ "$remote" == "$accepted" ]] || { opfail RELEASE_AUDIT accepted_base_moved; return; }
+    [[ "$sha" == "$accepted" ]] || push_ref "$sha" "refs/heads/$PRODUCT_BRANCH"; del_ref "$tag"; sedit --arg s "$sha" '.accepted_base=$s|.candidate=null|.repair_feedback=null|.gate_proofs={}'; transition READY final_release_ready
   elif [[ "$verdict" == NOT_READY ]]; then
     sedit --arg f "$(sed '$d' "$PRODUCT/$report" | tail -c 12000)" '.repair_feedback=$f'; transition PLAN final_release_not_ready
   else opfail RELEASE_AUDIT invalid_release_verdict; fi
@@ -269,10 +376,10 @@ main(){
   fetch_product
   [[ "$(git -C "$GITHUB_WORKSPACE" rev-parse "$PRODUCT_REF")" == "$(sget '.accepted_base')" ]] || die "accepted product drift"
   local before="$GITHUB_SHA" phase="$(sget '.phase')"
-  sedit --argjson run "$GITHUB_RUN_ID" --arg p "$phase" '.lease={run_id:$run,phase:$p}'
+  sedit --argjson run "$GITHUB_RUN_ID" --arg p "$phase" --arg rev "$GITHUB_SHA" '.lease={run_id:$run,phase:$p}|.control_revision=$rev|.gate_proofs=(.gate_proofs // {})'
   log "generation=$(sget '.generation') phase=$phase accepted=$(sget '.accepted_base')"
   case "$phase" in
-    PLAN) phase_plan;; BUILD) phase_build;; AUDIT) phase_audit;; INTEGRATED_AUDIT) phase_integrated;; WIX_QA|BLOCKED_EXTERNAL) phase_wix;; RELEASE_AUDIT) phase_release;; READY) sedit '.lease=null';; *) die "unknown phase $phase";;
+    PLAN) phase_plan;; BUILD) phase_build;; AUDIT) phase_audit;; INTEGRATED_AUDIT) phase_integrated;; WIX_QA) phase_wix;; BLOCKED_EXTERNAL) case "$(sget '.blocked_resume_phase // "WIX_QA"')" in BUILD) phase_build;; WIX_QA) phase_wix;; RELEASE_AUDIT) phase_release;; *) die "invalid blocked resume phase";; esac;; RELEASE_AUDIT) phase_release;; READY) sedit '.lease=null';; *) die "unknown phase $phase";;
   esac
   persist "$before"
 }

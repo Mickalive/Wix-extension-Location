@@ -6,13 +6,21 @@ set -Eeuo pipefail
 STATE="$GITHUB_WORKSPACE/.factory/state.json"
 SITE_STATE="$GITHUB_WORKSPACE/.factory/wix-dev-site.json"
 phase="$(jq -r '.phase' "$STATE")"
+lane="$(jq -r '.lane // ""' "$STATE")"
 
 case "$phase" in
   AUDIT|INTEGRATED_AUDIT|WIX_QA|BLOCKED_EXTERNAL|RELEASE_AUDIT) ;;
   *) exit 0 ;;
 esac
 
-ref="$(jq -r '.candidate.sha // .accepted_base' "$STATE")"
+# Lane audits other than integration are product-code audits, not Wix-runtime gates.
+# Running Wix CLI here used to block rules/dashboard/billing auditors before they
+# could even inspect their candidate.
+if [[ "$phase" == AUDIT && "$lane" != integration ]]; then
+  exit 0
+fi
+
+ref="$(jq -r '.candidate.sha // .repair_base // .accepted_base' "$STATE")"
 [[ -n "$ref" && "$ref" != null ]] || exit 0
 
 TMP="$RUNNER_TEMP/wix-env-preflight-$GITHUB_RUN_ID"
@@ -25,9 +33,14 @@ trap cleanup EXIT
 rm -rf "$TMP"
 git -C "$GITHUB_WORKSPACE" worktree add --detach "$TMP" "$ref" >/dev/null
 
-# Old/core-only candidates do not need Wix runtime environment yet.
+# Only prepare Wix runtime state for a candidate that is already a genuine
+# exact-app Wix project. Malformed/core-only candidates must reach the relevant
+# auditor/state-machine transition, which can route them to integration repair;
+# preflight itself must never turn a product defect into an orchestration crash.
 [[ -f "$TMP/wix.config.json" ]] || exit 0
-jq -e --arg id "$EXPECTED_WIX_APP_ID" '.appId==$id and (.projectId|type=="string" and length>0) and (.projectType|type=="string" and length>0)' "$TMP/wix.config.json" >/dev/null
+if ! jq -e --arg id "$EXPECTED_WIX_APP_ID" '.appId==$id and (.projectId|type=="string" and length>0) and (.projectType|type=="string" and length>0)' "$TMP/wix.config.json" >/dev/null 2>&1; then
+  exit 0
+fi
 
 [[ -n "${WIX_API_KEY:-}" ]] || {
   echo "::error::Wix candidate gate requires WIX_API_KEY to resolve the test-site environment."

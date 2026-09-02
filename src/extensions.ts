@@ -10,4 +10,8 @@ import bookingConfirmed from './extensions/backend/events/booking-confirmed/book
 
 import bookingCanceled from './extensions/backend/events/booking-canceled/booking-canceled.extension.ts';
 
-export default app().use(advancedBookingRules).use(advancedBookingRulesUsage).use(diffConfirm).use(bookingConfirmed).use(bookingCanceled);
+import dataCollections from './extensions/backend/data-collections/data-collections.extension.ts';
+
+import bookingValidation from './extensions/backend/service-plugins/booking-validation/booking-validation.extension.ts';
+
+export default app().use(advancedBookingRules).use(advancedBookingRulesUsage).use(diffConfirm).use(bookingConfirmed).use(bookingCanceled).use(dataCollections).use(bookingValidation);

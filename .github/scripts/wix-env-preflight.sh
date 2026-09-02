@@ -31,7 +31,7 @@ rm -rf "$TMP"
 git -C "$GITHUB_WORKSPACE" worktree add --detach "$TMP" "$ref" >/dev/null
 
 # Malformed/core-only candidates are product defects, not auth/network defects.
-# Let the authoritative state machine classify them through its real Wix build.
+# Let the authoritative state machine or deterministic final gate classify them.
 [[ -f "$TMP/wix.config.json" ]] || exit 0
 if ! jq -e --arg id "$EXPECTED_WIX_APP_ID" '.appId==$id and (.projectId|type=="string" and length>0) and (.projectType|type=="string" and length>0)' "$TMP/wix.config.json" >/dev/null 2>&1; then
   exit 0
@@ -107,32 +107,5 @@ while IFS='=' read -r key value; do
   printf '%s=%s\n' "$key" "$value" >>"$GITHUB_ENV"
 done <"$TMP/.env.local"
 printf 'WIX_SITE_ID=%s\n' "$site_id" >>"$GITHUB_ENV"
-
-# Empirical QA must not depend on interactive Wix OAuth. GitHub Actions already
-# has a scoped API key and an exact development-site ID. Configure a tiny local
-# MCP bridge that exposes only read-only Wix Bookings query/count calls and never
-# exposes credentials to the auditor. Wix documents API-key + wix-site-id as the
-# supported authentication model for site-level CI/server automation.
-if [[ "$effective_phase" == WIX_QA ]]; then
-  bridge="$GITHUB_WORKSPACE/.github/scripts/wix-ci-mcp.mjs"
-  [[ -f "$bridge" ]] || { echo "::error::Missing Wix CI MCP bridge."; exit 47; }
-  mcp_config="$(jq -cn --arg bridge "$bridge" '{mcp:{wix:{type:"local",command:["node",$bridge],enabled:true,timeout:20000}}}')"
-  MCP_LOG="$RUNNER_TEMP/wix-mcp-probe-$GITHUB_RUN_ID.log"
-  : >"$MCP_LOG"
-  set +e
-  (cd "$TMP" && WIX_API_KEY="$WIX_API_KEY" WIX_SITE_ID="$site_id" OPENCODE_CONFIG_CONTENT="$mcp_config" opencode mcp list) >"$MCP_LOG" 2>&1
-  rc=$?
-  set -e
-  if (( rc == 0 )) && grep -Eqi 'wix.*connected|connected.*wix' "$MCP_LOG"; then
-    printf 'OPENCODE_CONFIG_CONTENT=%s\n' "$mcp_config" >>"$GITHUB_ENV"
-    printf 'WIX_MCP_READY=1\n' >>"$GITHUB_ENV"
-    echo "Read-only Wix CI MCP bridge connected for empirical QA."
-  else
-    tail -n80 "$MCP_LOG" >&2 || true
-    printf 'WIX_MCP_READY=0\n' >>"$GITHUB_ENV"
-    echo "::warning::Read-only Wix CI MCP bridge did not connect; WIX_QA will remain blocked rather than fake an empirical audit."
-  fi
-  : >"$MCP_LOG"
-fi
 
 echo "Wix candidate environment prepared for phase $phase (resume $effective_phase) on site $site_id."

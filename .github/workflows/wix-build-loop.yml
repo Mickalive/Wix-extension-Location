@@ -68,6 +68,13 @@ jobs:
             WIX_QA|RELEASE_AUDIT) echo "final_gate=true" >> "$GITHUB_OUTPUT" ;;
             *) echo "final_gate=false" >> "$GITHUB_OUTPUT" ;;
           esac
+          if [[ "$phase" == BUILD \
+                && "$(jq -r '.lane // empty' .factory/state.json)" == integration \
+                && "$(jq -r '.repair_feedback // empty' .factory/state.json)" == REAL_WIX_EXTENSIONS_REQUIRED:* ]]; then
+            echo "real_wix_bootstrap=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "real_wix_bootstrap=false" >> "$GITHUB_OUTPUT"
+          fi
           echo "Authoritative phase=$phase effective=$effective"
 
       - name: Set up Node
@@ -77,13 +84,21 @@ jobs:
           node-version: 22.19.0
 
       - name: Install reviewed OpenCode CLI
-        if: ${{ steps.state.outputs.final != 'true' && steps.state.outputs.final_gate != 'true' }}
+        if: ${{ steps.state.outputs.final != 'true' && steps.state.outputs.final_gate != 'true' && steps.state.outputs.real_wix_bootstrap != 'true' }}
         uses: ./.github/actions/setup-opencode
 
       - name: Probe and select healthy models
-        if: ${{ steps.state.outputs.final != 'true' && steps.state.outputs.final_gate != 'true' }}
+        if: ${{ steps.state.outputs.final != 'true' && steps.state.outputs.final_gate != 'true' && steps.state.outputs.real_wix_bootstrap != 'true' }}
         shell: bash
         run: bash .github/scripts/probe-and-select-models.sh
+
+      - name: Generate authentic Wix extension shells
+        if: ${{ steps.state.outputs.real_wix_bootstrap == 'true' }}
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          WIX_API_KEY: ${{ secrets.WIX_API_KEY }}
+        run: bash .github/scripts/wix-realize-bootstrap.sh
 
       - name: Prepare Wix final-gate environment
         if: ${{ steps.state.outputs.final_gate == 'true' }}
@@ -101,7 +116,7 @@ jobs:
         run: bash .github/scripts/wix-finalize-fastpath.sh
 
       - name: Execute one agentic factory transition
-        if: ${{ steps.state.outputs.final != 'true' && steps.state.outputs.final_gate != 'true' }}
+        if: ${{ steps.state.outputs.final != 'true' && steps.state.outputs.final_gate != 'true' && steps.state.outputs.real_wix_bootstrap != 'true' }}
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}

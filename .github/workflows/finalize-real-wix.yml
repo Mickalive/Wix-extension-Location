@@ -1,0 +1,106 @@
+name: Finalize Real Wix App
+
+on:
+  push:
+    branches:
+      - factory/real-wix-finalization
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: finalize-real-wix-app
+  cancel-in-progress: true
+
+jobs:
+  finalize:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      WIX_CLI_VERSION: 1.1.238
+      EXPECTED_WIX_APP_ID: 3e9ec3af-001b-4684-a197-a5133677844d
+    steps:
+      - name: Checkout finalization branch
+        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+        with:
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Set up Node
+        uses: actions/setup-node@ae0d4ed08881f17d1511386f5be3e62356acd4a6
+        with:
+          node-version: 22.19.0
+          check-latest: false
+
+      - name: Validate exact Wix binding
+        run: |
+          set -euo pipefail
+          test -f wix.config.json
+          test "$(jq -r '.appId // empty' wix.config.json)" = "$EXPECTED_WIX_APP_ID"
+
+      - name: Authenticate Wix CLI
+        env:
+          WIX_API_KEY: ${{ secrets.WIX_API_KEY }}
+        run: |
+          set -euo pipefail
+          test -n "$WIX_API_KEY"
+          npx -y "@wix/cli@${WIX_CLI_VERSION}" login --api-key "$WIX_API_KEY" >/dev/null
+
+      - name: Generate missing real backend extensions
+        run: |
+          set -euo pipefail
+          mkdir -p .finalization-evidence
+
+          if ! find src/extensions/backend -type f -name '*data-collections*.extension.ts' -print 2>/dev/null | grep -q .; then
+            echo 'Generating Wix Data collection extension abr-state'
+            npx -y "@wix/cli@${WIX_CLI_VERSION}" generate --params '{"extensionType":"DATA_COLLECTION","collectionName":"abr-state"}' \
+              > .finalization-evidence/data-collection-generate.log 2>&1
+          fi
+
+          if ! grep -RIl --include='*.extension.ts' -Ei 'bookings.*valid|valid.*bookings' src/extensions/backend 2>/dev/null | grep -q .; then
+            echo 'Discovering current Bookings Validation SERVICE_PLUGIN enum from Wix CLI schema'
+            set +e
+            npx -y "@wix/cli@${WIX_CLI_VERSION}" schema generate --type SERVICE_PLUGIN \
+              > .finalization-evidence/service-plugin-schema.log 2>&1
+            schema_rc=$?
+            set -e
+            cat .finalization-evidence/service-plugin-schema.log
+            (( schema_rc == 0 )) || { echo '::error::Unable to read current SERVICE_PLUGIN schema'; exit 31; }
+
+            plugin_type="$(grep -Eo 'BOOKINGS[_A-Z0-9-]*VALID[A-Z0-9_-]*|VALID[A-Z0-9_-]*BOOKINGS[_A-Z0-9-]*' .finalization-evidence/service-plugin-schema.log | head -n1 || true)"
+            if [[ -z "$plugin_type" ]]; then
+              echo '::error::Current CLI schema exposes no Bookings Validation service-plugin enum.'
+              exit 32
+            fi
+            echo "Detected Bookings Validation pluginType=$plugin_type"
+            printf '%s\n' "$plugin_type" > .finalization-evidence/bookings-validation-plugin-type.txt
+            params="$(jq -nc --arg pt "$plugin_type" '{extensionType:"SERVICE_PLUGIN",pluginType:$pt,name:"booking-validation"}')"
+            npx -y "@wix/cli@${WIX_CLI_VERSION}" generate --params "$params" \
+              > .finalization-evidence/bookings-validation-generate.log 2>&1
+            cat .finalization-evidence/bookings-validation-generate.log
+          fi
+
+      - name: Synchronize dependencies and Astro types
+        run: |
+          set -euo pipefail
+          npm install --no-audit --no-fund
+          npx astro sync
+
+      - name: Deterministic checks
+        run: npm run check
+
+      - name: Real Wix build
+        run: npx -y "@wix/cli@${WIX_CLI_VERSION}" build
+
+      - name: Commit authentic generated Wix artifacts
+        if: success()
+        run: |
+          set -euo pipefail
+          git config user.name wix-real-finalizer
+          git config user.email wix-real-finalizer@users.noreply.github.com
+          git add src/extensions.ts src/extensions package.json package-lock.json
+          if ! git diff --cached --quiet; then
+            git commit -m "finalization: materialize real Wix backend extensions"
+            git push origin HEAD:factory/real-wix-finalization
+          fi

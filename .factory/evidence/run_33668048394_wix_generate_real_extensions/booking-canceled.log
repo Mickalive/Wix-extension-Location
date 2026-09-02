@@ -1,0 +1,7 @@
+{"success":true,"extensionType":"EVENT","newFiles":["src/extensions/backend/events/booking-canceled/booking-canceled.ts","src/extensions/backend/events/booking-canceled/booking-canceled.extension.ts"]}
+╭────────────────────────────────────────╮
+│                                        │
+│  Update available 1.1.238 -> 1.1.242   │
+│ Run npm i -g @wix/cli@latest to update │
+│                                        │
+╰────────────────────────────────────────╯

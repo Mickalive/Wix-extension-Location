@@ -1,16 +1,21 @@
 {
   "architecture": "lane-machine/1",
-  "generation": 255,
+  "generation": 256,
   "phase": "BUILD",
-  "lane": "integration",
+  "lane": "dashboard",
   "accepted_base": "ef7e61948d26f6e5e9dfaf3112eff29b637ba38f",
-  "candidate": null,
-  "repair_feedback": "REAL_WIX_EXTENSIONS_REQUIRED: prior READY invalidated. Generate and register real Wix dashboard pages, modal, backend events and data collections using authenticated Wix tooling; create real Wix HTTP/runtime adapters; port the dashboard runtime from the test-only UiDocument abstraction to real React/Wix dashboard extensions; register the Bookings Validation component through an authenticated supported Wix extension path. Do not permit READY until these components exist on the actual app/dev site and empirical user-facing Wix QA passes.",
+  "candidate": {
+    "sha": "b7ef9afe059dbcf4e6ff183b1e5c4cefbfeafdd5",
+    "tag": "refs/tags/factory-candidate/integration/255",
+    "base": "ef7e61948d26f6e5e9dfaf3112eff29b637ba38f",
+    "lane": "integration"
+  },
+  "repair_feedback": "REAL_REACT_DASHBOARD_REQUIRED: Wix CLI has generated real dashboard page/modal builders and UUIDs on the cumulative candidate. Port the Advanced Booking Rules editor, Locations Usage page and diff-confirm flow into those generated React/TSX surfaces using @wix/dashboard/@wix/design-system and the typed services bridge. The generated extensions must be genuinely usable in Wix; do not mount or wrap the test-only UiDocument/UiNode runtime. Preserve every Wix-generated extension ID and all non-dashboard generated files.",
   "lease": null,
-  "last_run": 33666219960,
+  "last_run": 33668048394,
   "last_transition": {
-    "reason": "false_ready_reopened_for_real_extensions",
-    "run_id": null
+    "reason": "real_wix_extensions_generated",
+    "run_id": 33668048394
   },
   "last_operational_failure": null,
   "control_revision": "a7b1cfaac91e4bb92512122d659663450273494f",

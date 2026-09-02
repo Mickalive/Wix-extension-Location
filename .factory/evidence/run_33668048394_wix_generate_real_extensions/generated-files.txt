@@ -1,0 +1,8 @@
+/home/runner/work/_temp/wix-realize-33668048394/product/src/extensions/backend/events/booking-canceled/booking-canceled.extension.ts
+/home/runner/work/_temp/wix-realize-33668048394/product/src/extensions/backend/events/booking-confirmed/booking-confirmed.extension.ts
+/home/runner/work/_temp/wix-realize-33668048394/product/src/extensions/dashboard/modals/diff-confirm/diff-confirm.extension.ts
+/home/runner/work/_temp/wix-realize-33668048394/product/src/extensions/dashboard/modals/diff-confirm/diff-confirm.tsx
+/home/runner/work/_temp/wix-realize-33668048394/product/src/extensions/dashboard/pages/advanced-booking-rules-usage/advanced-booking-rules-usage.extension.ts
+/home/runner/work/_temp/wix-realize-33668048394/product/src/extensions/dashboard/pages/advanced-booking-rules-usage/advanced-booking-rules-usage.tsx
+/home/runner/work/_temp/wix-realize-33668048394/product/src/extensions/dashboard/pages/advanced-booking-rules/advanced-booking-rules.extension.ts
+/home/runner/work/_temp/wix-realize-33668048394/product/src/extensions/dashboard/pages/advanced-booking-rules/advanced-booking-rules.tsx

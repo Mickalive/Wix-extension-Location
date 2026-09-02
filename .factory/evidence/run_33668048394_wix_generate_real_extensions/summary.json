@@ -1,0 +1,15 @@
+{
+  "schemaVersion": 1,
+  "runId": 33668048394,
+  "appId": "3e9ec3af-001b-4684-a197-a5133677844d",
+  "officialCli": true,
+  "generated": [
+    "DASHBOARD_PAGE:advanced-booking-rules",
+    "DASHBOARD_PAGE:advanced-booking-rules-usage",
+    "DASHBOARD_MODAL:diff-confirm",
+    "EVENT:booking-confirmed",
+    "EVENT:booking-canceled"
+  ],
+  "dataCollections": "PENDING_REAL_NAMESPACE",
+  "bookingsValidation": "PENDING_AUTHENTICATED_COMPONENT_CREATION"
+}

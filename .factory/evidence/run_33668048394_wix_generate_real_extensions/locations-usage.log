@@ -1,0 +1,7 @@
+{"success":true,"extensionType":"DASHBOARD_PAGE","newFiles":["src/extensions/dashboard/pages/advanced-booking-rules-usage/advanced-booking-rules-usage.extension.ts","src/extensions/dashboard/pages/advanced-booking-rules-usage/advanced-booking-rules-usage.tsx"]}
+╭────────────────────────────────────────╮
+│                                        │
+│  Update available 1.1.238 -> 1.1.242   │
+│ Run npm i -g @wix/cli@latest to update │
+│                                        │
+╰────────────────────────────────────────╯

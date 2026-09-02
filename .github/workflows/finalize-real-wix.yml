@@ -20,6 +20,7 @@ jobs:
     env:
       WIX_CLI_VERSION: 1.1.238
       EXPECTED_WIX_APP_ID: 3e9ec3af-001b-4684-a197-a5133677844d
+      WIX_SITE_ID: 4d7e75bf-b6ff-4b77-801f-a38e8458b272
     steps:
       - name: Checkout finalization branch
         uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
@@ -60,26 +61,36 @@ jobs:
 
           if ! grep -RIl --include='*.extension.ts' -Ei 'bookings.*valid|valid.*bookings' src/extensions/backend 2>/dev/null | grep -q .; then
             echo 'Discovering current Bookings Validation SERVICE_PLUGIN enum from Wix CLI schema'
-            set +e
             npx -y "@wix/cli@${WIX_CLI_VERSION}" schema generate --type SERVICE_PLUGIN \
               > .finalization-evidence/service-plugin-schema.log 2>&1
-            schema_rc=$?
-            set -e
             cat .finalization-evidence/service-plugin-schema.log
-            (( schema_rc == 0 )) || { echo '::error::Unable to read current SERVICE_PLUGIN schema'; exit 31; }
-
             plugin_type="$(grep -Eo 'BOOKINGS[_A-Z0-9-]*VALID[A-Z0-9_-]*|VALID[A-Z0-9_-]*BOOKINGS[_A-Z0-9-]*' .finalization-evidence/service-plugin-schema.log | head -n1 || true)"
-            if [[ -z "$plugin_type" ]]; then
-              echo '::error::Current CLI schema exposes no Bookings Validation service-plugin enum.'
-              exit 32
-            fi
+            test -n "$plugin_type" || { echo '::error::Current CLI schema exposes no Bookings Validation service-plugin enum.'; exit 32; }
             echo "Detected Bookings Validation pluginType=$plugin_type"
-            printf '%s\n' "$plugin_type" > .finalization-evidence/bookings-validation-plugin-type.txt
             params="$(jq -nc --arg pt "$plugin_type" '{extensionType:"SERVICE_PLUGIN",pluginType:$pt,name:"booking-validation"}')"
             npx -y "@wix/cli@${WIX_CLI_VERSION}" generate --params "$params" \
               > .finalization-evidence/bookings-validation-generate.log 2>&1
             cat .finalization-evidence/bookings-validation-generate.log
           fi
+
+      - name: Preserve authentic generated Wix artifacts immediately
+        run: |
+          set -euo pipefail
+          git config user.name wix-real-finalizer
+          git config user.email wix-real-finalizer@users.noreply.github.com
+          git add src/extensions.ts src/extensions package.json
+          if ! git diff --cached --quiet; then
+            git commit -m "finalization: preserve authentic Wix backend extension shells"
+            git push origin HEAD:factory/real-wix-finalization
+          fi
+
+      - name: Select sandbox and pull Wix environment
+        run: |
+          set -euo pipefail
+          npx -y "@wix/cli@${WIX_CLI_VERSION}" dev-site select "$WIX_SITE_ID"
+          printf 'WIX_SITE_ID=%s\n' "$WIX_SITE_ID" > .env.local
+          npx -y "@wix/cli@${WIX_CLI_VERSION}" env pull
+          grep -q '^WIX_CLIENT_ID=' .env.local || { echo '::error::WIX_CLIENT_ID missing after env pull'; exit 33; }
 
       - name: Synchronize dependencies and Astro types
         run: |
@@ -93,14 +104,12 @@ jobs:
       - name: Real Wix build
         run: npx -y "@wix/cli@${WIX_CLI_VERSION}" build
 
-      - name: Commit authentic generated Wix artifacts
+      - name: Persist synchronized lockfile
         if: success()
         run: |
           set -euo pipefail
-          git config user.name wix-real-finalizer
-          git config user.email wix-real-finalizer@users.noreply.github.com
-          git add src/extensions.ts src/extensions package.json package-lock.json
+          git add package-lock.json
           if ! git diff --cached --quiet; then
-            git commit -m "finalization: materialize real Wix backend extensions"
+            git commit -m "finalization: synchronize generated Wix dependencies"
             git push origin HEAD:factory/real-wix-finalization
           fi

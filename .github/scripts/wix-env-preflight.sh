@@ -69,9 +69,6 @@ rc=$?
 set -e
 if (( rc != 0 )); then
   if grep -Eqi 'FailedToIdentifyProgramFlow|configuration file.*(malformed|missing required)|project type identification' "$SELECT_LOG"; then
-    # Do not misclassify an incomplete Wix project as BLOCKED_EXTERNAL. These
-    # sentinels let phase_wix reach its real wix build, whose structural-failure
-    # classifier deterministically routes the cumulative candidate to integration repair.
     printf 'WIX_SITE_ID=__STRUCTURE_INVALID__\n' >>"$GITHUB_ENV"
     printf 'WIX_CLIENT_ID=__STRUCTURE_INVALID__\n' >>"$GITHUB_ENV"
     printf 'WIX_PREFLIGHT_STRUCTURE_INVALID=1\n' >>"$GITHUB_ENV"
@@ -111,22 +108,29 @@ while IFS='=' read -r key value; do
 done <"$TMP/.env.local"
 printf 'WIX_SITE_ID=%s\n' "$site_id" >>"$GITHUB_ENV"
 
-# WIX_QA needs a real Wix MCP, not merely agent permissions named wix_*.
+# Empirical QA must not depend on interactive Wix OAuth. GitHub Actions already
+# has a scoped API key and an exact development-site ID. Configure a tiny local
+# MCP bridge that exposes only read-only Wix Bookings query/count calls and never
+# exposes credentials to the auditor. Wix documents API-key + wix-site-id as the
+# supported authentication model for site-level CI/server automation.
 if [[ "$effective_phase" == WIX_QA ]]; then
-  mcp_config='{"mcp":{"wix":{"type":"local","command":["npx","-y","@wix/mcp@1.0.72","--wixCliAuth"],"enabled":true,"timeout":20000}}}'
+  bridge="$GITHUB_WORKSPACE/.github/scripts/wix-ci-mcp.mjs"
+  [[ -f "$bridge" ]] || { echo "::error::Missing Wix CI MCP bridge."; exit 47; }
+  mcp_config="$(jq -cn --arg bridge "$bridge" '{mcp:{wix:{type:"local",command:["node",$bridge],enabled:true,timeout:20000}}}')"
   MCP_LOG="$RUNNER_TEMP/wix-mcp-probe-$GITHUB_RUN_ID.log"
   : >"$MCP_LOG"
   set +e
-  (cd "$TMP" && OPENCODE_CONFIG_CONTENT="$mcp_config" opencode mcp list) >"$MCP_LOG" 2>&1
+  (cd "$TMP" && WIX_API_KEY="$WIX_API_KEY" WIX_SITE_ID="$site_id" OPENCODE_CONFIG_CONTENT="$mcp_config" opencode mcp list) >"$MCP_LOG" 2>&1
   rc=$?
   set -e
   if (( rc == 0 )) && grep -Eqi 'wix.*connected|connected.*wix' "$MCP_LOG"; then
     printf 'OPENCODE_CONFIG_CONTENT=%s\n' "$mcp_config" >>"$GITHUB_ENV"
     printf 'WIX_MCP_READY=1\n' >>"$GITHUB_ENV"
-    echo "Wix MCP connection verified for empirical QA."
+    echo "Read-only Wix CI MCP bridge connected for empirical QA."
   else
+    tail -n80 "$MCP_LOG" >&2 || true
     printf 'WIX_MCP_READY=0\n' >>"$GITHUB_ENV"
-    echo "::warning::Wix CLI is authenticated, but the Wix MCP is not connected; WIX_QA will enter BLOCKED_EXTERNAL rather than fake an empirical audit."
+    echo "::warning::Read-only Wix CI MCP bridge did not connect; WIX_QA will remain blocked rather than fake an empirical audit."
   fi
   : >"$MCP_LOG"
 fi

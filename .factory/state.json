@@ -1,19 +1,19 @@
 {
   "architecture": "lane-machine/1",
-  "generation": 254,
-  "phase": "READY",
+  "generation": 255,
+  "phase": "BUILD",
   "lane": "integration",
   "accepted_base": "ef7e61948d26f6e5e9dfaf3112eff29b637ba38f",
   "candidate": null,
-  "repair_feedback": null,
+  "repair_feedback": "REAL_WIX_EXTENSIONS_REQUIRED: prior READY invalidated. Generate and register real Wix dashboard pages, modal, backend events and data collections using authenticated Wix tooling; create real Wix HTTP/runtime adapters; port the dashboard runtime from the test-only UiDocument abstraction to real React/Wix dashboard extensions; register the Bookings Validation component through an authenticated supported Wix extension path. Do not permit READY until these components exist on the actual app/dev site and empirical user-facing Wix QA passes.",
   "lease": null,
   "last_run": 33666219960,
   "last_transition": {
-    "reason": "final_release_ready_deterministic",
-    "run_id": 33666219960
+    "reason": "false_ready_reopened_for_real_extensions",
+    "run_id": null
   },
   "last_operational_failure": null,
-  "control_revision": "b06d8c499854bd2b87e9e7b8b4218bfccfc9a5e3",
+  "control_revision": "a7b1cfaac91e4bb92512122d659663450273494f",
   "gate_proofs": {},
   "blocked_resume_phase": null
 }

@@ -1,0 +1,19 @@
+{
+  "schemaVersion": 1,
+  "gate": "WIX_QA",
+  "mode": "deterministic-readonly-api",
+  "sha": "ef7e61948d26f6e5e9dfaf3112eff29b637ba38f",
+  "runId": 33666219960,
+  "siteId": "4d7e75bf-b6ff-4b77-801f-a38e8458b272",
+  "clientId": "\"3e9ec3af-001b-4684-a197-a5133677844d\"",
+  "deterministicChecks": "PASS",
+  "wixBuild": "PASS",
+  "devSite": "PASS",
+  "bookingsApi": {
+    "endpoint": "/_api/bookings/v2/services/query",
+    "method": "POST",
+    "status": 200,
+    "readOnly": true
+  },
+  "verdict": "ACCEPT"
+}

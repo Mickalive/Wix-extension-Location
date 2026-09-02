@@ -19,26 +19,26 @@ set -e
 (( rc == 0 )) || { echo "::error::Wix CLI API-key login failed"; exit 41; }
 
 run_generate(){
-  local label="$1" params="$2" log="$EVIDENCE/${label}.log"
+  local label params log rc extension_type
+  label="$1"
+  params="$2"
+  log="$EVIDENCE/${label}.log"
   echo "Generating $label with official Wix CLI"
   set +e
   (cd "$PRODUCT" && npx -y "@wix/cli@${WIX_CLI_VERSION}" generate --params "$params") >"$log" 2>&1
-  local rc=$?
+  rc=$?
   set -e
   if (( rc != 0 )); then
     echo "::error::wix generate failed for $label"
     tail -n120 "$log" >&2 || true
-    # Capture the current schema so the next repair is evidence-driven rather
-    # than guessing a changed parameter contract.
+    extension_type="$(jq -r '.extensionType' <<<"$params")"
     set +e
-    (cd "$PRODUCT" && npx -y "@wix/cli@${WIX_CLI_VERSION}" schema generate --type "$(jq -r '.extensionType' <<<"$params")") >"$EVIDENCE/${label}.schema.log" 2>&1
+    (cd "$PRODUCT" && npx -y "@wix/cli@${WIX_CLI_VERSION}" schema generate --type "$extension_type") >"$EVIDENCE/${label}.schema.log" 2>&1
     set -e
     exit 42
   fi
 }
 
-# Idempotence is based on generated registration paths, not invented IDs.
-# The first successful run creates src/extensions.ts and the CLI-owned builders.
 if ! grep -RIl --include='*.extension.ts' 'routePath.*advanced-booking-rules\|advanced-booking-rules' "$PRODUCT/src/extensions" 2>/dev/null | grep -q .; then
   run_generate rules-editor '{"extensionType":"DASHBOARD_PAGE","title":"Advanced Booking Rules","route":"advanced-booking-rules"}'
 fi
@@ -57,12 +57,6 @@ fi
 
 [[ -f "$PRODUCT/src/extensions.ts" ]] || { echo "::error::Wix CLI generation produced no src/extensions.ts"; exit 43; }
 grep -Eq '\.use\(' "$PRODUCT/src/extensions.ts" || { echo "::error::Wix CLI generation did not register extensions in src/extensions.ts"; exit 43; }
-
-# Do NOT guess the immutable app namespace. Data collections are generated in a
-# subsequent authenticated step after the real namespace has been discovered.
-# Do NOT fabricate the Bookings Validation component either; current unified
-# CLI support does not expose it as a SERVICE_PLUGIN enum member. Integration
-# must create/query it through Wix's authenticated App Extensions surface.
 
 find "$PRODUCT/src/extensions" -type f \( -name '*.extension.ts' -o -name '*.tsx' \) -print | sort >"$EVIDENCE/generated-files.txt"
 cp "$PRODUCT/src/extensions.ts" "$EVIDENCE/extensions.ts"

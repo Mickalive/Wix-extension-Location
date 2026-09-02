@@ -23,8 +23,6 @@ permissions:
   id-token: write
 
 concurrency:
-  # Different authoritative SHAs must never block one another. The cycle script
-  # rejects stale writes, so an old hung run cannot corrupt a newer state.
   group: wix-product-factory-${{ github.sha }}
   cancel-in-progress: false
 
@@ -36,7 +34,7 @@ env:
 
 jobs:
   factory:
-    name: One authoritative product-state transition
+    name: Authoritative product-state transition
     runs-on: ubuntu-24.04
     timeout-minutes: 95
     steps:
@@ -56,11 +54,21 @@ jobs:
           set -euo pipefail
           jq -e '.architecture=="lane-machine/1" and .generation>=1 and .accepted_base and .phase' .factory/state.json >/dev/null
           bash .github/scripts/housekeeping.sh
-          if [[ "$(jq -r '.phase' .factory/state.json)" == READY ]]; then
+          phase="$(jq -r '.phase' .factory/state.json)"
+          effective="$phase"
+          if [[ "$phase" == BLOCKED_EXTERNAL ]]; then
+            effective="$(jq -r '.blocked_resume_phase // empty' .factory/state.json)"
+          fi
+          if [[ "$phase" == READY ]]; then
             echo "final=true" >> "$GITHUB_OUTPUT"
           else
             echo "final=false" >> "$GITHUB_OUTPUT"
           fi
+          case "$effective" in
+            WIX_QA|RELEASE_AUDIT) echo "final_gate=true" >> "$GITHUB_OUTPUT" ;;
+            *) echo "final_gate=false" >> "$GITHUB_OUTPUT" ;;
+          esac
+          echo "Authoritative phase=$phase effective=$effective"
 
       - name: Set up Node
         if: ${{ steps.state.outputs.final != 'true' }}
@@ -69,24 +77,31 @@ jobs:
           node-version: 22.19.0
 
       - name: Install reviewed OpenCode CLI
-        if: ${{ steps.state.outputs.final != 'true' }}
+        if: ${{ steps.state.outputs.final != 'true' && steps.state.outputs.final_gate != 'true' }}
         uses: ./.github/actions/setup-opencode
 
       - name: Probe and select healthy models
-        if: ${{ steps.state.outputs.final != 'true' }}
+        if: ${{ steps.state.outputs.final != 'true' && steps.state.outputs.final_gate != 'true' }}
         shell: bash
         run: bash .github/scripts/probe-and-select-models.sh
 
-      - name: Prepare Wix candidate environment
-        if: ${{ steps.state.outputs.final != 'true' }}
-        continue-on-error: true
+      - name: Prepare Wix final-gate environment
+        if: ${{ steps.state.outputs.final_gate == 'true' }}
         shell: bash
         env:
           WIX_API_KEY: ${{ secrets.WIX_API_KEY }}
         run: bash .github/scripts/wix-env-preflight.sh
 
-      - name: Execute exactly one factory transition
-        if: ${{ steps.state.outputs.final != 'true' }}
+      - name: Converge deterministic final gates
+        if: ${{ steps.state.outputs.final_gate == 'true' }}
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          WIX_API_KEY: ${{ secrets.WIX_API_KEY }}
+        run: bash .github/scripts/wix-finalize-fastpath.sh
+
+      - name: Execute one agentic factory transition
+        if: ${{ steps.state.outputs.final != 'true' && steps.state.outputs.final_gate != 'true' }}
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
@@ -94,7 +109,7 @@ jobs:
         run: bash .github/scripts/wix-factory-cycle.sh
 
       - name: Dispatch next logical transition
-        if: ${{ success() && steps.state.outputs.final != 'true' }}
+        if: ${{ success() && steps.state.outputs.final != 'true' && steps.state.outputs.final_gate != 'true' }}
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
@@ -115,9 +130,6 @@ jobs:
             *) echo "Non-recoverable operational failure: $failure_reason"; exit 0 ;;
           esac
 
-          # Stop hot loops. Progressing states dispatch immediately; an identical
-          # semantic state gets at most two immediate retries, then yields to the
-          # 15-minute watchdog so provider/orchestration failures cannot burn runs.
           current_signature="$(jq -r '[.phase, (.lane // "none"), (.candidate.sha // "none"), (.repair_feedback // "none"), (.last_transition.reason // "none"), (.last_operational_failure.reason // "none")] | join("|")' <<<"$state")"
           repeats=0
           while IFS= read -r commit; do

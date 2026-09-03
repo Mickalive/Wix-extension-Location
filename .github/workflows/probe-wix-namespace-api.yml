@@ -17,18 +17,23 @@ jobs:
       - uses: actions/setup-node@ae0d4ed08881f17d1511386f5be3e62356acd4a6
         with:
           node-version: 22.19.0
-      - name: Inspect official Wix packages
+      - name: Inspect official Wix namespace implementation
         run: |
           set -euo pipefail
           mkdir /tmp/wixprobe && cd /tmp/wixprobe
-          npm pack @wix/create-new@latest >/tmp/pack-create.txt
-          npm pack @wix/cli-app@latest >/tmp/pack-cli.txt
-          for tgz in *.tgz; do tar -xzf "$tgz" -C "${tgz%.tgz}" 2>/dev/null || { mkdir -p "${tgz%.tgz}"; tar -xzf "$tgz" -C "${tgz%.tgz}"; }; done
-          echo '=== namespace-related source matches ==='
-          grep -RInE --include='*.js' --include='*.mjs' --include='*.cjs' --include='*.ts' 'app.?namespace|namespace.*app|code.?identifier|set.*namespace|namespace.*set' . \
-            | grep -vE 'node_modules|sourceMappingURL' \
-            | head -n 300 || true
-          echo '=== dev-center URL/method matches ==='
-          grep -RInE --include='*.js' --include='*.mjs' --include='*.cjs' --include='*.ts' 'dev.?center|devcenter|namespace' . \
-            | grep -Ei 'http|client|mutation|update|create|namespace' \
-            | head -n 300 || true
+          npm pack @wix/create-new@0.0.108 >/dev/null
+          mkdir src && tar -xzf wix-create-new-0.0.108.tgz -C src
+          f=src/package/build/index.js
+          echo '=== dev-center client construction ==='
+          sed -n '71870,71935p' "$f"
+          echo '=== set namespace HTTP definition ==='
+          sed -n '72780,72820p' "$f"
+          echo '=== set namespace client method ==='
+          sed -n '80660,80720p' "$f"
+          echo '=== namespace schemas and validation ==='
+          sed -n '80570,80615p' "$f"
+          sed -n '81245,81275p' "$f"
+          echo '=== namespace UI submission/default ==='
+          sed -n '81770,81845p' "$f"
+          echo '=== slug/default namespace context ==='
+          sed -n '83970,84020p' "$f"

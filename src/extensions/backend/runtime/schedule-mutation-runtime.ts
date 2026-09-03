@@ -2,12 +2,11 @@ import { services, staffMembers } from '@wix/bookings';
 import { auth } from '@wix/essentials';
 import type {
   MutationPlan,
-  PlannedChange,
   RuleSetDTO,
   ScheduleScope,
   ScheduleSnapshot,
-  Weekday,
 } from '../../../domain/ports';
+import type { PlannedChange, Weekday } from '../../../shared/types';
 import { ScheduleMutationOrchestrator } from '../../../platform/schedule-mutation/orchestrator';
 import { WixCalendarScheduleGateway } from '../../../platform/adapters/scheduleGateway';
 import { computeScheduleDiff } from '../../../ui/diff/computeScheduleDiff.js';

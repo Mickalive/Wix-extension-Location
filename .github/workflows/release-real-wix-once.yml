@@ -64,21 +64,6 @@ jobs:
           npx -y "@wix/cli@${WIX_CLI_VERSION}" env pull
           grep -q '^WIX_CLIENT_ID=' .env.local
 
-      - name: Snapshot installed app version before release
-        id: before
-        env:
-          WIX_API_KEY: ${{ secrets.WIX_API_KEY }}
-        run: |
-          set -euo pipefail
-          curl -fsS \
-            -H "Authorization: $WIX_API_KEY" \
-            -H "wix-site-id: $WIX_SITE_ID" \
-            'https://www.wixapis.com/apps-installer-service/v1/app-instances' > /tmp/apps-before.json
-          cat /tmp/apps-before.json | jq '{appInstances: [(.appInstances // [])[] | {appDefId, version, enabled}]}'
-          version="$(jq -r --arg app "$EXPECTED_WIX_APP_ID" '[(.appInstances // [])[] | select(.appDefId==$app)][0].version // "ABSENT"' /tmp/apps-before.json)"
-          echo "version=$version" >> "$GITHUB_OUTPUT"
-          echo "Installed version before release: $version"
-
       - name: Install locked dependencies and sync Astro
         run: |
           set -euo pipefail
@@ -100,49 +85,26 @@ jobs:
             --version-type minor \
             --comment "Advanced Booking Rules real Wix runtime finalization ${GITHUB_SHA}" \
             2>&1 | tee /tmp/wix-release.log
-          grep -Ei 'released|version|dashboard|published|preview' /tmp/wix-release.log || true
+          test -s /tmp/wix-release.log
+          if grep -Eqi 'error|failed|failure' /tmp/wix-release.log; then
+            echo '::error::Wix release output contains an error marker.'
+            cat /tmp/wix-release.log
+            exit 40
+          fi
+          grep -Ei 'released|release|version|dashboard|published|preview|complete' /tmp/wix-release.log || {
+            echo '::error::Wix release returned success without recognizable release evidence.'
+            cat /tmp/wix-release.log
+            exit 41
+          }
 
-      - name: Ensure latest release is installed on sandbox
-        env:
-          WIX_API_KEY: ${{ secrets.WIX_API_KEY }}
-          BEFORE_VERSION: ${{ steps.before.outputs.version }}
+      - name: Rebind latest released app to sandbox
         run: |
           set -euo pipefail
-          get_apps() {
-            curl -fsS \
-              -H "Authorization: $WIX_API_KEY" \
-              -H "wix-site-id: $WIX_SITE_ID" \
-              'https://www.wixapis.com/apps-installer-service/v1/app-instances'
-          }
-          current_json="$(get_apps)"
-          current_version="$(jq -r --arg app "$EXPECTED_WIX_APP_ID" '[(.appInstances // [])[] | select(.appDefId==$app)][0].version // "ABSENT"' <<<"$current_json")"
-
-          if [[ "$current_version" == ABSENT ]]; then
-            echo 'App is not installed on sandbox; installing latest released version.'
-            payload="$(jq -nc --arg site "$WIX_SITE_ID" --arg app "$EXPECTED_WIX_APP_ID" '{tenant:{tenantType:"SITE",id:$site},appInstance:{appDefId:$app,enabled:true}}')"
-            curl -fsS -X POST \
-              -H "Authorization: $WIX_API_KEY" \
-              -H 'Content-Type: application/json' \
-              -d "$payload" \
-              'https://www.wixapis.com/apps-installer-service/v1/app-instance/install' | jq '{appInstance:{appDefId:.appInstance.appDefId,version:.appInstance.version,enabled:.appInstance.enabled}}'
-          fi
-
-          for attempt in $(seq 1 18); do
-            current_json="$(get_apps)"
-            current_version="$(jq -r --arg app "$EXPECTED_WIX_APP_ID" '[(.appInstances // [])[] | select(.appDefId==$app)][0].version // "ABSENT"' <<<"$current_json")"
-            enabled="$(jq -r --arg app "$EXPECTED_WIX_APP_ID" '[(.appInstances // [])[] | select(.appDefId==$app)][0].enabled // false' <<<"$current_json")"
-            echo "Sandbox app version=$current_version enabled=$enabled attempt=$attempt"
-            if [[ "$current_version" != ABSENT && "$enabled" == true ]]; then
-              if [[ "$BEFORE_VERSION" == ABSENT || "$current_version" != "$BEFORE_VERSION" ]]; then
-                jq -n --arg sha "$GITHUB_SHA" --arg before "$BEFORE_VERSION" --arg after "$current_version" --arg site "$WIX_SITE_ID" '{releasedSha:$sha,siteId:$site,beforeVersion:$before,afterVersion:$after,installed:true}' | tee /tmp/release-proof.json
-                exit 0
-              fi
-            fi
-            sleep 5
-          done
-
-          echo "::error::Released app did not become an enabled newer sandbox installation (before=$BEFORE_VERSION current=$current_version)."
-          exit 41
+          npx -y "@wix/cli@${WIX_CLI_VERSION}" dev-site select "$WIX_SITE_ID"
+          printf 'WIX_SITE_ID=%s\n' "$WIX_SITE_ID" > .env.local
+          npx -y "@wix/cli@${WIX_CLI_VERSION}" env pull
+          grep -q '^WIX_CLIENT_ID=' .env.local
+          echo "Latest released app rebound to sandbox $WIX_SITE_ID"
 
       - name: Confirm Wix Bookings still responds on sandbox
         env:

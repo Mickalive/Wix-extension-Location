@@ -3,15 +3,13 @@ import { auth } from '@wix/essentials';
 import type {
   ApplyResult,
   MutationPlan,
-  PlannedChange,
   RollbackResult,
-  ScheduleEventRecord,
   ScheduleGateway,
   ScheduleScope,
   ScheduleSnapshot,
   VerifyResult,
-  Weekday,
 } from '../../domain/ports';
+import type { PlannedChange, ScheduleEventRecord, Weekday } from '../../shared/types';
 
 const MANAGED_TITLE_PREFIX = 'Advanced Booking Rules · ';
 const BOOKING_APP_ID = '13d21c63-b5ec-5912-8397-c3a5ddb27a97';

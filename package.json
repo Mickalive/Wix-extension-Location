@@ -21,10 +21,9 @@
     "@wix/design-system": "^1.154.0",
     "@wix/essentials": "^0.1.23",
     "@wix/data": "^1.0.185",
-    "@wix/bookings": "^1.0.1396",
+    "@wix/bookings": "^1.0.1649",
     "astro": "^5.8.0",
-    "typescript": "^5.8.3",
-    "@wix/crm": "^1.0.125"
+    "typescript": "^5.8.3"
   },
   "devDependencies": {
     "@types/node": "^20.14.9",

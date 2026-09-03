@@ -1,0 +1,25 @@
+name: Wix Release Probe
+
+on:
+  push:
+    branches:
+      - factory/real-wix-finalization
+    paths:
+      - .github/workflows/wix-release-probe.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+        with:
+          ref: factory/real-wix-finalization
+      - uses: actions/setup-node@ae0d4ed08881f17d1511386f5be3e62356acd4a6
+        with:
+          node-version: 22.19.0
+      - name: Wix release help
+        run: npx --yes @wix/cli@1.1.238 release --help

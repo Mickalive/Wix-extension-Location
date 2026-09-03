@@ -1,15 +1,6 @@
 import type { EditorDraft } from '../state/editorStore.js';
 
-export interface RuntimeRuleSet {
-  ruleSetId: string;
-  revision: string;
-  version: number;
-  locationWindows: Record<string, Array<{ weekday: string; start: string; end: string }>>;
-  serviceWindows: Record<string, Array<{ weekday: string; start: string; end: string }>>;
-  exceptions: Array<Record<string, any>>;
-  limits: Array<Record<string, any>>;
-  [key: string]: any;
-}
+export type RuntimeRuleSet = Record<string, any>;
 
 export interface EntitlementMeterDto {
   meter: { count: number | null; degraded: boolean };

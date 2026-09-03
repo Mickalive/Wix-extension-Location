@@ -1,0 +1,68 @@
+name: Complete Wix App Metadata Once
+
+on:
+  push:
+    branches: [factory/real-wix-finalization]
+    paths: [.complete-wix-metadata]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: complete-wix-app-metadata-once
+  cancel-in-progress: false
+
+jobs:
+  complete:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      APP_ID: 3e9ec3af-001b-4684-a197-a5133677844d
+      WIX_CLI_VERSION: 1.1.238
+      CREATE_NEW_VERSION: 0.0.108
+      CI: '1'
+    steps:
+      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+      - uses: actions/setup-node@ae0d4ed08881f17d1511386f5be3e62356acd4a6
+        with:
+          node-version: 22.19.0
+      - name: Authenticate Wix CLI
+        env:
+          WIX_API_KEY: ${{ secrets.WIX_API_KEY }}
+        run: |
+          set -euo pipefail
+          test -n "$WIX_API_KEY"
+          npx -y "@wix/cli@${WIX_CLI_VERSION}" login --api-key "$WIX_API_KEY" >/dev/null
+      - name: Complete immutable metadata using Wix official existing-app creator
+        env:
+          WIX_API_KEY: ${{ secrets.WIX_API_KEY }}
+        run: |
+          set -euo pipefail
+          root="$RUNNER_TEMP/wix-existing-app-metadata"
+          rm -rf "$root"
+          mkdir -p "$root"
+          cd "$root"
+          set +e
+          timeout 240 npx -y "@wix/create-new@${CREATE_NEW_VERSION}" app \
+            --extend-app-id "$APP_ID" \
+            --app-name "advanced-booking-rules" \
+            > /tmp/create-new-metadata.log 2>&1
+          code=$?
+          set -e
+          cat /tmp/create-new-metadata.log
+          if grep -Eqi 'namespace.*already.*exist|namespace.*unique|already_exists' /tmp/create-new-metadata.log; then
+            echo '::error::Desired Wix namespace is already taken; refusing an immutable fallback.'
+            exit 42
+          fi
+          if [[ $code -eq 124 ]]; then
+            echo '::error::Official create-new flow became interactive instead of completing headlessly.'
+            exit 43
+          fi
+          # create-new has historically returned non-zero for optional post-create tasks
+          # even after successfully materializing an existing app. Require concrete project evidence.
+          test -f wix.config.json || {
+            echo "::error::Wix create-new did not materialize the existing app (exit=$code)."
+            exit "$code"
+          }
+          test "$(jq -r '.appId // empty' wix.config.json)" = "$APP_ID"
+          echo "Official existing-app flow completed/materialized app; exit=$code"

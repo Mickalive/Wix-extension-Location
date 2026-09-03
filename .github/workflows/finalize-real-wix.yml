@@ -78,6 +78,22 @@ jobs:
           npm install --no-audit --no-fund
           npx astro sync
 
+      - name: Inspect exact Wix Calendar SDK surface
+        run: |
+          set -euo pipefail
+          npm install --no-save --no-audit --no-fund @wix/calendar@1.0.243
+          node --input-type=module - <<'NODE'
+          const mod = await import('@wix/calendar');
+          console.log('CALENDAR_EXPORTS=' + Object.keys(mod).sort().join(','));
+          for (const [key, value] of Object.entries(mod)) {
+            if (value && typeof value === 'object') {
+              console.log(`CALENDAR_${key}_METHODS=` + Object.keys(value).sort().join(','));
+            }
+          }
+          NODE
+          echo '--- relevant declaration excerpts ---'
+          grep -R -n -E 'function (queryEvents|createEvent|updateEvent|cancelEvent)|queryEvents:|createEvent:|updateEvent:|cancelEvent:' node_modules/@wix/calendar/dist node_modules/@wix/calendar 2>/dev/null | head -80 || true
+
       - name: Deterministic checks
         run: npm run check
 

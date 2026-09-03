@@ -17,7 +17,7 @@ jobs:
       - uses: actions/setup-node@ae0d4ed08881f17d1511386f5be3e62356acd4a6
         with:
           node-version: 22.19.0
-      - name: Inspect Wix DevCenter resolver and authenticated client
+      - name: Inspect create-new command and backoffice URL
         run: |
           set -euo pipefail
           mkdir /tmp/wixprobe && cd /tmp/wixprobe
@@ -25,34 +25,25 @@ jobs:
           mkdir src && tar -xzf wix-create-new-0.0.108.tgz -C src
           f=src/package/build/index.js
 
-          show_context() {
-            local pattern="$1"
-            local before="${2:-20}"
-            local after="${3:-50}"
-            echo "=== $pattern ==="
-            local line
-            line="$(grep -n -m1 "$pattern" "$f" | cut -d: -f1 || true)"
-            if [[ -z "$line" ]]; then
-              echo 'NOT FOUND'
-              return 0
-            fi
-            local start=$(( line > before ? line-before : 1 ))
-            local end=$(( line+after ))
-            sed -n "${start},${end}p" "$f"
-          }
+          echo '=== CLI help ==='
+          npx -y @wix/create-new@0.0.108 app --help || true
 
-          show_context 'resolveWixDevcenterAppsV1AppsServiceUrl' 30 80
-          show_context 'class DevCenterClient' 30 90
-          show_context 'var DevCenterClient' 30 90
-          show_context 'useDevCenterClient' 30 100
-          show_context 'new DevCenterClient' 40 80
-          show_context 'createHttpClient' 40 100
-          show_context 'httpClient:' 40 100
-          show_context 'authorization' 30 80
-          show_context 'WIX_API_KEY' 30 80
-          show_context 'apiKey' 30 100
+          echo '=== extend-app / namespace / code identifier command option contexts ==='
+          for pattern in 'extend-app-id' 'namespace:' 'namespace"' 'code-identifier' 'codeIdentifier' 'package-name'; do
+            echo "--- $pattern ---"
+            grep -n "$pattern" "$f" | tail -n 30 || true
+          done
 
-          echo '=== all dev-center service resolver definitions ==='
-          grep -n 'resolveWixDevcenterAppsV1AppsServiceUrl' "$f" | head -n 20 || true
-          echo '=== all DevCenterClient construction sites ==='
-          grep -nE 'DevCenterClient|useDevCenterClient' "$f" | tail -n 50 || true
+          echo '=== HTTP client hook implementation ==='
+          line="$(grep -n -m1 'function useHttpClient' "$f" | cut -d: -f1 || true)"
+          if [[ -n "$line" ]]; then sed -n "$((line-80)),$((line+180))p" "$f"; fi
+
+          echo '=== backoffice type contexts ==='
+          grep -n 'type: "backoffice"' "$f" | head -n 30 || true
+
+          echo '=== resolveUrl implementation ==='
+          line="$(grep -n -m1 'function resolveUrl' "$f" | cut -d: -f1 || true)"
+          if [[ -n "$line" ]]; then sed -n "$((line-20)),$((line+130))p" "$f"; fi
+
+          echo '=== base domain constants / hosts ==='
+          grep -nE 'base_domain|wix\.com|manage\.' "$f" | grep -E 'BASE|base|domain|host' | head -n 100 || true

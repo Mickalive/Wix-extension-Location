@@ -1,0 +1,34 @@
+name: Probe Wix Namespace Setter
+
+on:
+  push:
+    branches: [factory/real-wix-finalization]
+    paths: [.probe-wix-namespace]
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+      - uses: actions/setup-node@ae0d4ed08881f17d1511386f5be3e62356acd4a6
+        with:
+          node-version: 22.19.0
+      - name: Inspect official Wix packages
+        run: |
+          set -euo pipefail
+          mkdir /tmp/wixprobe && cd /tmp/wixprobe
+          npm pack @wix/create-new@latest >/tmp/pack-create.txt
+          npm pack @wix/cli-app@latest >/tmp/pack-cli.txt
+          for tgz in *.tgz; do tar -xzf "$tgz" -C "${tgz%.tgz}" 2>/dev/null || { mkdir -p "${tgz%.tgz}"; tar -xzf "$tgz" -C "${tgz%.tgz}"; }; done
+          echo '=== namespace-related source matches ==='
+          grep -RInE --include='*.js' --include='*.mjs' --include='*.cjs' --include='*.ts' 'app.?namespace|namespace.*app|code.?identifier|set.*namespace|namespace.*set' . \
+            | grep -vE 'node_modules|sourceMappingURL' \
+            | head -n 300 || true
+          echo '=== dev-center URL/method matches ==='
+          grep -RInE --include='*.js' --include='*.mjs' --include='*.cjs' --include='*.ts' 'dev.?center|devcenter|namespace' . \
+            | grep -Ei 'http|client|mutation|update|create|namespace' \
+            | head -n 300 || true

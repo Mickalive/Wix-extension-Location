@@ -22,6 +22,7 @@
     "@wix/essentials": "^0.1.23",
     "@wix/data": "^1.0.185",
     "@wix/bookings": "^1.0.1649",
+    "@wix/calendar": "1.0.243",
     "astro": "^5.8.0",
     "typescript": "^5.8.3"
   },

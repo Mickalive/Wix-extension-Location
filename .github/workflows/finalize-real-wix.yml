@@ -19,8 +19,10 @@ jobs:
     timeout-minutes: 45
     env:
       WIX_CLI_VERSION: 1.1.238
+      CREATE_NEW_VERSION: 0.0.108
       EXPECTED_WIX_APP_ID: 3e9ec3af-001b-4684-a197-a5133677844d
       WIX_SITE_ID: 4d7e75bf-b6ff-4b77-801f-a38e8458b272
+      CI: '1'
     steps:
       - name: Checkout finalization branch
         uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
@@ -48,7 +50,40 @@ jobs:
           test -n "$WIX_API_KEY"
           npx -y "@wix/cli@${WIX_CLI_VERSION}" login --api-key "$WIX_API_KEY" >/dev/null
 
+      - name: Complete Wix app namespace and code identifier through official existing-app flow
+        env:
+          WIX_API_KEY: ${{ secrets.WIX_API_KEY }}
+        run: |
+          set -euo pipefail
+          root="$RUNNER_TEMP/wix-existing-app-metadata"
+          rm -rf "$root"
+          mkdir -p "$root"
+          cd "$root"
+          set +e
+          timeout 240 npx -y "@wix/create-new@${CREATE_NEW_VERSION}" app \
+            --extend-app-id "$EXPECTED_WIX_APP_ID" \
+            --app-name "advanced-booking-rules" \
+            > /tmp/create-new-metadata.log 2>&1
+          code=$?
+          set -e
+          cat /tmp/create-new-metadata.log
+          if grep -Eqi 'namespace.*already.*exist|namespace.*unique|already_exists' /tmp/create-new-metadata.log; then
+            echo '::error::Desired namespace is already owned by another Wix app; refusing any immutable fallback.'
+            exit 42
+          fi
+          if [[ $code -eq 124 ]]; then
+            echo '::error::Official Wix existing-app metadata flow became interactive.'
+            exit 43
+          fi
+          if [[ ! -f wix.config.json ]]; then
+            echo "::error::Official Wix existing-app flow failed to materialize the bound app (exit=$code)."
+            exit "${code:-44}"
+          fi
+          test "$(jq -r '.appId // empty' wix.config.json)" = "$EXPECTED_WIX_APP_ID"
+          echo "Official existing-app flow completed/materialized app; exit=$code"
+
       - name: Generate missing real backend extensions
+        working-directory: ${{ github.workspace }}
         run: |
           set -euo pipefail
           mkdir -p .finalization-evidence
@@ -74,6 +109,7 @@ jobs:
           fi
 
       - name: Preserve authentic generated Wix artifacts immediately
+        working-directory: ${{ github.workspace }}
         run: |
           set -euo pipefail
           git config user.name wix-real-finalizer
@@ -85,6 +121,7 @@ jobs:
           fi
 
       - name: Select sandbox and pull Wix environment
+        working-directory: ${{ github.workspace }}
         run: |
           set -euo pipefail
           npx -y "@wix/cli@${WIX_CLI_VERSION}" dev-site select "$WIX_SITE_ID"
@@ -93,19 +130,23 @@ jobs:
           grep -q '^WIX_CLIENT_ID=' .env.local || { echo '::error::WIX_CLIENT_ID missing after env pull'; exit 33; }
 
       - name: Synchronize dependencies and Astro types
+        working-directory: ${{ github.workspace }}
         run: |
           set -euo pipefail
           npm install --no-audit --no-fund
           npx astro sync
 
       - name: Deterministic checks
+        working-directory: ${{ github.workspace }}
         run: npm run check
 
       - name: Real Wix build
+        working-directory: ${{ github.workspace }}
         run: npx -y "@wix/cli@${WIX_CLI_VERSION}" build
 
       - name: Persist synchronized lockfile
         if: success()
+        working-directory: ${{ github.workspace }}
         run: |
           set -euo pipefail
           git add package-lock.json

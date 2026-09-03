@@ -1,29 +1,31 @@
-import type { DataCollection } from '@wix/astro/builders'
+import type { DataCollection } from '@wix/astro/builders';
 
 export const collectionIdSuffix = 'abr-state';
 
 export default {
   idSuffix: collectionIdSuffix,
-  displayName: 'abr-state',
+  displayName: 'Advanced Booking Rules State',
   fields: [
+    { type: 'TEXT', displayName: 'Kind', key: 'kind' },
+    { type: 'TEXT', displayName: 'Instance ID', key: 'instanceId' },
     {
-      type: 'TEXT',
-      displayName: 'Title',
-      key: 'title',
+      type: 'OBJECT',
+      displayName: 'Payload',
+      key: 'payload',
+      objectOptions: { fields: [] },
     },
-    {
-      type: 'IMAGE',
-      displayName: 'Image',
-      key: 'image',
-    },
+    { type: 'DATETIME', displayName: 'Updated At', key: 'updatedAt' },
   ],
-  displayField: 'title',
+  displayField: 'kind',
   dataPermissions: {
-    itemInsert: 'CMS_EDITOR',
-    itemRead: 'CMS_EDITOR',
-    itemRemove: 'CMS_EDITOR',
-    itemUpdate: 'CMS_EDITOR',
+    itemInsert: 'PRIVILEGED',
+    itemRead: 'PRIVILEGED',
+    itemRemove: 'PRIVILEGED',
+    itemUpdate: 'PRIVILEGED',
   },
-  indexes: [],
+  indexes: [
+    { fields: [{ path: 'instanceId', order: 'ASC' }] },
+    { fields: [{ path: 'kind', order: 'ASC' }] },
+  ],
   initialData: [],
 } satisfies DataCollection;

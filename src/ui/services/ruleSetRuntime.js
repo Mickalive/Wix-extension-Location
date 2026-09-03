@@ -118,12 +118,9 @@ export function draftToRuleSetDto(draft, previousRuleSet = null) {
   };
 }
 
-/**
- * Runtime-only wrapper around the tested transport bridge. It reconciles the
- * real HTTP endpoint envelopes without changing the legacy bridge tests.
- */
+/** Runtime wrapper around the tested authenticated transport bridge. */
 export function createRuntimeServicesBridge(options = {}) {
-  const base = createServicesBridge(options);
+  const base = createServicesBridge({ ...options, baseUrl: options.baseUrl ?? '/api' });
   return {
     ...base,
     async getActiveRuleSet() {

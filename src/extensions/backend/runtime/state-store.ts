@@ -1,9 +1,10 @@
 import { items } from '@wix/data';
 import { auth } from '@wix/essentials';
-import { ABR_COLLECTION_ID } from 'astro:env/server';
+import { collectionIdSuffix } from '../data-collections/abr-state';
 
 const elevatedGet = auth.elevate(items.get);
 const elevatedSave = auth.elevate(items.save);
+const COLLECTION_ID = collectionIdSuffix;
 
 export type RuntimeStateKind = 'draft-ruleset' | 'active-ruleset' | 'mutation' | 'degradation';
 
@@ -25,9 +26,14 @@ export function stateItemId(instanceId: string, key: string): string {
 
 export async function loadState<T>(instanceId: string, key: string): Promise<T | null> {
   const id = stateItemId(instanceId, key);
-  const item = await elevatedGet(ABR_COLLECTION_ID, id, { consistentRead: true });
-  if (!item || typeof item !== 'object' || !('payload' in item)) return null;
-  return (item as RuntimeStateItem<T>).payload ?? null;
+  try {
+    const item = await elevatedGet(COLLECTION_ID, id, { consistentRead: true });
+    if (!item || typeof item !== 'object' || !('payload' in item)) return null;
+    return (item as RuntimeStateItem<T>).payload ?? null;
+  } catch (error: any) {
+    if (error?.details?.applicationError?.code === 'ITEM_NOT_FOUND' || error?.code === 'ITEM_NOT_FOUND') return null;
+    throw error;
+  }
 }
 
 export async function saveState<T>(
@@ -43,6 +49,6 @@ export async function saveState<T>(
     payload,
     updatedAt: new Date().toISOString(),
   };
-  await elevatedSave(ABR_COLLECTION_ID, item);
+  await elevatedSave(COLLECTION_ID, item);
   return payload;
 }

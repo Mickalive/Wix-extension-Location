@@ -1,9 +1,12 @@
 name: Complete Wix App Metadata Once
 
 on:
+  workflow_dispatch:
   push:
     branches: [factory/real-wix-finalization]
-    paths: [.complete-wix-metadata]
+    paths:
+      - .complete-wix-metadata
+      - .github/workflows/complete-wix-app-metadata-once.yml
 
 permissions:
   contents: read

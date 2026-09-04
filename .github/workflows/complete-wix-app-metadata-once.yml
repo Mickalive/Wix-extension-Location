@@ -15,7 +15,7 @@ concurrency:
 jobs:
   complete:
     runs-on: ubuntu-24.04
-    timeout-minutes: 12
+    timeout-minutes: 10
     env:
       APP_ID: 3e9ec3af-001b-4684-a197-a5133677844d
       WIX_CLI_VERSION: 1.1.238
@@ -59,21 +59,25 @@ jobs:
 
           env = os.environ.copy()
           env.pop('CI', None)
-          env['TERM'] = 'xterm-256color'
+          env['TERM'] = 'dumb'
+          env['NO_COLOR'] = '1'
+          env['FORCE_COLOR'] = '0'
+          env['CI'] = '0'
           cmd = f'npx -y @wix/create-new@{version} app --extend-app-id {app_id}'
-          child = pexpect.spawn('/bin/bash', ['-lc', cmd], env=env, encoding='utf-8', timeout=15, dimensions=(50, 180))
+          child = pexpect.spawn('/bin/bash', ['-lc', cmd], env=env, encoding='utf-8', timeout=12, dimensions=(50, 180))
           child.logfile_read = sys.stdout
 
           patterns = [
-              re.compile(r'(?i)(select|choose|pick)[^\r\n]{0,140}(template|starter)'),
-              re.compile(r'(?i)(enter|choose|set)[^\r\n]{0,120}namespace'),
-              re.compile(r'(?i)namespace[^\r\n]{0,120}(app|project)'),
-              re.compile(r'(?i)(enter|choose|set)[^\r\n]{0,120}code\s+identifier'),
-              re.compile(r'(?i)code\s+identifier[^\r\n]{0,120}(app|project)'),
-              re.compile(r'(?i)(enter|choose)[^\r\n]{0,120}(folder|package|project)\s+name'),
-              re.compile(r'(?i)configure[^\r\n]{0,80}wix\s+mcp'),
-              re.compile(r'(?i)(continue|proceed|initialize)[^\r\n]{0,100}\?'),
-              re.compile(r'(?i)namespace[^\r\n]{0,120}(already exists|already taken|must be unique|unavailable)'),
+              re.compile(r'\x1b\[\?25l'),
+              re.compile(r'(?i)(select|choose|pick)[^\r\n]{0,160}(template|starter)'),
+              re.compile(r'(?i)(enter|choose|set)[^\r\n]{0,140}namespace'),
+              re.compile(r'(?i)namespace[^\r\n]{0,140}(app|project)'),
+              re.compile(r'(?i)(enter|choose|set)[^\r\n]{0,140}code\s+identifier'),
+              re.compile(r'(?i)code\s+identifier[^\r\n]{0,140}(app|project)'),
+              re.compile(r'(?i)(enter|choose)[^\r\n]{0,140}(folder|package|project)\s+name'),
+              re.compile(r'(?i)configure[^\r\n]{0,100}wix\s+mcp'),
+              re.compile(r'(?i)(continue|proceed|initialize)[^\r\n]{0,120}\?'),
+              re.compile(r'(?i)namespace[^\r\n]{0,140}(already exists|already taken|must be unique|unavailable)'),
               pexpect.EOF,
               pexpect.TIMEOUT,
           ]
@@ -84,52 +88,57 @@ jobs:
           idle = 0
           interactions = 0
 
-          while interactions < 40:
+          while interactions < 50:
               idx = child.expect(patterns)
               if idx == 0:
+                  idle = 0
+                  if not template_selected:
+                      print('\n[AUTOMATION] first Wix TUI opened; accepting only the highlighted template', flush=True)
+                      child.send('\r')
+                      template_selected = True
+                  continue
+              if idx == 1:
                   interactions += 1
                   idle = 0
                   if not template_selected:
                       print('\n[AUTOMATION] accepting Wix highlighted template', flush=True)
                       child.send('\r')
                       template_selected = True
-              elif idx in (1, 2):
+              elif idx in (2, 3):
                   interactions += 1
                   idle = 0
                   print(f'\n[AUTOMATION] setting namespace suffix: {namespace_suffix}', flush=True)
                   child.sendline(namespace_suffix)
                   namespace_sent = True
-              elif idx in (3, 4):
+              elif idx in (4, 5):
                   interactions += 1
                   idle = 0
                   print(f'\n[AUTOMATION] setting code identifier: {code_identifier}', flush=True)
                   child.sendline(code_identifier)
                   code_sent = True
-              elif idx == 5:
+              elif idx == 6:
                   interactions += 1
                   idle = 0
-                  print('\n[AUTOMATION] using deterministic temporary package name', flush=True)
                   child.sendline('advanced-booking-rules-metadata')
-              elif idx in (6, 7):
+              elif idx in (7, 8):
                   interactions += 1
                   idle = 0
-                  print('\n[AUTOMATION] accepting Wix highlighted non-metadata default', flush=True)
                   child.send('\r')
-              elif idx == 8:
+              elif idx == 9:
                   print('\n[ERROR] Wix rejected the requested immutable namespace; refusing any fallback.', flush=True)
                   child.close(force=True)
                   sys.exit(42)
-              elif idx == 9:
+              elif idx == 10:
                   break
               else:
                   if not child.isalive():
                       break
                   idle += 1
-                  if idle >= 12:
-                      print('\n[ERROR] Wix CLI stayed in an unrecognized interactive state for too long.', flush=True)
+                  if idle >= 5:
+                      print('\n[ERROR] Wix CLI stayed in an unrecognized state after the initial TUI selection.', flush=True)
                       child.close(force=True)
                       sys.exit(44)
-                  print(f'\n[AUTOMATION] Wix CLI still running; idle window {idle}/12', flush=True)
+                  print(f'\n[AUTOMATION] waiting for Wix CLI output {idle}/5', flush=True)
 
           child.close()
           rc = child.exitstatus if child.exitstatus is not None else child.signalstatus
@@ -137,14 +146,14 @@ jobs:
           if rc not in (0, None):
               sys.exit(int(rc) if isinstance(rc, int) and rc != 0 else 45)
           if not template_selected:
-              print('[ERROR] Wix never presented the documented template selector.', flush=True)
+              print('[ERROR] Wix never entered its documented template selection flow.', flush=True)
               sys.exit(46)
           if not namespace_sent:
-              print('[NOTICE] Wix did not request a namespace. This can mean immutable metadata already exists; the release workflow is the authoritative verification.', flush=True)
+              print('[NOTICE] Wix did not request namespace metadata; the release workflow will verify whether it is already present.', flush=True)
           PY
 
           set +e
-          timeout 360 python3 /tmp/drive-existing-app.py 2>&1 | tee /tmp/create-new-existing-app.log
+          timeout 180 python3 /tmp/drive-existing-app.py 2>&1 | tee /tmp/create-new-existing-app.log
           code=${PIPESTATUS[0]}
           set -e
           if grep -Eqi 'has been registered' /tmp/create-new-existing-app.log; then

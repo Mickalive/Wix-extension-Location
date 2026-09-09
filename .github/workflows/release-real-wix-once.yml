@@ -82,7 +82,7 @@ jobs:
         run: |
           set -euo pipefail
           npx -y "@wix/cli@${WIX_CLI_VERSION}" release \
-            --version-type minor \
+            --version-type major \
             --comment "Advanced Booking Rules real Wix runtime finalization ${GITHUB_SHA}" \
             2>&1 | tee /tmp/wix-release.log
           test -s /tmp/wix-release.log

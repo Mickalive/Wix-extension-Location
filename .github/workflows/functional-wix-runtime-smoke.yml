@@ -1,0 +1,68 @@
+name: Wix Runtime Installation Smoke
+
+on:
+  push:
+    branches:
+      - factory/real-wix-finalization
+    paths:
+      - .functional-wix-runtime-smoke
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      WIX_CLI_VERSION: 1.1.238
+      WIX_SITE_ID: 4d7e75bf-b6ff-4b77-801f-a38e8458b272
+    steps:
+      - name: Checkout
+        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+        with:
+          persist-credentials: false
+
+      - name: Set up Node
+        uses: actions/setup-node@ae0d4ed08881f17d1511386f5be3e62356acd4a6
+        with:
+          node-version: 22.19.0
+          check-latest: false
+
+      - name: Authenticate Wix CLI
+        env:
+          WIX_API_KEY: ${{ secrets.WIX_API_KEY }}
+        run: |
+          set -euo pipefail
+          npx -y "@wix/cli@${WIX_CLI_VERSION}" login --api-key "$WIX_API_KEY" >/dev/null
+
+      - name: Verify real installation on development site
+        run: |
+          set -euo pipefail
+          rm -f .env.local
+          npx -y "@wix/cli@${WIX_CLI_VERSION}" dev-site select "$WIX_SITE_ID"
+          npx -y "@wix/cli@${WIX_CLI_VERSION}" dev-site current
+          printf 'WIX_SITE_ID=%s\n' "$WIX_SITE_ID" > .env.local
+          npx -y "@wix/cli@${WIX_CLI_VERSION}" env pull
+          grep -q '^WIX_CLIENT_ID=' .env.local
+
+      - name: Install project dependencies
+        run: npm ci --no-audit --no-fund
+
+      - name: Start Wix development runtime
+        run: |
+          set -euo pipefail
+          timeout 90s npx -y "@wix/cli@${WIX_CLI_VERSION}" dev > /tmp/wix-dev.log 2>&1 &
+          pid=$!
+          for i in $(seq 1 35); do
+            if grep -Eq 'https?://(localhost|127\.0\.0\.1):[0-9]+' /tmp/wix-dev.log; then
+              break
+            fi
+            if ! kill -0 "$pid" 2>/dev/null; then
+              break
+            fi
+            sleep 2
+          done
+          cat /tmp/wix-dev.log
+          grep -Eq 'https?://(localhost|127\.0\.0\.1):[0-9]+' /tmp/wix-dev.log
+          kill "$pid" 2>/dev/null || true

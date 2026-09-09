@@ -35,30 +35,31 @@ jobs:
           npx -y "@wix/cli@${WIX_CLI_VERSION}" dev-site select "$WIX_SITE_ID"
           printf 'WIX_SITE_ID=%s\n' "$WIX_SITE_ID" > .env.local
           npx -y "@wix/cli@${WIX_CLI_VERSION}" env pull
+          printf '\nABR_FUNCTIONAL_SMOKE=1\n' >> .env.local
       - name: Install dependencies
         run: npm ci --no-audit --no-fund
-      - name: Probe application routes
+      - name: Run backend functional smoke
         run: |
           set -euo pipefail
           : > /tmp/wix-dev.log
-          timeout 120s script -q -f -c "npx -y @wix/cli@${WIX_CLI_VERSION} dev" /tmp/wix-dev.log >/dev/null 2>&1 &
+          timeout 150s script -q -f -c "npx -y @wix/cli@${WIX_CLI_VERSION} dev" /tmp/wix-dev.log >/dev/null 2>&1 &
           pid=$!
           base=''
-          for i in $(seq 1 50); do
+          for i in $(seq 1 60); do
             base="$(grep -aoE 'http://(localhost|127\.0\.0\.1):[0-9]+/' /tmp/wix-dev.log | tail -1 | tr -d '\r' || true)"
             if [ -n "$base" ]; then break; fi
             sleep 2
           done
           test -n "$base"
           echo "Runtime $base"
-          code="$(curl -sS -o /tmp/rules.json -w '%{http_code}' -H "wix-site-id: $WIX_SITE_ID" "${base}api/ruleset" || true)"
-          echo "GET ruleset HTTP $code"
-          cat /tmp/rules.json || true
-          meter="$(curl -sS -o /tmp/meter.json -w '%{http_code}' -H "wix-site-id: $WIX_SITE_ID" "${base}api/meter" || true)"
-          echo "GET meter HTTP $meter"
-          cat /tmp/meter.json || true
+          code="$(curl -sS -o /tmp/smoke.json -w '%{http_code}' \
+            -H 'x-abr-functional-smoke: local-dev-only' \
+            "${base}api/__functional-smoke" || true)"
+          echo "Functional smoke HTTP $code"
+          cat /tmp/smoke.json || true
+          echo
           echo '--- runtime tail ---'
-          tail -100 /tmp/wix-dev.log || true
+          tail -120 /tmp/wix-dev.log || true
           kill "$pid" 2>/dev/null || true
           test "$code" = 200
-          test "$meter" = 200
+          jq -e '.ok == true and .wixDataRoundTrip == true and .calendar.applied == true and .calendar.verified == true and .calendar.rollbackComplete == true and .calendar.restored == true' /tmp/smoke.json >/dev/null

@@ -1,0 +1,166 @@
+name: Functional Wix Sandbox Smoke
+
+on:
+  push:
+    branches:
+      - factory/real-wix-finalization
+    paths:
+      - .functional-wix-smoke
+
+permissions:
+  contents: read
+
+concurrency:
+  group: functional-wix-sandbox-smoke
+  cancel-in-progress: false
+
+jobs:
+  smoke:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      WIX_CLI_VERSION: 1.1.238
+      WIX_APP_ID: 3e9ec3af-001b-4684-a197-a5133677844d
+      WIX_SITE_ID: 4d7e75bf-b6ff-4b77-801f-a38e8458b272
+    steps:
+      - name: Checkout
+        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+        with:
+          persist-credentials: false
+
+      - name: Set up Node
+        uses: actions/setup-node@ae0d4ed08881f17d1511386f5be3e62356acd4a6
+        with:
+          node-version: 22.19.0
+          check-latest: false
+
+      - name: Bind the real Wix development site
+        env:
+          WIX_API_KEY: ${{ secrets.WIX_API_KEY }}
+        run: |
+          set -euo pipefail
+          test -n "$WIX_API_KEY"
+          npx -y "@wix/cli@${WIX_CLI_VERSION}" login --api-key "$WIX_API_KEY" >/dev/null
+          printf 'WIX_SITE_ID=%s\n' "$WIX_SITE_ID" > .env.local
+          npx -y "@wix/cli@${WIX_CLI_VERSION}" dev-site select "$WIX_SITE_ID"
+          npx -y "@wix/cli@${WIX_CLI_VERSION}" env pull
+          grep -q '^WIX_CLIENT_ID=' .env.local
+
+      - name: Install dependencies
+        run: |
+          set -euo pipefail
+          npm ci --no-audit --no-fund
+          npx astro sync
+
+      - name: Verify our app is actually installed on the sandbox
+        env:
+          WIX_API_KEY: ${{ secrets.WIX_API_KEY }}
+        run: |
+          set -euo pipefail
+          code="$(curl -sS -o /tmp/apps.json -w '%{http_code}' \
+            -H "Authorization: $WIX_API_KEY" \
+            -H "wix-site-id: $WIX_SITE_ID" \
+            'https://www.wixapis.com/apps-installer-service/v1/app-instances')"
+          echo "Installed-apps API HTTP $code"
+          test "$code" = 200
+          jq '(.appInstances // .app_instances // []) | map(del(.appToken, .app_token))' /tmp/apps.json
+          jq -e --arg app "$WIX_APP_ID" '(.appInstances // .app_instances // []) | any((.appDefId // .app_def_id) == $app and (.enabled // true) == true)' /tmp/apps.json >/dev/null
+          version="$(jq -r --arg app "$WIX_APP_ID" '(.appInstances // .app_instances // [])[] | select((.appDefId // .app_def_id) == $app) | (.version // "unknown")' /tmp/apps.json | head -1)"
+          instance_id="$(jq -r --arg app "$WIX_APP_ID" '(.appInstances // .app_instances // [])[] | select((.appDefId // .app_def_id) == $app) | (.id // empty)' /tmp/apps.json | head -1)"
+          app_token="$(jq -r --arg app "$WIX_APP_ID" '(.appInstances // .app_instances // [])[] | select((.appDefId // .app_def_id) == $app) | (.appToken // .app_token // empty)' /tmp/apps.json | head -1)"
+          test -n "$instance_id"
+          echo "Installed Advanced Booking Rules version: $version"
+          echo "WIX_APP_INSTANCE_ID=$instance_id" >> "$GITHUB_ENV"
+          if [ -n "$app_token" ]; then
+            echo "::add-mask::$app_token"
+            echo "WIX_APP_TOKEN=$app_token" >> "$GITHUB_ENV"
+          fi
+
+      - name: Verify the app data collection exists
+        env:
+          WIX_API_KEY: ${{ secrets.WIX_API_KEY }}
+        run: |
+          set -euo pipefail
+          code="$(curl -sS -o /tmp/collections.json -w '%{http_code}' \
+            -H "Authorization: $WIX_API_KEY" \
+            -H "wix-site-id: $WIX_SITE_ID" \
+            'https://www.wixapis.com/wix-data/v2/collections')"
+          echo "Data Collections API HTTP $code"
+          test "$code" = 200
+          collection_id="$(jq -r '(.collections // [])[] | select((.displayName // .display_name // "") == "Advanced Booking Rules State" or ((.id // "") | endswith("abr-state"))) | .id' /tmp/collections.json | head -1)"
+          test -n "$collection_id"
+          echo "Advanced Booking Rules state collection: $collection_id"
+          echo "ABR_COLLECTION_ID=$collection_id" >> "$GITHUB_ENV"
+
+      - name: Inspect real Bookings data available for mutation testing
+        env:
+          WIX_API_KEY: ${{ secrets.WIX_API_KEY }}
+        run: |
+          set -euo pipefail
+          code="$(curl -sS -o /tmp/services.json -w '%{http_code}' \
+            -H "Authorization: $WIX_API_KEY" \
+            -H "wix-site-id: $WIX_SITE_ID" \
+            -H 'Content-Type: application/json' \
+            -X POST \
+            -d '{"query":{"paging":{"limit":100}}}' \
+            'https://www.wixapis.com/_api/bookings/v2/services/query')"
+          echo "Bookings Services API HTTP $code"
+          test "$code" = 200
+          count="$(jq '(.services // []) | length' /tmp/services.json)"
+          candidates="$(jq '[ (.services // [])[] | select((.type // "") == "APPOINTMENT") | select(((.staffMemberIds // .staff_member_ids // []) | length) > 0) | select(any(.locations[]?; (.type // "") == "BUSINESS" and ((.business._id // .business.id // "") != ""))) ] | length' /tmp/services.json)"
+          echo "Bookings services found: $count; appointment/location/staff candidates: $candidates"
+          echo "ABR_MUTATION_CANDIDATES=$candidates" >> "$GITHUB_ENV"
+
+      - name: Start the real Wix dev runtime and exercise authenticated app endpoints
+        run: |
+          set -euo pipefail
+          : > /tmp/wix-dev.log
+          CI=1 timeout 150s npx -y "@wix/cli@${WIX_CLI_VERSION}" dev > /tmp/wix-dev.log 2>&1 &
+          dev_pid=$!
+          trap 'kill "$dev_pid" 2>/dev/null || true' EXIT
+
+          base=''
+          for _ in $(seq 1 60); do
+            base="$(grep -Eo 'https?://(localhost|127\.0\.0\.1):[0-9]+' /tmp/wix-dev.log | tail -1 || true)"
+            if [ -n "$base" ]; then break; fi
+            sleep 2
+          done
+          echo '--- wix dev output ---'
+          tail -120 /tmp/wix-dev.log || true
+          test -n "$base"
+          echo "Wix dev runtime: $base"
+
+          auth_value="${WIX_APP_TOKEN:-}"
+          if [ -z "$auth_value" ]; then
+            echo 'No appToken was exposed by Installed Apps API; trying the authenticated development runtime without an explicit token.'
+          fi
+
+          args=(-H "wix-site-id: $WIX_SITE_ID")
+          if [ -n "$auth_value" ]; then args+=(-H "Authorization: $auth_value"); fi
+
+          code="$(curl -sS -o /tmp/rules-before.json -w '%{http_code}' "${args[@]}" "$base/api/ruleset")"
+          echo "GET /api/ruleset HTTP $code"
+          cat /tmp/rules-before.json
+          test "$code" = 200
+
+          code="$(curl -sS -o /tmp/meter.json -w '%{http_code}' "${args[@]}" "$base/api/meter")"
+          echo "GET /api/meter HTTP $code"
+          cat /tmp/meter.json
+          test "$code" = 200
+
+          rule_set="$(jq -c '.ruleSet // {ruleSetId:"advanced-booking-rules",revision:"new",version:1,locationWindows:{},serviceWindows:{},exceptions:[],limits:[]}' /tmp/rules-before.json)"
+          expected="$(jq -r '.ruleSet.revision // "new"' /tmp/rules-before.json)"
+          jq -n --argjson ruleSet "$rule_set" --arg expectedRevision "$expected" '{ruleSet:$ruleSet,expectedRevision:$expectedRevision}' > /tmp/save-body.json
+          code="$(curl -sS -o /tmp/rules-saved.json -w '%{http_code}' "${args[@]}" \
+            -H 'Content-Type: application/json' -X PUT --data-binary @/tmp/save-body.json "$base/api/ruleset")"
+          echo "PUT /api/ruleset HTTP $code"
+          cat /tmp/rules-saved.json
+          test "$code" = 200
+          saved_revision="$(jq -r '.ruleSet.revision // empty' /tmp/rules-saved.json)"
+          test -n "$saved_revision"
+
+          code="$(curl -sS -o /tmp/rules-after.json -w '%{http_code}' "${args[@]}" "$base/api/ruleset")"
+          echo "GET /api/ruleset after save HTTP $code"
+          test "$code" = 200
+          test "$(jq -r '.ruleSet.revision // empty' /tmp/rules-after.json)" = "$saved_revision"
+          echo 'Authenticated dashboard backend read/write smoke passed.'

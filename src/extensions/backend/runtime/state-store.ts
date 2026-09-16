@@ -1,10 +1,7 @@
 import { items } from '@wix/data';
 import { auth } from '@wix/essentials';
-import { collectionIdSuffix } from '../data-collections/abr-state';
 
-const elevatedGet = auth.elevate(items.get);
-const elevatedSave = auth.elevate(items.save);
-const COLLECTION_ID = collectionIdSuffix;
+const COLLECTION_ID = '@mickaelvuilleumier/advanced-booking-rules/abr-state';
 
 export type RuntimeStateKind = 'draft-ruleset' | 'active-ruleset' | 'mutation' | 'degradation';
 
@@ -24,14 +21,20 @@ export function stateItemId(instanceId: string, key: string): string {
   return safeId(`${instanceId}-${key}`);
 }
 
+function isMissingItem(error: any): boolean {
+  const code = error?.details?.applicationError?.code ?? error?.code;
+  return code === 'ITEM_NOT_FOUND' || code === 'WDE0073';
+}
+
 export async function loadState<T>(instanceId: string, key: string): Promise<T | null> {
   const id = stateItemId(instanceId, key);
+  const elevatedGet = auth.elevate(items.get);
   try {
     const item = await elevatedGet(COLLECTION_ID, id, { consistentRead: true });
     if (!item || typeof item !== 'object' || !('payload' in item)) return null;
     return (item as RuntimeStateItem<T>).payload ?? null;
   } catch (error: any) {
-    if (error?.details?.applicationError?.code === 'ITEM_NOT_FOUND' || error?.code === 'ITEM_NOT_FOUND') return null;
+    if (isMissingItem(error)) return null;
     throw error;
   }
 }
@@ -49,6 +52,7 @@ export async function saveState<T>(
     payload,
     updatedAt: new Date().toISOString(),
   };
+  const elevatedSave = auth.elevate(items.save);
   await elevatedSave(COLLECTION_ID, item);
   return payload;
 }

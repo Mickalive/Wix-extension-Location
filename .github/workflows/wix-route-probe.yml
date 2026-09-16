@@ -1,4 +1,4 @@
-name: Wix Route Probe
+name: Wix Functional Preview
 
 on:
   push:
@@ -11,55 +11,51 @@ permissions:
   contents: read
 
 jobs:
-  probe:
+  preview:
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    timeout-minutes: 30
     env:
       WIX_CLI_VERSION: 1.1.245
       WIX_SITE_ID: 4d7e75bf-b6ff-4b77-801f-a38e8458b272
     steps:
-      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+      - name: Checkout
+        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
         with:
           persist-credentials: false
-      - uses: actions/setup-node@ae0d4ed08881f17d1511386f5be3e62356acd4a6
+
+      - name: Set up Node
+        uses: actions/setup-node@ae0d4ed08881f17d1511386f5be3e62356acd4a6
         with:
           node-version: 22.19.0
           check-latest: false
-      - name: Authenticate and select installed site
+
+      - name: Authenticate and select installed development site
         env:
           WIX_API_KEY: ${{ secrets.WIX_API_KEY }}
         run: |
           set -euo pipefail
+          test -n "$WIX_API_KEY"
           npx -y "@wix/cli@${WIX_CLI_VERSION}" login --api-key "$WIX_API_KEY" >/dev/null
           rm -f .env.local
           npx -y "@wix/cli@${WIX_CLI_VERSION}" dev-site select "$WIX_SITE_ID"
-          printf 'WIX_SITE_ID=%s\n' "$WIX_SITE_ID" > .env.local
+          npx -y "@wix/cli@${WIX_CLI_VERSION}" dev-site current
           npx -y "@wix/cli@${WIX_CLI_VERSION}" env pull
-          printf '\nABR_FUNCTIONAL_SMOKE=1\n' >> .env.local
-      - name: Install dependencies
-        run: npm ci --no-audit --no-fund
-      - name: Run backend functional smoke
+
+      - name: Install dependencies and sync types
         run: |
           set -euo pipefail
-          : > /tmp/wix-dev.log
-          timeout 150s script -q -f -c "npx -y @wix/cli@${WIX_CLI_VERSION} dev" /tmp/wix-dev.log >/dev/null 2>&1 &
-          pid=$!
-          base=''
-          for i in $(seq 1 60); do
-            base="$(grep -aoE 'http://(localhost|127\.0\.0\.1):[0-9]+/' /tmp/wix-dev.log | tail -1 | tr -d '\r' || true)"
-            if [ -n "$base" ]; then break; fi
-            sleep 2
-          done
-          test -n "$base"
-          echo "Runtime $base"
-          code="$(curl -sS -o /tmp/smoke.json -w '%{http_code}' \
-            -H 'x-abr-functional-smoke: local-dev-only' \
-            "${base}api/__functional-smoke" || true)"
-          echo "Functional smoke HTTP $code"
-          cat /tmp/smoke.json || true
-          echo
-          echo '--- runtime tail ---'
-          tail -120 /tmp/wix-dev.log || true
-          kill "$pid" 2>/dev/null || true
-          test "$code" = 200
-          jq -e '.ok == true and .wixDataRoundTrip == true and .calendar.applied == true and .calendar.verified == true and .calendar.rollbackComplete == true and .calendar.restored == true' /tmp/smoke.json >/dev/null
+          npm ci --no-audit --no-fund
+          npx astro sync
+
+      - name: Deterministic checks
+        run: npm run check
+
+      - name: Real Wix build
+        run: npx -y "@wix/cli@${WIX_CLI_VERSION}" build
+
+      - name: Create hosted Wix preview
+        run: |
+          set -euo pipefail
+          npx -y "@wix/cli@${WIX_CLI_VERSION}" preview 2>&1 | tee /tmp/wix-preview.log
+          echo '--- Preview URLs ---'
+          grep -Eo 'https://[^[:space:]]+' /tmp/wix-preview.log || true

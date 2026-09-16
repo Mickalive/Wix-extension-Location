@@ -20,8 +20,13 @@ export const GET: APIRoute = async () => {
   try {
     const id = await instanceId();
     const draft = await loadState<Record<string, unknown>>(id, 'draft-ruleset');
-    const active = draft ?? (await loadState<Record<string, unknown>>(id, 'active-ruleset'));
-    return json({ ruleSet: active });
+    const active = await loadState<Record<string, unknown>>(id, 'active-ruleset');
+    return json({
+      // Backward-compatible field for older dashboard builds.
+      ruleSet: draft ?? active,
+      draftRuleSet: draft,
+      activeRuleSet: active,
+    });
   } catch (error) {
     console.error('GET /api/ruleset failed', error);
     return json({ error: 'RULESET_READ_FAILED' }, 500);

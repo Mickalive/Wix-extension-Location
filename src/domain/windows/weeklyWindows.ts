@@ -2,16 +2,16 @@
  * Weekly window resolution: per-location and per-service schedules, split
  * daily windows, and the location ∩ service intersection.
  *
- * Semantics (documented in src/domain/README.md):
+ * Semantics:
  *  - Windows are declared per weekday; a weekday may carry any number of
  *    windows (split hours, e.g. 09:00–12:00 + 14:00–18:00).
- *  - When BOTH a service and a location declare windows for the weekday, the
- *    effective availability is their INTERSECTION — never the union.
- *  - When only one source declares windows, that source alone applies.
- *  - If the RuleSet declares NO weekly windows anywhere, weekly evaluation is
- *    unconstrained (fresh-install default-open posture). As soon as any
- *    weekly configuration exists, the week is exhaustive: a weekday without
- *    windows for the relevant scope is closed.
+ *  - A configured SERVICE schedule is exhaustive for that service only: an
+ *    omitted weekday closes that service, but must not close unrelated ones.
+ *  - A configured LOCATION schedule is exhaustive for that location only.
+ *  - When BOTH the relevant service and location are configured, effective
+ *    availability is their INTERSECTION — never the union.
+ *  - If neither relevant scope is configured, weekly evaluation is
+ *    unconstrained (fresh-install/default-Wix posture).
  */
 
 import {
@@ -24,8 +24,10 @@ import type { MinuteWindow } from '../model/primitives';
 import type { Weekday } from '../../shared/types';
 import type { RuleSet } from '../ports';
 
+type WeeklyMap = Record<string, Array<{ weekday: Weekday; start: string; end: string }>>;
+
 function windowsForWeekday(
-  map: Record<string, Array<{ weekday: Weekday; start: string; end: string }>> | undefined,
+  map: WeeklyMap | undefined,
   key: string,
   weekday: Weekday,
 ): MinuteWindow[] {
@@ -45,7 +47,13 @@ function windowsForWeekday(
   return normalizeWindows(out);
 }
 
-/** True when ANY weekly window is configured for ANY scope/weekday. */
+function scopeConfigured(map: WeeklyMap | undefined, key: string | null | undefined): boolean {
+  if (!map || !key) return false;
+  const rows = map[key];
+  return Array.isArray(rows) && rows.length > 0;
+}
+
+/** True when ANY weekly window is configured anywhere in the RuleSet. */
 export function hasAnyWeeklyConfiguration(rules: RuleSet): boolean {
   for (const list of Object.values(rules.locationWindows)) {
     if (list && list.length > 0) return true;
@@ -58,9 +66,9 @@ export function hasAnyWeeklyConfiguration(rules: RuleSet): boolean {
 
 /**
  * Effective weekly windows for a proposal scope on `weekday`.
- * Returns null when weekly evaluation is unconstrained (no weekly config at
- * all); returns [] when the week is configured but this weekday/scope is
- * closed.
+ * Returns null when neither the proposed service nor its location has a
+ * weekly schedule; returns [] when a relevant configured scope omits this
+ * weekday (closed for that scope).
  */
 export function effectiveWeeklyWindows(
   rules: RuleSet,
@@ -68,15 +76,25 @@ export function effectiveWeeklyWindows(
   locationId: string | null | undefined,
   weekday: Weekday,
 ): MinuteWindow[] | null {
-  if (!hasAnyWeeklyConfiguration(rules)) return null;
-  const service = windowsForWeekday(rules.serviceWindows, serviceId, weekday);
-  const location = locationId
+  const serviceConfigured = scopeConfigured(rules.serviceWindows, serviceId);
+  const locationConfigured = scopeConfigured(rules.locationWindows, locationId);
+
+  if (!serviceConfigured && !locationConfigured) return null;
+
+  const service = serviceConfigured
+    ? windowsForWeekday(rules.serviceWindows, serviceId, weekday)
+    : null;
+  const location = locationConfigured && locationId
     ? windowsForWeekday(rules.locationWindows, locationId, weekday)
-    : [];
-  if (service.length > 0 && location.length > 0) {
-    return intersectWindowSets(service, location);
-  }
-  if (service.length > 0) return service;
-  if (location.length > 0) return location;
+    : null;
+
+  // If a configured scope omits the weekday, that scope is closed; when both
+  // scopes apply the intersection is therefore empty as well.
+  if (serviceConfigured && service?.length === 0) return [];
+  if (locationConfigured && location?.length === 0) return [];
+
+  if (service && location) return intersectWindowSets(service, location);
+  if (service) return service;
+  if (location) return location;
   return [];
 }

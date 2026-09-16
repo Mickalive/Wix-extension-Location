@@ -18,14 +18,15 @@ const WEEKDAYS = ['MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT', 'SUN'] as const;
 
 type Store = ReturnType<typeof createEditorStore>;
 type RuntimeRuleSet = Record<string, any>;
-type Meter = {
-  meter: { count: number | null; degraded: boolean };
-  coverage: {
-    allowedLocationIds: string[];
-    overLimit: boolean;
-    degraded: boolean;
-    warning: string | null;
-  };
+type CatalogItem = {
+  id: string;
+  label: string;
+  type?: string | null;
+  available?: boolean;
+};
+type Catalog = {
+  services: CatalogItem[];
+  locations: CatalogItem[];
 };
 
 const panelStyle: React.CSSProperties = {
@@ -62,21 +63,58 @@ const primaryButtonStyle: React.CSSProperties = {
   background: '#116dff',
 };
 
-function unionIds(...groups: Array<string[] | undefined>): string[] {
-  return [...new Set(groups.flatMap((group) => group ?? []).filter(Boolean))].sort();
+function titleCase(value: string | null | undefined): string {
+  if (!value) return '';
+  return value.charAt(0).toUpperCase() + value.slice(1).toLowerCase();
+}
+
+function normalizeCatalogItem(value: any): CatalogItem | null {
+  if (!value || typeof value.id !== 'string' || !value.id) return null;
+  return {
+    id: value.id,
+    label: typeof value.label === 'string' && value.label.trim() ? value.label.trim() : value.id,
+    type: typeof value.type === 'string' ? value.type : null,
+    available: value.available !== false,
+  };
+}
+
+function normalizeCatalog(value: any): Catalog {
+  return {
+    services: (Array.isArray(value?.services) ? value.services : [])
+      .map(normalizeCatalogItem)
+      .filter((item: CatalogItem | null): item is CatalogItem => item !== null),
+    locations: (Array.isArray(value?.locations) ? value.locations : [])
+      .map(normalizeCatalogItem)
+      .filter((item: CatalogItem | null): item is CatalogItem => item !== null),
+  };
+}
+
+function mergeConfiguredItems(live: CatalogItem[], configuredIds: string[]): CatalogItem[] {
+  const byId = new Map<string, CatalogItem>();
+  for (const item of live) byId.set(item.id, { ...item, available: true });
+  for (const id of configuredIds) {
+    if (!byId.has(id)) {
+      byId.set(id, { id, label: `${id} · no longer available in Wix`, available: false });
+    }
+  }
+  return [...byId.values()].sort((a, b) => a.label.localeCompare(b.label));
+}
+
+function itemLabel(item: CatalogItem): string {
+  const suffix = item.type ? ` · ${titleCase(item.type)}` : '';
+  return `${item.label}${suffix}`;
 }
 
 function stateMessage(state: any): string | null {
   if (state.saveStatus === 'pending') return 'Saving draft…';
-  if (state.saveStatus === 'saved') return state.lastSaveMessage ?? 'Draft saved.';
-  if (state.saveStatus === 'unavailable') return state.lastSaveMessage ?? 'Save unavailable.';
-  if (state.applyStatus === 'pending') return 'Applying schedule changes…';
-  if (state.applyStatus === 'applied') return state.lastApplyMessage ?? 'Schedule changes applied.';
-  if (state.applyStatus === 'rolled_back') return state.lastApplyMessage ?? 'Apply failed and schedules were rolled back.';
-  if (state.applyStatus === 'recovered') return state.lastApplyMessage ?? 'Interrupted apply recovered.';
-  if (state.applyStatus === 'failed') return state.lastApplyMessage ?? 'Apply ended in an unresolved state.';
-  if (state.applyStatus === 'unavailable') return state.lastApplyMessage ?? 'Apply unavailable.';
-  if (state.recoverStatus === 'pending') return 'Recovering interrupted apply…';
+  if (state.saveStatus === 'unavailable') return state.lastSaveMessage ?? 'Draft could not be saved.';
+  if (state.applyStatus === 'pending') return 'Activating booking rules…';
+  if (state.applyStatus === 'applied') return state.lastApplyMessage ?? 'Booking rules activated.';
+  if (state.applyStatus === 'rolled_back') return state.lastApplyMessage ?? 'Activation failed and Wix schedule changes were rolled back.';
+  if (state.applyStatus === 'recovered') return state.lastApplyMessage ?? 'Interrupted activation recovered.';
+  if (state.applyStatus === 'failed') return state.lastApplyMessage ?? 'Activation ended in an unresolved state.';
+  if (state.applyStatus === 'unavailable') return state.lastApplyMessage ?? 'Activation unavailable.';
+  if (state.recoverStatus === 'pending') return 'Recovering interrupted activation…';
   if (state.recoverStatus === 'unavailable') return state.lastRecoverMessage ?? 'Recovery unavailable.';
   if (state.recoverStatus === 'done') return state.lastRecoverMessage ?? 'Recovery completed.';
   return state.notice?.message ?? null;
@@ -94,28 +132,33 @@ function useStoreSnapshot(store: Store | null): any {
 function WindowsEditor({
   title,
   scopeType,
-  scopeIds,
+  items,
   store,
   draft,
+  emptyText,
 }: {
   title: string;
   scopeType: 'location' | 'service';
-  scopeIds: string[];
+  items: CatalogItem[];
   store: Store;
   draft: any;
+  emptyText: string;
 }) {
   const key = scopeType === 'location' ? 'locationWindows' : 'serviceWindows';
   return (
     <section style={panelStyle} aria-label={title}>
       <h2>{title}</h2>
-      {scopeIds.length === 0 ? (
-        <p>No {scopeType === 'location' ? 'covered locations' : 'configured services'} are available yet.</p>
-      ) : null}
-      {scopeIds.map((scopeId) => (
-        <details key={scopeId} open>
-          <summary style={{ fontWeight: 600, margin: '10px 0' }}>{scopeId}</summary>
+      {items.length === 0 ? <p>{emptyText}</p> : null}
+      {items.map((item) => (
+        <details key={item.id} open>
+          <summary style={{ fontWeight: 600, margin: '10px 0' }}>{itemLabel(item)}</summary>
+          {item.available === false ? (
+            <p style={{ marginTop: 0 }}>
+              This target is referenced by an existing rule but Wix no longer returns it. Remove its old rules or restore it in Wix before adding new ones.
+            </p>
+          ) : null}
           {WEEKDAYS.map((weekday) => {
-            const rows = draft?.[key]?.[scopeId]?.[weekday] ?? [];
+            const rows = draft?.[key]?.[item.id]?.[weekday] ?? [];
             return (
               <div key={weekday} style={{ marginBottom: 10 }}>
                 <div style={rowStyle}>
@@ -123,7 +166,8 @@ function WindowsEditor({
                   <button
                     type="button"
                     style={buttonStyle}
-                    onClick={() => store.dispatch({ type: 'ADD_WEEK_WINDOW', scopeType, scopeId, weekday })}
+                    disabled={item.available === false}
+                    onClick={() => store.dispatch({ type: 'ADD_WEEK_WINDOW', scopeType, scopeId: item.id, weekday })}
                   >
                     Add window
                   </button>
@@ -131,15 +175,16 @@ function WindowsEditor({
                 {rows.map((row: any, index: number) => (
                   <div key={`${weekday}-${index}`} style={{ ...rowStyle, paddingLeft: 52 }}>
                     <input
-                      aria-label={`${scopeId} ${weekday} start ${index + 1}`}
+                      aria-label={`${item.label} ${weekday} start ${index + 1}`}
                       style={inputStyle}
                       type="time"
                       value={row.start ?? ''}
+                      disabled={item.available === false}
                       onChange={(event) =>
                         store.dispatch({
                           type: 'PATCH_WEEK_WINDOW',
                           scopeType,
-                          scopeId,
+                          scopeId: item.id,
                           weekday,
                           index,
                           patch: { start: event.currentTarget.value },
@@ -148,15 +193,16 @@ function WindowsEditor({
                     />
                     <span>to</span>
                     <input
-                      aria-label={`${scopeId} ${weekday} end ${index + 1}`}
+                      aria-label={`${item.label} ${weekday} end ${index + 1}`}
                       style={inputStyle}
                       type="time"
                       value={row.end ?? ''}
+                      disabled={item.available === false}
                       onChange={(event) =>
                         store.dispatch({
                           type: 'PATCH_WEEK_WINDOW',
                           scopeType,
-                          scopeId,
+                          scopeId: item.id,
                           weekday,
                           index,
                           patch: { end: event.currentTarget.value },
@@ -167,7 +213,7 @@ function WindowsEditor({
                       type="button"
                       style={buttonStyle}
                       onClick={() =>
-                        store.dispatch({ type: 'REMOVE_WEEK_WINDOW', scopeType, scopeId, weekday, index })
+                        store.dispatch({ type: 'REMOVE_WEEK_WINDOW', scopeType, scopeId: item.id, weekday, index })
                       }
                     >
                       Remove
@@ -192,6 +238,7 @@ function ExceptionsEditor({ store, exceptions }: { store: Store; exceptions: any
           Add exception
         </button>
       </div>
+      {exceptions.length === 0 ? <p>No dated exceptions configured.</p> : null}
       {exceptions.map((entry: any) => (
         <div key={entry.exceptionId} style={{ ...panelStyle, background: '#f7f9fb' }}>
           <div style={rowStyle}>
@@ -216,7 +263,10 @@ function ExceptionsEditor({ store, exceptions }: { store: Store; exceptions: any
                 store.dispatch({
                   type: 'UPDATE_EXCEPTION',
                   exceptionId: entry.exceptionId,
-                  patch: { kind: event.currentTarget.value, windows: event.currentTarget.value === 'CLOSED' ? [] : entry.windows ?? [] },
+                  patch: {
+                    kind: event.currentTarget.value,
+                    windows: event.currentTarget.value === 'CLOSED' ? [] : entry.windows ?? [],
+                  },
                 })
               }
             >
@@ -307,19 +357,19 @@ function ExceptionsEditor({ store, exceptions }: { store: Store; exceptions: any
 function LimitsEditor({
   store,
   draft,
-  locationIds,
-  serviceIds,
+  locations,
+  services,
 }: {
   store: Store;
   draft: any;
-  locationIds: string[];
-  serviceIds: string[];
+  locations: CatalogItem[];
+  services: CatalogItem[];
 }) {
   const valueFor = (dimension: string, targetId: string | null) =>
     draft?.limits?.find(
       (entry: any) => entry.dimension === dimension && (entry.targetId ?? null) === targetId,
     )?.maxCount ?? '';
-  const input = (dimension: string, targetId: string | null, label: string) => (
+  const input = (dimension: string, targetId: string | null, label: string, disabled = false) => (
     <label style={{ display: 'grid', gap: 4, minWidth: 240 }} key={`${dimension}-${targetId ?? 'all'}`}>
       <span>{label}</span>
       <input
@@ -327,6 +377,7 @@ function LimitsEditor({
         inputMode="numeric"
         value={String(valueFor(dimension, targetId))}
         placeholder="No limit"
+        disabled={disabled}
         onChange={(event) =>
           store.dispatch({
             type: 'SET_LIMIT',
@@ -342,12 +393,12 @@ function LimitsEditor({
     <section style={panelStyle} aria-label="Booking limits">
       <h2>Booking limits</h2>
       <p>
-        Limits are validated during booking. Concurrent checkouts can briefly race; reconciliation corrects counters afterwards.
+        Limits are enforced when a booking is validated. They do not change Wix Calendar events.
       </p>
       <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap' }}>
         {input('DAY', null, 'Maximum bookings per day')}
-        {serviceIds.map((id) => input('SERVICE', id, `Service ${id}`))}
-        {locationIds.map((id) => input('LOCATION', id, `Location ${id}`))}
+        {services.map((item) => input('SERVICE', item.id, `Service · ${itemLabel(item)}`, item.available === false))}
+        {locations.map((item) => input('LOCATION', item.id, `Location · ${itemLabel(item)}`, item.available === false))}
       </div>
     </section>
   );
@@ -356,36 +407,46 @@ function LimitsEditor({
 export default function AdvancedRulesApp() {
   const bridge = useMemo(() => createRuntimeServicesBridge(), []);
   const [store, setStore] = useState<Store | null>(null);
-  const [previousRuleSet, setPreviousRuleSet] = useState<RuntimeRuleSet | null>(null);
-  const [meter, setMeter] = useState<Meter | null>(null);
+  const [activeRuleSet, setActiveRuleSet] = useState<RuntimeRuleSet | null>(null);
+  const [draftRuleSet, setDraftRuleSet] = useState<RuntimeRuleSet | null>(null);
+  const [catalog, setCatalog] = useState<Catalog>({ services: [], locations: [] });
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
-  const previousRef = useRef<RuntimeRuleSet | null>(null);
+  const [localMessage, setLocalMessage] = useState<string | null>(null);
+  const draftRevisionRef = useRef<RuntimeRuleSet | null>(null);
+  const lastSavedDraftRef = useRef<any>(ruleSetDtoToDraft(null));
   const snapshot = useStoreSnapshot(store);
+
+  function buildStore(activeDto: RuntimeRuleSet | null, draft: any, liveCatalog: Catalog): Store {
+    return createEditorStore({
+      savedRuleSet: cloneDraft(ruleSetDtoToDraft(activeDto)),
+      draft: cloneDraft(draft),
+      locations: liveCatalog.locations.map((item) => ({ id: item.id, label: item.label })),
+      services: liveCatalog.services.map((item) => ({ id: item.id, label: item.label })),
+    });
+  }
 
   useEffect(() => {
     let cancelled = false;
-    void Promise.all([bridge.getActiveRuleSet(), bridge.getEntitlementMeter()])
-      .then(([ruleSet, meterDto]) => {
+    void Promise.all([bridge.getRuleSetState(), bridge.getCatalog()])
+      .then(([ruleState, catalogDto]) => {
         if (cancelled) return;
-        const draft = ruleSetDtoToDraft(ruleSet);
-        const locationIds = unionIds(Object.keys(draft.locationWindows ?? {}), meterDto?.coverage?.allowedLocationIds ?? []);
-        const serviceIds = Object.keys(draft.serviceWindows ?? {}).sort();
-        const nextStore = createEditorStore({
-          savedRuleSet: cloneDraft(draft),
-          draft: cloneDraft(draft),
-          locations: locationIds.map((id) => ({ id, label: id })),
-          services: serviceIds.map((id) => ({ id, label: id })),
-        });
-        previousRef.current = ruleSet;
-        setPreviousRuleSet(ruleSet);
-        setMeter(meterDto);
-        setStore(nextStore);
+        const liveCatalog = normalizeCatalog(catalogDto);
+        const activeDto = ruleState?.activeRuleSet ?? null;
+        const draftDto = ruleState?.draftRuleSet ?? activeDto;
+        const initialDraft = ruleSetDtoToDraft(draftDto);
+
+        draftRevisionRef.current = draftDto;
+        lastSavedDraftRef.current = cloneDraft(initialDraft);
+        setActiveRuleSet(activeDto);
+        setDraftRuleSet(draftDto);
+        setCatalog(liveCatalog);
+        setStore(buildStore(activeDto, initialDraft, liveCatalog));
         setLoading(false);
       })
       .catch((error) => {
         if (cancelled) return;
-        setLoadError(describeBridgeFailure(error, 'Loading rules'));
+        setLoadError(describeBridgeFailure(error, 'Loading booking rules'));
         setLoading(false);
       });
     return () => {
@@ -393,29 +454,37 @@ export default function AdvancedRulesApp() {
     };
   }, [bridge]);
 
-  const locationIds = useMemo(
-    () =>
-      unionIds(
-        Object.keys(snapshot?.draft?.locationWindows ?? {}),
-        meter?.coverage?.allowedLocationIds ?? [],
-      ),
-    [snapshot?.draft, meter],
+  const locationItems = useMemo(
+    () => mergeConfiguredItems(catalog.locations, Object.keys(snapshot?.draft?.locationWindows ?? {})),
+    [catalog.locations, snapshot?.draft],
   );
-  const serviceIds = useMemo(
-    () => Object.keys(snapshot?.draft?.serviceWindows ?? {}).sort(),
-    [snapshot?.draft],
+  const serviceItems = useMemo(
+    () => mergeConfiguredItems(catalog.services, Object.keys(snapshot?.draft?.serviceWindows ?? {})),
+    [catalog.services, snapshot?.draft],
   );
+  const activationDiff = useMemo(
+    () => computeScheduleDiff(snapshot?.savedRuleSet ?? ruleSetDtoToDraft(null), snapshot?.draft ?? ruleSetDtoToDraft(null)),
+    [snapshot?.savedRuleSet, snapshot?.draft],
+  );
+  const unsavedDraftDiff = useMemo(
+    () => computeScheduleDiff(lastSavedDraftRef.current, snapshot?.draft ?? ruleSetDtoToDraft(null)),
+    [snapshot?.draft, store],
+  );
+  const hasUnsavedDraft = unsavedDraftDiff.ops.length > 0;
 
   async function saveDraft() {
-    if (!store) return;
+    if (!store || snapshot.issues.length > 0) return;
     store.dispatch({ type: 'SAVE_START' });
+    setLocalMessage(null);
     try {
       const currentDraft = cloneDraft(store.getState().draft);
-      const dto = draftToRuleSetDto(currentDraft, previousRef.current);
+      const dto = draftToRuleSetDto(currentDraft, draftRevisionRef.current);
       const savedDto = await bridge.saveRuleSet(dto);
-      previousRef.current = savedDto;
-      setPreviousRuleSet(savedDto);
-      store.dispatch({ type: 'SAVE_SUCCESS', savedRuleSet: currentDraft });
+      draftRevisionRef.current = savedDto;
+      lastSavedDraftRef.current = cloneDraft(currentDraft);
+      setDraftRuleSet(savedDto);
+      setStore(buildStore(activeRuleSet, currentDraft, catalog));
+      setLocalMessage('Draft saved. These changes are not active until you activate the booking rules.');
     } catch (error) {
       store.dispatch({ type: 'SAVE_UNAVAILABLE', message: describeBridgeFailure(error, 'Save') });
     }
@@ -423,6 +492,10 @@ export default function AdvancedRulesApp() {
 
   async function reviewChanges() {
     if (!store) return;
+    if (hasUnsavedDraft) {
+      setLocalMessage('Save the draft before reviewing it for activation.');
+      return;
+    }
     store.dispatch({ type: 'OPEN_DIFF_PREVIEW' });
     const current = store.getState();
     if (!current.diffPreview.open) return;
@@ -435,6 +508,7 @@ export default function AdvancedRulesApp() {
       const result = await opened.modalClosed;
       if (result?.confirmed === true && result?.hash === diff.hash) {
         store.dispatch({ type: 'CONFIRM_DIFF_PREVIEW', hash: diff.hash });
+        setLocalMessage('Exact changes confirmed. You can now activate this ruleset.');
       } else {
         store.dispatch({ type: 'CLOSE_DIFF_PREVIEW' });
       }
@@ -447,20 +521,25 @@ export default function AdvancedRulesApp() {
   async function applyChanges() {
     if (!store) return;
     const current = store.getState();
+    if (hasUnsavedDraft) {
+      store.dispatch({ type: 'APPLY_UNAVAILABLE', message: 'Save the draft before activating it.' });
+      return;
+    }
     if (!store.canApply() || !current.confirmedHash) {
       store.dispatch({
         type: 'APPLY_UNAVAILABLE',
-        message: 'Apply is locked until you review and confirm the exact diff.',
+        message: 'Activation is locked until you review and confirm the exact changes.',
       });
       return;
     }
     const draftAtApply = cloneDraft(current.draft);
     store.dispatch({ type: 'APPLY_START' });
+    setLocalMessage(null);
     try {
       const response = await bridge.requestApply(current.confirmedHash);
       const planId = response?.summary?.planId;
       if (!planId) {
-        store.dispatch({ type: 'APPLY_FAILED', message: 'The server did not return a mutation plan reference.' });
+        store.dispatch({ type: 'APPLY_FAILED', message: 'The server did not return an activation plan reference.' });
         return;
       }
       const outcome = await pollMutationUntilTerminal({
@@ -475,19 +554,21 @@ export default function AdvancedRulesApp() {
       });
       switch (outcome.kind) {
         case 'APPLIED':
-          store.dispatch({ type: 'APPLY_SUCCESS', savedRuleSet: draftAtApply, message: 'Schedule changes applied.' });
+          setActiveRuleSet(draftRevisionRef.current);
+          lastSavedDraftRef.current = cloneDraft(draftAtApply);
+          store.dispatch({ type: 'APPLY_SUCCESS', savedRuleSet: draftAtApply, message: 'Booking rules activated.' });
           break;
         case 'ROLLED_BACK':
-          store.dispatch({ type: 'APPLY_ROLLED_BACK', message: 'Apply failed and Wix schedules were rolled back.' });
+          store.dispatch({ type: 'APPLY_ROLLED_BACK', message: 'Activation failed; any Wix schedule changes were rolled back.' });
           break;
         case 'RECOVERED':
-          store.dispatch({ type: 'APPLY_RECOVERED', message: 'An interrupted apply was recovered.' });
+          store.dispatch({ type: 'APPLY_RECOVERED', message: 'An interrupted activation was recovered.' });
           break;
         default:
-          store.dispatch({ type: 'APPLY_FAILED', message: 'The mutation did not reach a clean terminal state.' });
+          store.dispatch({ type: 'APPLY_FAILED', message: 'The activation did not reach a clean terminal state.' });
       }
     } catch (error) {
-      store.dispatch({ type: 'APPLY_UNAVAILABLE', message: describeBridgeFailure(error, 'Apply') });
+      store.dispatch({ type: 'APPLY_UNAVAILABLE', message: describeBridgeFailure(error, 'Activation') });
     }
   }
 
@@ -511,25 +592,37 @@ export default function AdvancedRulesApp() {
     return <div role="alert">{loadError ?? 'The rules editor could not initialize.'}</div>;
   }
 
-  const message = stateMessage(snapshot);
-  const diff = computeScheduleDiff(snapshot.savedRuleSet, snapshot.draft);
+  const message = localMessage ?? stateMessage(snapshot);
+  const savedButInactive = !hasUnsavedDraft && activationDiff.ops.length > 0;
 
   return (
     <WixDesignSystemProvider>
       <Page>
         <Page.Header
           title="Advanced Booking Rules"
-          subtitle="Different hours, exceptions and booking caps by Wix Bookings location or service."
+          subtitle="Set opening windows, dated exceptions and booking limits beyond the standard Wix Bookings settings."
         />
         <Page.Content>
           <div style={{ maxWidth: 1180, margin: '0 auto', padding: '8px 0 32px' }}>
             <section style={{ ...panelStyle, background: '#f7f9fb' }}>
-              <strong>Runtime status</strong>
+              <strong>Booking rules</strong>
               <p>
-                {previousRuleSet ? `Loaded ruleset ${previousRuleSet.ruleSetId}, revision ${previousRuleSet.revision}.` : 'No ruleset exists yet; saving creates the first one.'}
+                {activeRuleSet
+                  ? `An active ruleset is installed${activeRuleSet.version ? ` (version ${activeRuleSet.version})` : ''}.`
+                  : 'No advanced rules are active yet.'}
+                {' '}{catalog.services.length} Wix Bookings service{catalog.services.length === 1 ? '' : 's'} loaded.
               </p>
-              {meter?.coverage?.warning ? <p role="alert">{meter.coverage.warning}</p> : null}
-              {meter?.coverage?.degraded ? <p role="alert">Coverage is degraded; restrictions fail open.</p> : null}
+              {catalog.locations.length === 0 ? (
+                <p>
+                  Wix currently returns no business locations for this site. Location-specific rules will become available when a business location exists in Wix.
+                </p>
+              ) : (
+                <p>{catalog.locations.length} Wix business location{catalog.locations.length === 1 ? '' : 's'} loaded.</p>
+              )}
+              <p>
+                Activating controls whether bookings are accepted. When Wix exposes a compatible appointment schedule, location opening hours are also mirrored into Wix schedules. Service hours, dated exceptions and booking limits remain booking-validation rules and do not rewrite Calendar events.
+              </p>
+              {draftRuleSet && savedButInactive ? <p><strong>A saved draft is waiting to be activated.</strong></p> : null}
             </section>
 
             {snapshot.issues?.length ? (
@@ -548,31 +641,43 @@ export default function AdvancedRulesApp() {
             <WindowsEditor
               title="Location opening windows"
               scopeType="location"
-              scopeIds={locationIds}
+              items={locationItems}
               store={store}
               draft={snapshot.draft}
+              emptyText="No Wix business locations are available on this site."
             />
             <WindowsEditor
               title="Service opening windows"
               scopeType="service"
-              scopeIds={serviceIds}
+              items={serviceItems}
               store={store}
               draft={snapshot.draft}
+              emptyText="No Wix Bookings services are available on this site."
             />
             <ExceptionsEditor store={store} exceptions={snapshot.draft.exceptions ?? []} />
-            <LimitsEditor store={store} draft={snapshot.draft} locationIds={locationIds} serviceIds={serviceIds} />
+            <LimitsEditor store={store} draft={snapshot.draft} locations={locationItems} services={serviceItems} />
 
-            <section style={panelStyle} aria-label="Changes and actions">
-              <h2>Changes</h2>
-              <p>{diff.ops.length === 0 ? 'No unsaved schedule changes.' : `${diff.ops.length} schedule change${diff.ops.length === 1 ? '' : 's'} in the current diff.`}</p>
+            <section style={panelStyle} aria-label="Review and activate">
+              <h2>Review and activate</h2>
+              <p>
+                {activationDiff.ops.length === 0
+                  ? 'The draft matches the active booking rules.'
+                  : `${activationDiff.ops.length} rule change${activationDiff.ops.length === 1 ? '' : 's'} will be activated.`}
+              </p>
+              {hasUnsavedDraft ? <p>Save the draft before reviewing or activating these changes.</p> : null}
               <div style={rowStyle}>
-                <button type="button" style={buttonStyle} disabled={snapshot.saveStatus === 'pending'} onClick={() => void saveDraft()}>
+                <button
+                  type="button"
+                  style={buttonStyle}
+                  disabled={!hasUnsavedDraft || snapshot.issues.length > 0 || snapshot.saveStatus === 'pending'}
+                  onClick={() => void saveDraft()}
+                >
                   {snapshot.saveStatus === 'pending' ? 'Saving…' : 'Save draft'}
                 </button>
                 <button
                   type="button"
                   style={buttonStyle}
-                  disabled={snapshot.issues.length > 0 || diff.ops.length === 0}
+                  disabled={snapshot.issues.length > 0 || activationDiff.ops.length === 0 || hasUnsavedDraft}
                   onClick={() => void reviewChanges()}
                 >
                   Review exact changes
@@ -580,19 +685,21 @@ export default function AdvancedRulesApp() {
                 <button
                   type="button"
                   style={primaryButtonStyle}
-                  disabled={!store.canApply() || snapshot.applyStatus === 'pending'}
+                  disabled={!store.canApply() || snapshot.applyStatus === 'pending' || hasUnsavedDraft}
                   onClick={() => void applyChanges()}
                 >
-                  {snapshot.applyStatus === 'pending' ? 'Applying…' : 'Apply to Wix schedules'}
+                  {snapshot.applyStatus === 'pending' ? 'Activating…' : 'Activate booking rules'}
                 </button>
                 {snapshot.lastMutation?.scope && !['applied', 'rolled_back', 'recovered', 'pending'].includes(snapshot.applyStatus) ? (
                   <button type="button" style={buttonStyle} onClick={() => void recover()}>
-                    Recover interrupted apply
+                    Recover interrupted activation
                   </button>
                 ) : null}
               </div>
               {message ? <p role="status" aria-live="polite">{message}</p> : null}
-              {store.canApply() ? <p role="status">Exact diff confirmed. Apply is unlocked for this hash only.</p> : null}
+              {store.canApply() && !hasUnsavedDraft ? (
+                <p role="status">Exact changes confirmed. Activation is unlocked for this reviewed version only.</p>
+              ) : null}
             </section>
           </div>
         </Page.Content>

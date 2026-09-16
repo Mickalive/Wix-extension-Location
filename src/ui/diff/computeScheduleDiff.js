@@ -248,9 +248,22 @@ function quoteNote(note) {
   return `'${note}'`;
 }
 
+function labeledScope(scopeType, scopeId, labels = {}) {
+  const group = scopeType === 'service' ? labels.services : labels.locations;
+  return group?.[scopeId] ?? scopeId;
+}
+
+function labeledLimitTarget(dimension, targetId, labels = {}) {
+  if (!targetId) return null;
+  if (dimension === 'SERVICE') return labels.services?.[targetId] ?? targetId;
+  if (dimension === 'LOCATION') return labels.locations?.[targetId] ?? targetId;
+  return targetId;
+}
+
 /**
  * Renders one diff operation as the exact human-readable consent line shown in
- * the review modal.
+ * the review modal. Optional labels only affect rendering; the underlying ops
+ * and confirmation hash remain ID-based and deterministic.
  *
  * Contract section 9.2 requires that the dialog shows exactly what will
  * change. For exception mutations that means BOTH states must be visible:
@@ -262,12 +275,12 @@ function quoteNote(note) {
  *
  * @returns {string}
  */
-export function describeOp(op) {
+export function describeOp(op, labels = {}) {
   switch (op.kind) {
     case 'ADD_WINDOW':
-      return `Add window - ${op.scopeType} ${op.scopeId}, ${op.weekday}: ${op.start}-${op.end}`;
+      return `Add window - ${op.scopeType} ${labeledScope(op.scopeType, op.scopeId, labels)}, ${op.weekday}: ${op.start}-${op.end}`;
     case 'REMOVE_WINDOW':
-      return `Remove window - ${op.scopeType} ${op.scopeId}, ${op.weekday}: ${op.start}-${op.end}`;
+      return `Remove window - ${op.scopeType} ${labeledScope(op.scopeType, op.scopeId, labels)}, ${op.weekday}: ${op.start}-${op.end}`;
     case 'ADD_EXCEPTION': {
       const added = op.added;
       let line = `Add exception - ${op.date}: ${describeExceptionState(added.kind, added.windows)}`;
@@ -296,18 +309,19 @@ export function describeOp(op) {
       return line;
     }
     case 'SET_LIMIT': {
-      const scope = op.targetId ? ` for ${op.targetId}` : '';
+      const target = labeledLimitTarget(op.dimension, op.targetId, labels);
+      const scope = target ? ` for ${target}` : '';
       const fmt = (value) => (value === null || value === undefined ? 'none' : String(value));
       return `Set ${op.dimension.toLowerCase()} booking limit${scope}: ${fmt(op.before)} -> ${fmt(op.after)} per ${op.dimension === 'DAY' ? 'day' : op.dimension.toLowerCase()}`;
     }
     case 'UNKNOWN_WEEKDAY':
-      return `Unknown weekday "${op.weekday}" under ${op.scopeType} ${op.scopeId} - resolve this entry before applying`;
+      return `Unknown weekday "${op.weekday}" under ${op.scopeType} ${labeledScope(op.scopeType, op.scopeId, labels)} - resolve this entry before applying`;
     default:
       return `Unsupported change of kind ${String(op?.kind)}`;
   }
 }
 
 /** Convenience: describe every op (used by the modal and tests). */
-export function describeOps(ops) {
-  return ops.map(describeOp);
+export function describeOps(ops, labels = {}) {
+  return ops.map((op) => describeOp(op, labels));
 }

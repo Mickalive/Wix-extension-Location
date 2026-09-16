@@ -12,6 +12,7 @@ const elevatedQueryStaffMembers = auth.elevate((staffMembers as any).queryStaffM
 const elevatedRemoveItem = auth.elevate((items as any).remove);
 
 const DAYS: Weekday[] = ['SUN', 'MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT'];
+const PREVIEW_SMOKE_HEADER = 'preview-e2e-2026-09-16';
 
 function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -54,11 +55,20 @@ function eventSignature(event: any): string {
 }
 
 export const GET: APIRoute = async ({ request }) => {
-  if (process.env.ABR_FUNCTIONAL_SMOKE !== '1' || request.headers.get('x-abr-functional-smoke') !== 'local-dev-only') {
+  if (request.headers.get('x-abr-functional-smoke') !== PREVIEW_SMOKE_HEADER) {
     return json({ error: 'NOT_FOUND' }, 404);
   }
 
-  const smokeInstance = `functional-smoke-${crypto.randomUUID()}`;
+  let instanceId: string | null = null;
+  try {
+    const tokenInfo = await auth.getTokenInfo();
+    instanceId = typeof tokenInfo?.instanceId === 'string' && tokenInfo.instanceId ? tokenInfo.instanceId : null;
+  } catch {
+    return json({ error: 'NOT_FOUND' }, 404);
+  }
+  if (!instanceId) return json({ error: 'NOT_FOUND' }, 404);
+
+  const smokeInstance = `${instanceId}-functional-smoke-${crypto.randomUUID()}`;
   const stateKey = 'probe';
   let stateSaved = false;
   let snapshot: any = null;
@@ -133,7 +143,7 @@ export const GET: APIRoute = async ({ request }) => {
     snapshot = await gateway.snapshotWorkingHours(scope);
     const before = [...snapshot.events].map(eventSignature).sort();
 
-    const weekday: Weekday = DAYS[(new Date().getUTCDay() + 2) % 7];
+    const weekday = DAYS[(new Date().getUTCDay() + 2) % 7]!;
     const plan: MutationPlan = {
       planId: `functional-smoke-${crypto.randomUUID()}`,
       scope,
@@ -182,7 +192,7 @@ export const GET: APIRoute = async ({ request }) => {
       try {
         rollback = await gateway.rollbackTo(snapshot);
       } catch {
-        // Preserve the original failure; this endpoint exists only for local diagnostics.
+        // Preserve the original failure; this endpoint exists only for temporary diagnostics.
       }
     }
     return json({

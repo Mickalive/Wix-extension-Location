@@ -136,12 +136,39 @@ export function createRuntimeServicesBridge(options = {}) {
   });
   return {
     ...base,
+    async getRuleSetState() {
+      const response = await base.request('/ruleset', { method: 'GET' });
+      if (!response || typeof response !== 'object') {
+        return { draftRuleSet: null, activeRuleSet: null };
+      }
+      if ('draftRuleSet' in response || 'activeRuleSet' in response) {
+        return {
+          draftRuleSet: response.draftRuleSet ?? null,
+          activeRuleSet: response.activeRuleSet ?? null,
+        };
+      }
+      // Compatibility with older backend builds that only returned `ruleSet`.
+      return {
+        draftRuleSet: response.ruleSet ?? null,
+        activeRuleSet: response.ruleSet ?? null,
+      };
+    },
     async getActiveRuleSet() {
       const response = await base.request('/ruleset', { method: 'GET' });
+      if (response && typeof response === 'object' && 'activeRuleSet' in response) {
+        return response.activeRuleSet ?? null;
+      }
       if (response && typeof response === 'object' && 'ruleSet' in response) {
         return response.ruleSet ?? null;
       }
       return response ?? null;
+    },
+    async getCatalog() {
+      const response = await base.request('/catalog', { method: 'GET' });
+      if (response && typeof response === 'object' && 'catalog' in response) {
+        return response.catalog ?? { services: [], locations: [] };
+      }
+      return response ?? { services: [], locations: [] };
     },
     async saveRuleSet(ruleSet) {
       const response = await base.request('/ruleset', {

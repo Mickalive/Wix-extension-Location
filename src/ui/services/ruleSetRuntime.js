@@ -118,9 +118,22 @@ export function draftToRuleSetDto(draft, previousRuleSet = null) {
   };
 }
 
+function runtimeApiBaseUrl() {
+  try {
+    const origin = new URL(import.meta.url).origin;
+    if (origin && origin !== 'null') return `${origin}/api`;
+  } catch {
+    // Test/non-browser runtimes can fall back to a relative API base.
+  }
+  return '/api';
+}
+
 /** Runtime wrapper around the tested authenticated transport bridge. */
 export function createRuntimeServicesBridge(options = {}) {
-  const base = createServicesBridge({ ...options, baseUrl: options.baseUrl ?? '/api' });
+  const base = createServicesBridge({
+    ...options,
+    baseUrl: options.baseUrl ?? runtimeApiBaseUrl(),
+  });
   return {
     ...base,
     async getActiveRuleSet() {

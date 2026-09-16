@@ -19,7 +19,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     env:
-      WIX_CLI_VERSION: 1.1.238
+      WIX_CLI_VERSION: 1.1.245
       EXPECTED_WIX_APP_ID: 3e9ec3af-001b-4684-a197-a5133677844d
       WIX_SITE_ID: 4d7e75bf-b6ff-4b77-801f-a38e8458b272
     steps:
@@ -51,6 +51,8 @@ jobs:
           done
           ! grep -R -q 'Edit your page code to change this text' src/extensions/dashboard
           ! grep -R -q 'Wix CLI Modal' src/extensions/dashboard
+          test ! -e src/pages/api/__functional-smoke.ts
+          test ! -e src/extensions/dashboard/runtime/FunctionalSmokePanel.tsx
 
       - name: Authenticate and bind sandbox
         env:
@@ -82,7 +84,7 @@ jobs:
         run: |
           set -euo pipefail
           npx -y "@wix/cli@${WIX_CLI_VERSION}" release \
-            --version-type major \
+            --version-type minor \
             --comment "Advanced Booking Rules real Wix runtime finalization ${GITHUB_SHA}" \
             2>&1 | tee /tmp/wix-release.log
           test -s /tmp/wix-release.log

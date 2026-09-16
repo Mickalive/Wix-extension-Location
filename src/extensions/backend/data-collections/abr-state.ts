@@ -14,7 +14,7 @@ export default {
       key: 'payload',
       objectOptions: { fields: [] },
     },
-    { type: 'DATETIME', displayName: 'Updated At', key: 'updatedAt' },
+    { type: 'TEXT', displayName: 'Updated At', key: 'updatedAt' },
   ],
   displayField: 'kind',
   dataPermissions: {

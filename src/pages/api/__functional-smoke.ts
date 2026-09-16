@@ -1,15 +1,5 @@
 import type { APIRoute } from 'astro';
-import { services, staffMembers } from '@wix/bookings';
-import { items } from '@wix/data';
-import { auth } from '@wix/essentials';
 import type { MutationPlan, ScheduleScope, Weekday } from '../../shared/types';
-import { WixCalendarScheduleGateway } from '../../platform/adapters/scheduleGateway';
-import { loadState, saveState, stateItemId } from '../../extensions/backend/runtime/state-store';
-import { collectionIdSuffix } from '../../extensions/backend/data-collections/abr-state';
-
-const elevatedQueryServices = auth.elevate((services as any).queryServices);
-const elevatedQueryStaffMembers = auth.elevate((staffMembers as any).queryStaffMembers);
-const elevatedRemoveItem = auth.elevate((items as any).remove);
 
 const DAYS: Weekday[] = ['SUN', 'MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT'];
 const PREVIEW_SMOKE_HEADER = 'preview-e2e-2026-09-16';
@@ -19,6 +9,17 @@ function json(body: unknown, status = 200): Response {
     status,
     headers: { 'content-type': 'application/json' },
   });
+}
+
+function errorDetails(error: unknown) {
+  if (error instanceof Error) {
+    return {
+      name: error.name,
+      message: error.message,
+      stack: typeof error.stack === 'string' ? error.stack.split('\n').slice(0, 6) : [],
+    };
+  }
+  return { name: 'UnknownError', message: String(error), stack: [] };
 }
 
 function businessLocationId(location: any): string | null {
@@ -59,38 +60,106 @@ export const GET: APIRoute = async ({ request }) => {
     return json({ error: 'NOT_FOUND' }, 404);
   }
 
+  let auth: any;
+  try {
+    const essentials = await import('@wix/essentials');
+    auth = essentials.auth;
+    if (!auth || typeof auth.getTokenInfo !== 'function' || typeof auth.elevate !== 'function') {
+      return json({ ok: false, stage: 'essentials-shape', exports: Object.keys(essentials ?? {}) }, 500);
+    }
+  } catch (error) {
+    return json({ ok: false, stage: 'essentials-import', error: errorDetails(error) }, 500);
+  }
+
   let instanceId: string | null = null;
   try {
     const tokenInfo = await auth.getTokenInfo();
     instanceId = typeof tokenInfo?.instanceId === 'string' && tokenInfo.instanceId ? tokenInfo.instanceId : null;
-  } catch {
-    return json({ error: 'NOT_FOUND' }, 404);
+    if (!instanceId) {
+      return json({ ok: false, stage: 'auth-token', error: 'MISSING_INSTANCE_ID', tokenKeys: Object.keys(tokenInfo ?? {}) }, 401);
+    }
+  } catch (error) {
+    return json({ ok: false, stage: 'auth-token', error: errorDetails(error) }, 500);
   }
-  if (!instanceId) return json({ error: 'NOT_FOUND' }, 404);
+
+  let items: any;
+  try {
+    const dataModule = await import('@wix/data');
+    items = dataModule.items;
+    if (!items) {
+      return json({ ok: false, stage: 'wix-data-shape', exports: Object.keys(dataModule ?? {}) }, 500);
+    }
+  } catch (error) {
+    return json({ ok: false, stage: 'wix-data-import', error: errorDetails(error) }, 500);
+  }
+
+  let stateStore: any;
+  let collectionIdSuffix = '';
+  try {
+    stateStore = await import('../../extensions/backend/runtime/state-store');
+    const collectionSchema = await import('../../extensions/backend/data-collections/abr-state');
+    collectionIdSuffix = collectionSchema.collectionIdSuffix;
+  } catch (error) {
+    return json({
+      ok: false,
+      stage: 'state-store-import',
+      error: errorDetails(error),
+      wixDataMethods: Object.keys(items ?? {}).sort(),
+    }, 500);
+  }
 
   const smokeInstance = `${instanceId}-functional-smoke-${crypto.randomUUID()}`;
   const stateKey = 'probe';
   let stateSaved = false;
-  let snapshot: any = null;
-  let gateway: WixCalendarScheduleGateway | null = null;
-  let rollback: any = null;
-
+  let elevatedRemoveItem: any = null;
   try {
+    elevatedRemoveItem = auth.elevate(items.remove);
     const nonce = crypto.randomUUID();
-    await saveState(smokeInstance, stateKey, 'degradation', { nonce });
+    await stateStore.saveState(smokeInstance, stateKey, 'degradation', { nonce });
     stateSaved = true;
-    const loaded = await loadState<{ nonce: string }>(smokeInstance, stateKey);
+    const loaded = await stateStore.loadState(smokeInstance, stateKey);
     if (loaded?.nonce !== nonce) {
-      return json({ ok: false, stage: 'wix-data', error: 'ROUND_TRIP_MISMATCH' }, 500);
+      return json({
+        ok: false,
+        stage: 'wix-data-roundtrip',
+        error: 'ROUND_TRIP_MISMATCH',
+        collectionIdSuffix,
+        wixDataMethods: Object.keys(items ?? {}).sort(),
+      }, 500);
     }
+  } catch (error) {
+    return json({
+      ok: false,
+      stage: 'wix-data-roundtrip',
+      error: errorDetails(error),
+      collectionIdSuffix,
+      wixDataMethods: Object.keys(items ?? {}).sort(),
+    }, 500);
+  }
 
-    const serviceResponse: any = await (elevatedQueryServices as any)({
+  let services: any;
+  let staffMembers: any;
+  let elevatedQueryServices: any;
+  let elevatedQueryStaffMembers: any;
+  try {
+    const bookings = await import('@wix/bookings');
+    services = bookings.services;
+    staffMembers = bookings.staffMembers;
+    elevatedQueryServices = auth.elevate(services?.queryServices);
+    elevatedQueryStaffMembers = auth.elevate(staffMembers?.queryStaffMembers);
+  } catch (error) {
+    return json({ ok: false, stage: 'bookings-import', error: errorDetails(error), wixDataRoundTrip: true }, 500);
+  }
+
+  let appointmentServices: any[] = [];
+  let candidate: { resourceId: string; locationId: string } | null = null;
+  try {
+    const serviceResponse: any = await elevatedQueryServices({
       filter: { type: { $eq: 'APPOINTMENT' } },
       cursorPaging: { limit: 100 },
     });
-    const appointmentServices = Array.isArray(serviceResponse?.services) ? serviceResponse.services : [];
+    appointmentServices = Array.isArray(serviceResponse?.services) ? serviceResponse.services : [];
 
-    let candidate: { resourceId: string; locationId: string } | null = null;
     for (const service of appointmentServices) {
       const resourceIds = Array.isArray(service?.staffMemberIds)
         ? service.staffMemberIds.filter((id: unknown): id is string => typeof id === 'string' && id.length > 0)
@@ -103,18 +172,23 @@ export const GET: APIRoute = async ({ request }) => {
         break;
       }
     }
+  } catch (error) {
+    return json({ ok: false, stage: 'bookings-services-query', error: errorDetails(error), wixDataRoundTrip: true }, 500);
+  }
 
-    if (!candidate) {
-      return json({
-        ok: false,
-        stage: 'bookings-data',
-        error: 'NO_APPOINTMENT_WITH_STAFF_AND_BUSINESS_LOCATION',
-        appointmentServiceCount: appointmentServices.length,
-        wixDataRoundTrip: true,
-      }, 409);
-    }
+  if (!candidate) {
+    return json({
+      ok: false,
+      stage: 'bookings-data',
+      error: 'NO_APPOINTMENT_WITH_STAFF_AND_BUSINESS_LOCATION',
+      appointmentServiceCount: appointmentServices.length,
+      wixDataRoundTrip: true,
+    }, 409);
+  }
 
-    const staffResponse: any = await (elevatedQueryStaffMembers as any)(
+  let staff: ReturnType<typeof staffRuntime> = null;
+  try {
+    const staffResponse: any = await elevatedQueryStaffMembers(
       {
         filter: { resourceId: { $eq: candidate.resourceId } },
         cursorPaging: { limit: 10 },
@@ -122,16 +196,31 @@ export const GET: APIRoute = async ({ request }) => {
       { fields: ['RESOURCE_DETAILS'] },
     );
     const members = Array.isArray(staffResponse?.staffMembers) ? staffResponse.staffMembers : [];
-    const staff = members.map(staffRuntime).find(Boolean) as ReturnType<typeof staffRuntime>;
-    if (!staff) {
-      return json({
-        ok: false,
-        stage: 'bookings-staff',
-        error: 'NO_STAFF_RUNTIME_FOR_SERVICE_RESOURCE',
-        wixDataRoundTrip: true,
-      }, 409);
-    }
+    staff = members.map(staffRuntime).find(Boolean) ?? null;
+  } catch (error) {
+    return json({ ok: false, stage: 'bookings-staff-query', error: errorDetails(error), wixDataRoundTrip: true }, 500);
+  }
 
+  if (!staff) {
+    return json({
+      ok: false,
+      stage: 'bookings-staff',
+      error: 'NO_STAFF_RUNTIME_FOR_SERVICE_RESOURCE',
+      wixDataRoundTrip: true,
+    }, 409);
+  }
+
+  let gateway: any = null;
+  let snapshot: any = null;
+  let rollback: any = null;
+  try {
+    const gatewayModule = await import('../../platform/adapters/scheduleGateway');
+    gateway = new gatewayModule.WixCalendarScheduleGateway();
+  } catch (error) {
+    return json({ ok: false, stage: 'calendar-gateway-import', error: errorDetails(error), wixDataRoundTrip: true }, 500);
+  }
+
+  try {
     const scope: ScheduleScope = {
       scheduleId: staff.scheduleId,
       ownerType: 'STAFF',
@@ -139,7 +228,6 @@ export const GET: APIRoute = async ({ request }) => {
       locationId: candidate.locationId,
     };
 
-    gateway = new WixCalendarScheduleGateway();
     snapshot = await gateway.snapshotWorkingHours(scope);
     const before = [...snapshot.events].map(eventSignature).sort();
 
@@ -175,6 +263,7 @@ export const GET: APIRoute = async ({ request }) => {
     const ok = applied.allApplied && verified.verified && rollback.complete && restored;
     return json({
       ok,
+      stage: ok ? 'complete' : 'calendar-verification',
       wixDataRoundTrip: true,
       appointmentServiceCount: appointmentServices.length,
       calendar: {
@@ -182,7 +271,7 @@ export const GET: APIRoute = async ({ request }) => {
         verified: verified.verified,
         rollbackComplete: rollback.complete,
         restored,
-        appliedResults: applied.results.map((row) => ({ changeId: row.changeId, status: row.status })),
+        appliedResults: applied.results.map((row: any) => ({ changeId: row.changeId, status: row.status })),
         mismatches: verified.mismatches,
         rollbackNotes: rollback.notes,
       },
@@ -192,22 +281,23 @@ export const GET: APIRoute = async ({ request }) => {
       try {
         rollback = await gateway.rollbackTo(snapshot);
       } catch {
-        // Preserve the original failure; this endpoint exists only for temporary diagnostics.
+        // Preserve the original failure.
       }
     }
     return json({
       ok: false,
-      stage: 'exception',
-      error: error instanceof Error ? error.message : String(error),
+      stage: 'calendar-operation',
+      error: errorDetails(error),
+      wixDataRoundTrip: true,
       rollbackAttempted: Boolean(gateway && snapshot),
       rollbackComplete: rollback?.complete ?? null,
     }, 500);
   } finally {
-    if (stateSaved) {
+    if (stateSaved && elevatedRemoveItem) {
       try {
-        await (elevatedRemoveItem as any)(collectionIdSuffix, stateItemId(smokeInstance, stateKey));
+        await elevatedRemoveItem(collectionIdSuffix, stateStore.stateItemId(smokeInstance, stateKey));
       } catch {
-        // Diagnostic cleanup failure must not hide the functional result.
+        // Cleanup failure must not hide the functional result.
       }
     }
   }

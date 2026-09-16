@@ -500,10 +500,14 @@ export default function AdvancedRulesApp() {
     const current = store.getState();
     if (!current.diffPreview.open) return;
     const diff = computeScheduleDiff(current.savedRuleSet, current.draft);
+    const diffLabels = {
+      locations: Object.fromEntries(locationItems.map((item) => [item.id, itemLabel(item)])),
+      services: Object.fromEntries(serviceItems.map((item) => [item.id, itemLabel(item)])),
+    };
     try {
       const opened: any = dashboard.openModal({
         modalId: MODAL_ID,
-        params: { hash: diff.hash, lines: describeOps(diff.ops), operationCount: diff.ops.length },
+        params: { hash: diff.hash, lines: describeOps(diff.ops, diffLabels), operationCount: diff.ops.length },
       });
       const result = await opened.modalClosed;
       if (result?.confirmed === true && result?.hash === diff.hash) {

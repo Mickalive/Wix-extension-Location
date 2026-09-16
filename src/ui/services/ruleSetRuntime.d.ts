@@ -12,8 +12,26 @@ export interface EntitlementMeterDto {
   };
 }
 
+export interface RuntimeCatalogItem {
+  id: string;
+  label: string;
+  type?: string | null;
+}
+
+export interface RuntimeCatalog {
+  services: RuntimeCatalogItem[];
+  locations: RuntimeCatalogItem[];
+}
+
+export interface RuntimeRuleSetState {
+  draftRuleSet: RuntimeRuleSet | null;
+  activeRuleSet: RuntimeRuleSet | null;
+}
+
 export interface RuntimeServicesBridge {
+  getRuleSetState(): Promise<RuntimeRuleSetState>;
   getActiveRuleSet(): Promise<RuntimeRuleSet | null>;
+  getCatalog(): Promise<RuntimeCatalog>;
   saveRuleSet(ruleSet: RuntimeRuleSet): Promise<RuntimeRuleSet>;
   getEntitlementMeter(): Promise<EntitlementMeterDto | null>;
   requestApply(confirmedDiffHash: string): Promise<{ summary?: { planId?: string; [key: string]: any }; [key: string]: any }>;

@@ -35,8 +35,38 @@ function createMultiResults(request: any) {
  * extension registration/runtime boundary rather than inside our rule engine.
  */
 export default bookingsValidation.provideHandlers({
-  validateBeforeCreate: (async ({ request }: any) =>
-    createResults(request)) as any,
+  validateBeforeCreate: (async ({ request }: any) => {
+    const item = Array.isArray(request?.items) ? request.items[0] : null;
+    const booking = item?.booking;
+    const bookedEntity = booking?.bookedEntity;
+    const slot = bookedEntity?.slot;
+    const keys = slot && typeof slot === 'object' ? Object.keys(slot).sort().join(',') : '-';
+    const message = [
+      'ABR_PAYLOAD',
+      `items=${Array.isArray(request?.items)}`,
+      `booking=${!!booking}`,
+      `entity=${!!bookedEntity}`,
+      `slot=${!!slot}`,
+      `svc=${typeof slot?.serviceId}`,
+      `start=${typeof slot?.startDate}`,
+      `end=${typeof slot?.endDate}`,
+      `tz=${typeof slot?.timezone}`,
+      `loc=${typeof slot?.location}`,
+      `keys=${keys}`,
+    ].join(';').slice(0, 300);
+
+    return {
+      results: [
+        {
+          itemIndex: Number.isInteger(item?.itemIndex) ? item.itemIndex : 0,
+          result: {
+            valid: false,
+            invalidReason: { message },
+          },
+        },
+      ],
+    };
+  }) as any,
   validateBeforeCancel: (async ({ request }: any) =>
     bookingResults(request)) as any,
   validateBeforeReschedule: (async ({ request }: any) =>

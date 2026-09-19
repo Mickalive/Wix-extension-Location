@@ -1,6 +1,7 @@
 import { bookingsValidation } from '@wix/bookings/service-plugins';
 import { auth } from '@wix/essentials';
 import { createValidationHandlers } from '../../../../platform/validation-plugin/handlers';
+import { toWixValidationResponse } from '../../../../platform/validation-plugin/wix-contract';
 import type { DegradationRecord } from '../../../../platform/validation-plugin/incidents';
 import type { RuleSet } from '../../../../domain';
 import { countBookings, loadExistingBookings } from '../../runtime/bookings-reader';
@@ -55,38 +56,29 @@ const handlers = createValidationHandlers({
   deadlineMs: 4500,
 });
 
-function wixResult(result: any) {
-  return result.valid
-    ? { valid: true }
-    : {
-        valid: false,
-        invalidReason: {
-          code: result.invalidReason?.code ?? 'BOOKING_RULE_BLOCKED',
-          message: result.invalidReason?.message ?? 'This booking does not satisfy the configured booking rules.',
-        },
-      };
-}
-
-function singleResponse(result: any) {
-  return { results: [...result.results].sort((a: any, b: any) => a.index - b.index).map(wixResult) };
-}
-
-function multiResponse(result: any) {
-  return {
-    singleServiceBookingResults: [...result.results]
-      .sort((a: any, b: any) => a.index - b.index)
-      .map(wixResult),
-  };
-}
-
 bookingsValidation.provideHandlers({
-  validateBeforeCreate: (async ({ request }: any) => singleResponse(await handlers.CREATE(request))) as any,
-  validateBeforeCancel: (async ({ request }: any) => singleResponse(await handlers.CANCEL(request))) as any,
-  validateBeforeReschedule: (async ({ request }: any) => singleResponse(await handlers.RESCHEDULE(request))) as any,
+  validateBeforeCreate: (async ({ request }: any) =>
+    toWixValidationResponse('CREATE', request, await handlers.CREATE(request))) as any,
+  validateBeforeCancel: (async ({ request }: any) =>
+    toWixValidationResponse('CANCEL', request, await handlers.CANCEL(request))) as any,
+  validateBeforeReschedule: (async ({ request }: any) =>
+    toWixValidationResponse('RESCHEDULE', request, await handlers.RESCHEDULE(request))) as any,
   validateBeforeCreateMultiService: (async ({ request }: any) =>
-    multiResponse(await handlers.CREATE_MULTI_SERVICE(request))) as any,
+    toWixValidationResponse(
+      'CREATE_MULTI_SERVICE',
+      request,
+      await handlers.CREATE_MULTI_SERVICE(request),
+    )) as any,
   validateBeforeCancelMultiService: (async ({ request }: any) =>
-    multiResponse(await handlers.CANCEL_MULTI_SERVICE(request))) as any,
+    toWixValidationResponse(
+      'CANCEL_MULTI_SERVICE',
+      request,
+      await handlers.CANCEL_MULTI_SERVICE(request),
+    )) as any,
   validateBeforeRescheduleMultiService: (async ({ request }: any) =>
-    multiResponse(await handlers.RESCHEDULE_MULTI_SERVICE(request))) as any,
+    toWixValidationResponse(
+      'RESCHEDULE_MULTI_SERVICE',
+      request,
+      await handlers.RESCHEDULE_MULTI_SERVICE(request),
+    )) as any,
 } as any);

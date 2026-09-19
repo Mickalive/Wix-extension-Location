@@ -1,7 +1,7 @@
 /**
  * Bulk explicitness for the validation-plugin path (INT-C3-1 acceptance
  * criterion 3; Contract §5.3: "omitted items default to valid — handlers must
- * return explicit results for every index"; bulk cap maxItems 12).
+ * return explicit results for every index"; target-specific Wix bulk caps).
  *
  * The OMITTED-ITEM HAZARD is proven by construction: the mixed bulk below
  * interleaves exactly the situations that tempt a naive handler to omit an
@@ -10,7 +10,10 @@
  * silently APPROVE a booking on the platform side.
  */
 import { describe, expect, it } from 'vitest';
-import { MAX_BULK_ITEMS } from '../../src/platform/validation-plugin';
+import {
+  MAX_BULK_ITEMS,
+  MAX_CANCEL_OR_RESCHEDULE_ITEMS,
+} from '../../src/platform/validation-plugin';
 import {
   makeRig,
   openRuleSet,
@@ -59,11 +62,11 @@ describe('explicit per-index results for every bulk item', () => {
     const rig = makeRig(); // default-open rules ⇒ evaluated items all allow
     const result = await rig.handlers.CREATE_MULTI_SERVICE(rawRequest(items));
 
-    expect(result.results).toHaveLength(12);
+    expect(result.results).toHaveLength(MAX_BULK_ITEMS);
     expect(result.results.map((r) => r.index)).toEqual([...Array(MAX_BULK_ITEMS).keys()]);
     expect(result.results.every((r) => r.valid)).toBe(true);
-    expect(result.results.filter((r) => r.disposition === 'UNCOVERED_LOCATION_RULES_SKIPPED')).toHaveLength(6);
-    expect(result.results.filter((r) => r.disposition === 'RULES_EVALUATED')).toHaveLength(6);
+    expect(result.results.filter((r) => r.disposition === 'UNCOVERED_LOCATION_RULES_SKIPPED')).toHaveLength(MAX_BULK_ITEMS / 2);
+    expect(result.results.filter((r) => r.disposition === 'RULES_EVALUATED')).toHaveLength(MAX_BULK_ITEMS / 2);
   });
 
   it('multi-service bulk validates each sequential item independently', async () => {
@@ -82,10 +85,15 @@ describe('explicit per-index results for every bulk item', () => {
     const rig = makeRig({
       configStoreError: new Error('store down'),
     });
-    const items = Array.from({ length: MAX_BULK_ITEMS }, () => rawItem());
+    const items = Array.from(
+      { length: MAX_CANCEL_OR_RESCHEDULE_ITEMS },
+      () => rawItem(),
+    );
     const result = await rig.handlers.CANCEL(rawRequest(items));
-    expect(result.results).toHaveLength(12);
-    expect(result.results.map((r) => r.index)).toEqual([...Array(12).keys()]);
+    expect(result.results).toHaveLength(MAX_CANCEL_OR_RESCHEDULE_ITEMS);
+    expect(result.results.map((r) => r.index)).toEqual([
+      ...Array(MAX_CANCEL_OR_RESCHEDULE_ITEMS).keys(),
+    ]);
     expect(result.results.every((r) => r.valid === false && r.invalidReason?.code === 'VALIDATION_UNAVAILABLE')).toBe(true);
   });
 });

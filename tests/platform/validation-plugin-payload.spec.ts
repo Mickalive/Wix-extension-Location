@@ -6,7 +6,7 @@
  *  - location.id is extracted exclusively for OWNER_BUSINESS locations;
  *  - metadata.identity is observed structurally (never consumed here);
  *  - structural violations reject typed INVALID_QUERY before any dependency;
- *  - the bulk cap maxItems 12 is enforced with an explicit boundary test.
+ *  - the current Wix bulk caps are enforced with explicit boundary tests.
  */
 import { describe, expect, it } from 'vitest';
 import {
@@ -168,37 +168,55 @@ describe('structural rejection (typed INVALID_QUERY before any dependency)', () 
   });
 
   it(`enforces the maxItems ${MAX_BULK_ITEMS} bulk cap with a clean boundary`, () => {
-    const twelve = Array.from({ length: MAX_BULK_ITEMS }, () => rawItem());
-    const parsed = parseValidationRequest(rawRequest(twelve));
-    expect(parsed.items).toHaveLength(12);
-    expect(parsed.items.map((i) => i.index)).toEqual([...Array(12).keys()]);
+    const atLimit = Array.from({ length: MAX_BULK_ITEMS }, () => rawItem());
+    const parsed = parseValidationRequest(rawRequest(atLimit), 'CREATE');
+    expect(parsed.items).toHaveLength(MAX_BULK_ITEMS);
+    expect(parsed.items.map((i) => i.index)).toEqual([...Array(MAX_BULK_ITEMS).keys()]);
 
-    const thirteen = Array.from({ length: MAX_BULK_ITEMS + 1 }, () => rawItem());
-    expectInvalid(() => parseValidationRequest(rawRequest(thirteen)));
-    expect(invalidMessageOf(() => parseValidationRequest(rawRequest(thirteen)))).toContain('maxItems');
+    const overLimit = Array.from({ length: MAX_BULK_ITEMS + 1 }, () => rawItem());
+    expectInvalid(() => parseValidationRequest(rawRequest(overLimit), 'CREATE'));
+    expect(invalidMessageOf(() => parseValidationRequest(rawRequest(overLimit), 'CREATE'))).toContain('at most');
+
+    const nineCancelItems = Array.from({ length: 9 }, (_, index) =>
+      rawItem({ bookingId: `550e8400-e29b-41d4-a716-44665544${String(index).padStart(4, '0')}` }),
+    );
+    expectInvalid(() => parseValidationRequest(rawRequest(nineCancelItems), 'CANCEL'));
   });
 
   it('rejects per-item structural violations', () => {
     const missingStartDate = {
-      bookedEntity: { slot: { serviceId: 'svc-1', endDate: ANCHOR_END, timezone: SITE_ZONE } },
+      booking: {
+        bookedEntity: {
+          slot: { serviceId: 'svc-1', endDate: ANCHOR_END, timezone: SITE_ZONE },
+        },
+      },
     };
     const stringLocation = {
-      bookedEntity: {
-        slot: {
-          serviceId: 'svc-1',
-          startDate: ANCHOR_START,
-          endDate: ANCHOR_END,
-          timezone: SITE_ZONE,
-          location: 'business',
+      booking: {
+        bookedEntity: {
+          slot: {
+            serviceId: 'svc-1',
+            startDate: ANCHOR_START,
+            endDate: ANCHOR_END,
+            timezone: SITE_ZONE,
+            location: 'business',
+          },
         },
       },
     };
     const cases: unknown[] = [
       42,
       {},
-      { bookedEntity: {} },
-      { bookedEntity: { slot: 'slot' } },
-      { bookedEntity: { slot: { startDate: ANCHOR_START, endDate: ANCHOR_END, timezone: SITE_ZONE } } },
+      { booking: {} },
+      { booking: { bookedEntity: {} } },
+      { booking: { bookedEntity: { slot: 'slot' } } },
+      {
+        booking: {
+          bookedEntity: {
+            slot: { startDate: ANCHOR_START, endDate: ANCHOR_END, timezone: SITE_ZONE },
+          },
+        },
+      },
       rawItem({ serviceId: '' }),
       missingStartDate,
       rawItem({ timezone: '   ' }),

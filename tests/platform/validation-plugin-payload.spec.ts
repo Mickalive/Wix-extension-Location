@@ -175,7 +175,7 @@ describe('structural rejection (typed INVALID_QUERY before any dependency)', () 
 
     const overLimit = Array.from({ length: MAX_BULK_ITEMS + 1 }, () => rawItem());
     expectInvalid(() => parseValidationRequest(rawRequest(overLimit), 'CREATE'));
-    expect(invalidMessageOf(() => parseValidationRequest(rawRequest(overLimit), 'CREATE'))).toContain('at most');
+    expect(invalidMessageOf(() => parseValidationRequest(rawRequest(overLimit), 'CREATE'))).toContain('maxItems');
 
     const nineCancelItems = Array.from({ length: 9 }, (_, index) =>
       rawItem({ bookingId: `550e8400-e29b-41d4-a716-44665544${String(index).padStart(4, '0')}` }),

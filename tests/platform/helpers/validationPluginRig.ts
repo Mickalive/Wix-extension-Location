@@ -66,6 +66,8 @@ export interface RawItemOptions {
   start?: string;
   end?: string;
   timezone?: string;
+  bookingId?: string;
+  itemIndex?: number;
   /** null ⇒ location key omitted entirely. */
   locationId?: string | null;
   locationType?: string;
@@ -86,6 +88,8 @@ export function rawItem(options: RawItemOptions = {}): Record<string, unknown> {
     start = ANCHOR_START,
     end = ANCHOR_END,
     timezone = SITE_ZONE,
+    bookingId = '550e8400-e29b-41d4-a716-446655440000',
+    itemIndex,
     locationId = 'loc-1',
     locationType = 'OWNER_BUSINESS',
     omitLocationType = false,
@@ -109,7 +113,12 @@ export function rawItem(options: RawItemOptions = {}): Record<string, unknown> {
     };
   }
   const item: Record<string, unknown> = {
-    bookedEntity: { slot },
+    booking: {
+      id: bookingId,
+      bookedEntity: { slot: structuredClone(slot) },
+    },
+    targetSlot: structuredClone(slot),
+    ...(itemIndex === undefined ? {} : { itemIndex }),
     ...extraItemFields,
   };
   if (identity !== null) item.metadata = { identity };
@@ -117,7 +126,20 @@ export function rawItem(options: RawItemOptions = {}): Record<string, unknown> {
 }
 
 export function rawRequest(items: unknown[]): { items: unknown[] } {
-  return { items };
+  return {
+    items: items.map((item, index) => {
+      if (
+        item &&
+        typeof item === 'object' &&
+        !Array.isArray(item) &&
+        'booking' in item &&
+        !('itemIndex' in item)
+      ) {
+        return { ...(item as Record<string, unknown>), itemIndex: index };
+      }
+      return item;
+    }),
+  };
 }
 
 /** Counting wrapper proving exactly how many gateway reads occur. */

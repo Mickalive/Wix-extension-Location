@@ -20,7 +20,14 @@ export type {
   ParsedSlotItem,
   ParsedValidationRequest,
 } from './payload';
-export { MAX_BULK_ITEMS, ownerBusinessLocationId, parseValidationRequest } from './payload';
+export {
+  MAX_BULK_ITEMS,
+  MAX_CANCEL_OR_RESCHEDULE_ITEMS,
+  MAX_CREATE_ITEMS,
+  maxItemsForTarget,
+  ownerBusinessLocationId,
+  parseValidationRequest,
+} from './payload';
 export type { DegradationKind, DegradationRecord, DegradationSink } from './incidents';
 export { InMemoryDegradationSink, safeRecord } from './incidents';
 export type { CachedBookingCountGatewayOptions } from './counters';
@@ -46,3 +53,5 @@ export {
   FAIL_CLOSED_CODE,
   FAIL_CLOSED_MESSAGE,
 } from './handlers';
+
+export { toWixValidationResponse } from './wix-contract';

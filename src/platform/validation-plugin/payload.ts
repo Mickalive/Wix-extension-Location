@@ -212,7 +212,7 @@ export function parseValidationRequest(
   const maxItems = maxItemsForTarget(target);
   if (items.length > maxItems) {
     throw invalid(
-      `${target} validation accepts at most ${maxItems} items, received ${items.length}`,
+      `${target} validation maxItems ${maxItems}; received ${items.length}`,
     );
   }
 

@@ -781,7 +781,7 @@ async function handleTarget(
   // the binding semantics for such calls (blocked create; fail-open
   // reschedule). Everything AFTER a successful parse never throws past the
   // guard below.
-  const parsed = parseValidationRequest(rawRequest);
+  const parsed = parseValidationRequest(rawRequest, target);
 
   try {
     return await withDeadline(

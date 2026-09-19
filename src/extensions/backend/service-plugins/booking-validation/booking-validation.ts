@@ -56,7 +56,7 @@ const handlers = createValidationHandlers({
   deadlineMs: 4500,
 });
 
-bookingsValidation.provideHandlers({
+export default bookingsValidation.provideHandlers({
   validateBeforeCreate: (async ({ request }: any) =>
     toWixValidationResponse('CREATE', request, await handlers.CREATE(request))) as any,
   validateBeforeCancel: (async ({ request }: any) =>

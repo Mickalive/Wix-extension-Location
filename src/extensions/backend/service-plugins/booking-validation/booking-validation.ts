@@ -157,35 +157,7 @@ async function run(target: keyof typeof handlers, request: any) {
 }
 
 export default bookingsValidation.provideHandlers({
-  validateBeforeCreate: (async ({ request }: any) => {
-    try {
-      return await run('CREATE', request);
-    } catch (error) {
-      try {
-        await saveState(
-          '4cc087f6-b275-49ed-8834-4d63984b5893',
-          'runtime-error-probe',
-          'degradation',
-          {
-            stage: 'validateBeforeCreate',
-            error:
-              error instanceof Error
-                ? { name: error.name, message: error.message, stack: error.stack ?? null }
-                : { value: String(error) },
-          },
-        );
-      } catch {
-        // Diagnostic persistence must not alter this probe response.
-      }
-      const items = Array.isArray(request?.items) ? request.items : [];
-      return {
-        results: items.map((item: any, index: number) => ({
-          itemIndex: Number.isInteger(item?.itemIndex) ? item.itemIndex : index,
-          result: { valid: true },
-        })),
-      };
-    }
-  }) as any,
+  validateBeforeCreate: (async ({ request }: any) => run('CREATE', request)) as any,
   validateBeforeCancel: (async ({ request }: any) => run('CANCEL', request)) as any,
   validateBeforeReschedule: (async ({ request }: any) => run('RESCHEDULE', request)) as any,
   validateBeforeCreateMultiService: (async ({ request }: any) =>

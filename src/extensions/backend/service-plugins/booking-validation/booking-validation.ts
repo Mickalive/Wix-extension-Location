@@ -23,7 +23,9 @@ function localDateTimeToInstant(value: unknown, timeZone: unknown): string | nul
   const minute = Number(match[3]);
   if (!Number.isInteger(hour) || hour < 0 || hour > 23) return null;
   if (!Number.isInteger(minute) || minute < 0 || minute > 59) return null;
-  return instantForLocalWall(timeZone, match[1], hour * 60 + minute);
+  const localDate = match[1];
+  if (!localDate) return null;
+  return instantForLocalWall(timeZone, localDate, hour * 60 + minute);
 }
 
 const elevatedGetEventTimeSlot = auth.elevate(eventTimeSlots.getEventTimeSlot);

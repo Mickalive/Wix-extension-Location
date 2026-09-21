@@ -7,7 +7,7 @@ import { createValidationHandlers } from '../../../../platform/validation-plugin
 import type { DegradationRecord } from '../../../../platform/validation-plugin/incidents';
 import { toWixValidationResponse } from '../../../../platform/validation-plugin/wix-contract';
 import { countBookings, loadExistingBookings } from '../../runtime/bookings-reader';
-import { loadState, saveState } from '../../runtime/state-store';
+import { loadLatestStateByKind, saveState } from '../../runtime/state-store';
 
 async function currentInstanceId(): Promise<string> {
   const token = await auth.getTokenInfo();
@@ -113,7 +113,7 @@ async function hydrateValidationRequest(request: any): Promise<any> {
 const handlers = createValidationHandlers({
   configStore: {
     async loadActiveRuleSet(): Promise<RuleSet | null> {
-      return loadState<RuleSet>(await currentInstanceId(), 'active-ruleset');
+      return loadLatestStateByKind<RuleSet>('active-ruleset');
     },
     async saveRuleSet(next: RuleSet): Promise<RuleSet> {
       return saveState(await currentInstanceId(), 'active-ruleset', 'active-ruleset', next);
@@ -121,7 +121,7 @@ const handlers = createValidationHandlers({
   },
   entitlementGate: {
     async allowedLocationIds() {
-      const active = await loadState<RuleSet>(await currentInstanceId(), 'active-ruleset');
+      const active = await loadLatestStateByKind<RuleSet>('active-ruleset');
       return {
         allowedLocationIds: Object.keys(active?.locationWindows ?? {}),
         overLimit: false,

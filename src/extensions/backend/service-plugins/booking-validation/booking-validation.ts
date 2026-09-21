@@ -1,91 +1,167 @@
+import { eventTimeSlots } from '@wix/bookings';
 import { bookingsValidation } from '@wix/bookings/service-plugins';
-import { saveState } from '../../runtime/state-store';
+import { auth } from '@wix/essentials';
+import type { RuleSet } from '../../../../domain';
+import { instantForLocalWall } from '../../../../domain/time/intlZone';
+import { createValidationHandlers } from '../../../../platform/validation-plugin/handlers';
+import type { DegradationRecord } from '../../../../platform/validation-plugin/incidents';
+import { toWixValidationResponse } from '../../../../platform/validation-plugin/wix-contract';
+import { countBookings, loadExistingBookings } from '../../runtime/bookings-reader';
+import { loadState, saveState } from '../../runtime/state-store';
 
-function createResults(request: any) {
-  const items = Array.isArray(request?.items) ? request.items : [];
+async function currentInstanceId(): Promise<string> {
+  const token = await auth.getTokenInfo();
+  if (!token?.instanceId) throw new Error('WIX_APP_INSTANCE_UNAVAILABLE');
+  return token.instanceId;
+}
+
+function localDateTimeToInstant(value: unknown, timeZone: unknown): string | null {
+  if (typeof value !== 'string' || typeof timeZone !== 'string') return null;
+  const match = /^(\d{4}-\d{2}-\d{2})T(\d{2}):(\d{2})/.exec(value);
+  if (!match) return null;
+  const hour = Number(match[2]);
+  const minute = Number(match[3]);
+  if (!Number.isInteger(hour) || hour < 0 || hour > 23) return null;
+  if (!Number.isInteger(minute) || minute < 0 || minute > 59) return null;
+  return instantForLocalWall(timeZone, match[1], hour * 60 + minute);
+}
+
+const elevatedGetEventTimeSlot = auth.elevate(eventTimeSlots.getEventTimeSlot);
+
+async function hydrateSlot(rawSlot: any): Promise<any> {
+  if (!rawSlot || typeof rawSlot !== 'object') return rawSlot;
+
+  const alreadyComplete =
+    typeof rawSlot.startDate === 'string' &&
+    rawSlot.startDate.length > 0 &&
+    typeof rawSlot.endDate === 'string' &&
+    rawSlot.endDate.length > 0 &&
+    typeof rawSlot.timezone === 'string' &&
+    rawSlot.timezone.length > 0;
+
+  if (alreadyComplete) return rawSlot;
+
+  const eventId = rawSlot.eventId;
+  if (typeof eventId !== 'string' || eventId.length === 0) return rawSlot;
+
+  const response: any = await elevatedGetEventTimeSlot(eventId);
+  const timeSlot = response?.timeSlot;
+  const timeZone = response?.timeZone;
+
+  if (!timeSlot || typeof timeSlot !== 'object' || typeof timeZone !== 'string') {
+    return rawSlot;
+  }
+
+  const startDate = localDateTimeToInstant(timeSlot.localStartDate, timeZone);
+  const endDate = localDateTimeToInstant(timeSlot.localEndDate, timeZone);
+
   return {
-    results: items.map((item: any, index: number) => ({
-      itemIndex: Number.isInteger(item?.itemIndex) ? item.itemIndex : index,
-      result: { valid: true },
-    })),
+    ...rawSlot,
+    serviceId: rawSlot.serviceId || timeSlot.serviceId,
+    scheduleId: rawSlot.scheduleId || timeSlot.scheduleId || null,
+    startDate: rawSlot.startDate || startDate,
+    endDate: rawSlot.endDate || endDate,
+    timezone: rawSlot.timezone || timeZone,
+    location: rawSlot.location || timeSlot.location || null,
   };
 }
 
-function bookingResults(request: any, multi = false) {
-  const items = Array.isArray(request?.items) ? request.items : [];
-  const results = items.map((item: any) => ({
-    bookingId: item?.booking?.id,
-    result: { valid: true },
-  }));
-  return multi ? { singleServiceBookingResults: results } : { results };
+async function hydrateValidationRequest(request: any): Promise<any> {
+  if (!request || !Array.isArray(request.items)) return request;
+
+  const items = await Promise.all(
+    request.items.map(async (rawItem: any) => {
+      if (!rawItem || typeof rawItem !== 'object') return rawItem;
+
+      const booking = rawItem.booking;
+      const bookedEntity = booking?.bookedEntity;
+      const currentSlot = bookedEntity?.slot;
+      const targetSlot = rawItem.targetSlot;
+
+      const [hydratedCurrentSlot, hydratedTargetSlot] = await Promise.all([
+        hydrateSlot(currentSlot),
+        hydrateSlot(targetSlot),
+      ]);
+
+      return {
+        ...rawItem,
+        ...(booking && typeof booking === 'object'
+          ? {
+              booking: {
+                ...booking,
+                ...(bookedEntity && typeof bookedEntity === 'object'
+                  ? {
+                      bookedEntity: {
+                        ...bookedEntity,
+                        ...(currentSlot ? { slot: hydratedCurrentSlot } : {}),
+                      },
+                    }
+                  : {}),
+              },
+            }
+          : {}),
+        ...(targetSlot ? { targetSlot: hydratedTargetSlot } : {}),
+      };
+    }),
+  );
+
+  return { ...request, items };
 }
 
-function createMultiResults(request: any) {
-  const items = Array.isArray(request?.items) ? request.items : [];
-  return {
-    singleServiceBookingResults: items.map((item: any, index: number) => ({
-      itemIndex: Number.isInteger(item?.itemIndex) ? item.itemIndex : index,
-      result: { valid: true },
-    })),
-  };
+const handlers = createValidationHandlers({
+  configStore: {
+    async loadActiveRuleSet(): Promise<RuleSet | null> {
+      return loadState<RuleSet>(await currentInstanceId(), 'active-ruleset');
+    },
+    async saveRuleSet(next: RuleSet): Promise<RuleSet> {
+      return saveState(await currentInstanceId(), 'active-ruleset', 'active-ruleset', next);
+    },
+  },
+  entitlementGate: {
+    async allowedLocationIds() {
+      const active = await loadState<RuleSet>(await currentInstanceId(), 'active-ruleset');
+      return {
+        allowedLocationIds: Object.keys(active?.locationWindows ?? {}),
+        overLimit: false,
+        degraded: true,
+        warning:
+          'Plan coverage is not authoritative on this sandbox; booking rules remain enforced for all locations.',
+      };
+    },
+  },
+  counts: { count: countBookings },
+  existingBookings: { loadExisting: loadExistingBookings },
+  clock: {
+    now: () => new Date().toISOString(),
+    zone: () => 'UTC',
+  },
+  degradationSink: {
+    async record(record: DegradationRecord): Promise<void> {
+      console.warn('[advanced-booking-rules degradation]', record.kind, record.detail);
+      try {
+        const instanceId = await currentInstanceId();
+        await saveState(instanceId, 'degradation-latest', 'degradation', record);
+      } catch {
+        // Persistence/alerting must never alter the booking decision.
+      }
+    },
+  },
+  deadlineMs: 4500,
+});
+
+async function run(target: keyof typeof handlers, request: any) {
+  const hydrated = await hydrateValidationRequest(request);
+  return toWixValidationResponse(target, hydrated, await handlers[target](hydrated));
 }
 
-/**
- * Temporary live canary: no app state, auth, counters, or rule evaluation.
- * If a booking still returns 500 with this provider, the fault is at the Wix
- * extension registration/runtime boundary rather than inside our rule engine.
- */
 export default bookingsValidation.provideHandlers({
-  validateBeforeCreate: (async ({ request }: any) => {
-    const item = Array.isArray(request?.items) ? request.items[0] : null;
-    const booking = item?.booking;
-    const bookedEntity = booking?.bookedEntity;
-    const slot = bookedEntity?.slot;
-
-    const probe = {
-      requestKeys:
-        request && typeof request === 'object' ? Object.keys(request).sort() : [],
-      itemKeys: item && typeof item === 'object' ? Object.keys(item).sort() : [],
-      bookingKeys:
-        booking && typeof booking === 'object' ? Object.keys(booking).sort() : [],
-      bookedEntityKeys:
-        bookedEntity && typeof bookedEntity === 'object'
-          ? Object.keys(bookedEntity).sort()
-          : [],
-      slotKeys:
-        slot && typeof slot === 'object' ? Object.keys(slot).sort() : [],
-      itemIndex: item?.itemIndex ?? null,
-      bookingId: booking?.id ?? null,
-      slot: slot
-        ? {
-            serviceId: slot.serviceId ?? null,
-            scheduleId: slot.scheduleId ?? null,
-            eventId: slot.eventId ?? null,
-            startDate: slot.startDate ?? null,
-            endDate: slot.endDate ?? null,
-            timezone: slot.timezone ?? null,
-            location: slot.location ?? null,
-          }
-        : null,
-    };
-
-    await saveState(
-      '4cc087f6-b275-49ed-8834-4d63984b5893',
-      'payload-probe',
-      'degradation',
-      probe,
-    );
-
-    return createResults(request);
-  }) as any,
-  validateBeforeCancel: (async ({ request }: any) =>
-    bookingResults(request)) as any,
-  validateBeforeReschedule: (async ({ request }: any) =>
-    bookingResults(request)) as any,
+  validateBeforeCreate: (async ({ request }: any) => run('CREATE', request)) as any,
+  validateBeforeCancel: (async ({ request }: any) => run('CANCEL', request)) as any,
+  validateBeforeReschedule: (async ({ request }: any) => run('RESCHEDULE', request)) as any,
   validateBeforeCreateMultiService: (async ({ request }: any) =>
-    createMultiResults(request)) as any,
+    run('CREATE_MULTI_SERVICE', request)) as any,
   validateBeforeCancelMultiService: (async ({ request }: any) =>
-    bookingResults(request, true)) as any,
+    run('CANCEL_MULTI_SERVICE', request)) as any,
   validateBeforeRescheduleMultiService: (async ({ request }: any) =>
-    bookingResults(request, true)) as any,
+    run('RESCHEDULE_MULTI_SERVICE', request)) as any,
 } as any);

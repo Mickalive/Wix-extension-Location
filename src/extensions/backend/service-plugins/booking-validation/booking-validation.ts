@@ -1,4 +1,5 @@
 import { bookingsValidation } from '@wix/bookings/service-plugins';
+import { saveState } from '../../runtime/state-store';
 
 function createResults(request: any) {
   const items = Array.isArray(request?.items) ? request.items : [];
@@ -40,32 +41,42 @@ export default bookingsValidation.provideHandlers({
     const booking = item?.booking;
     const bookedEntity = booking?.bookedEntity;
     const slot = bookedEntity?.slot;
-    const keys = slot && typeof slot === 'object' ? Object.keys(slot).sort().join(',') : '-';
-    const message = [
-      'ABR_PAYLOAD',
-      `items=${Array.isArray(request?.items)}`,
-      `booking=${!!booking}`,
-      `entity=${!!bookedEntity}`,
-      `slot=${!!slot}`,
-      `svc=${typeof slot?.serviceId}`,
-      `start=${typeof slot?.startDate}`,
-      `end=${typeof slot?.endDate}`,
-      `tz=${typeof slot?.timezone}`,
-      `loc=${typeof slot?.location}`,
-      `keys=${keys}`,
-    ].join(';').slice(0, 300);
 
-    return {
-      results: [
-        {
-          itemIndex: Number.isInteger(item?.itemIndex) ? item.itemIndex : 0,
-          result: {
-            valid: false,
-            invalidReason: { message },
-          },
-        },
-      ],
+    const probe = {
+      requestKeys:
+        request && typeof request === 'object' ? Object.keys(request).sort() : [],
+      itemKeys: item && typeof item === 'object' ? Object.keys(item).sort() : [],
+      bookingKeys:
+        booking && typeof booking === 'object' ? Object.keys(booking).sort() : [],
+      bookedEntityKeys:
+        bookedEntity && typeof bookedEntity === 'object'
+          ? Object.keys(bookedEntity).sort()
+          : [],
+      slotKeys:
+        slot && typeof slot === 'object' ? Object.keys(slot).sort() : [],
+      itemIndex: item?.itemIndex ?? null,
+      bookingId: booking?.id ?? null,
+      slot: slot
+        ? {
+            serviceId: slot.serviceId ?? null,
+            scheduleId: slot.scheduleId ?? null,
+            eventId: slot.eventId ?? null,
+            startDate: slot.startDate ?? null,
+            endDate: slot.endDate ?? null,
+            timezone: slot.timezone ?? null,
+            location: slot.location ?? null,
+          }
+        : null,
     };
+
+    await saveState(
+      '4cc087f6-b275-49ed-8834-4d63984b5893',
+      'payload-probe',
+      'degradation',
+      probe,
+    );
+
+    return createResults(request);
   }) as any,
   validateBeforeCancel: (async ({ request }: any) =>
     bookingResults(request)) as any,

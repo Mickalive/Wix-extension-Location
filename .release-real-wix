@@ -1,3 +1,4 @@
-release_candidate=51c99fcd13266b9b3dc773038cf805849dab3f61
-requested=2026-09-21
-attempt=21
+release_candidate=9b853687dd9ed6c9f927acff79c9a9bd42dff776
+requested=2026-10-09
+attempt=22
+reason=add-bookings-public-read-permission

@@ -45,9 +45,7 @@ export const GET: APIRoute = async () => {
   try {
     const [servicesResponse, locationsResponse]: any[] = await Promise.all([
       (elevatedQueryServices as any)({
-        query: {
-          paging: { limit: 100 },
-        },
+        paging: { limit: 100 },
       }),
       (elevatedQueryLocations as any)({}),
     ]);

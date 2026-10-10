@@ -1,4 +1,4 @@
-release_candidate=b542681d18dd86df28a310259e6d72f978aa0cdc
+release_candidate=67f16e9446a668ac37f997959d0a42b0b6bb2cee
 requested=2026-10-10
-attempt=25
-reason=publish-clear-three-step-dashboard
+attempt=26
+reason=clean-invalid-windows-and-valid-defaults

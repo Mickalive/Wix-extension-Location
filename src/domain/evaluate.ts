@@ -314,37 +314,44 @@ export function evaluateRules(
       // own proposed slot, while genuine overlaps with OTHER bookings (same
       // service, or same identity key across services) still block. Without a
       // subject id the exclusion is inert (documented residual — see README).
-      const conflict = findDuplicateConflict(
-        {
-          serviceId: facts.serviceId,
-          slotStartMs: slot.startMs,
-          slotEndMs: slot.endMs,
-          targetDate,
-          identityKey: facts.identityKey ?? null,
-          excludeBookingId:
-            target === 'RESCHEDULE' ? (targetContext.subjectBookingId ?? null) : null,
-        },
-        deps.existingBookings(),
-        facts.timezone,
-      );
-      if (conflict === 'DUPLICATE_BOOKING') {
-        explanations.push(
-          explanation(
-            'block',
-            ENGINE_RULE_IDS.duplicates,
-            OUTCOME_CODES.duplicateBooking,
-            'You already have a booking that overlaps this time.',
-          ),
+      // Group classes intentionally allow multiple participants in the same
+      // service session. Identity-free same-service duplicate protection would
+      // incorrectly block the second participant in a class with spare capacity.
+      // Wix remains authoritative for class capacity; identity-aware class
+      // duplicate semantics can be added later once visitor identity is proven.
+      if (String(facts.serviceType ?? '').toUpperCase() !== 'CLASS') {
+        const conflict = findDuplicateConflict(
+          {
+            serviceId: facts.serviceId,
+            slotStartMs: slot.startMs,
+            slotEndMs: slot.endMs,
+            targetDate,
+            identityKey: facts.identityKey ?? null,
+            excludeBookingId:
+              target === 'RESCHEDULE' ? (targetContext.subjectBookingId ?? null) : null,
+          },
+          deps.existingBookings(),
+          facts.timezone,
         );
-      } else if (conflict === 'IDENTITY_TIME_CONFLICT') {
-        explanations.push(
-          explanation(
-            'block',
-            ENGINE_RULE_IDS.duplicates,
-            OUTCOME_CODES.identityTimeConflict,
-            'This time overlaps another booking with the same details.',
-          ),
-        );
+        if (conflict === 'DUPLICATE_BOOKING') {
+          explanations.push(
+            explanation(
+              'block',
+              ENGINE_RULE_IDS.duplicates,
+              OUTCOME_CODES.duplicateBooking,
+              'You already have a booking that overlaps this time.',
+            ),
+          );
+        } else if (conflict === 'IDENTITY_TIME_CONFLICT') {
+          explanations.push(
+            explanation(
+              'block',
+              ENGINE_RULE_IDS.duplicates,
+              OUTCOME_CODES.identityTimeConflict,
+              'This time overlaps another booking with the same details.',
+            ),
+          );
+        }
       }
     }
 

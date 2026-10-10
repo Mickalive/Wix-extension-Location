@@ -114,6 +114,70 @@ function itemLabel(item: CatalogItem): string {
   return `${item.label}${suffix}`;
 }
 
+function friendlyIssueMessage(
+  issue: any,
+  services: CatalogItem[],
+  locations: CatalogItem[],
+): string {
+  const path = typeof issue?.path === 'string' ? issue.path : '';
+  const code = typeof issue?.code === 'string' ? issue.code : '';
+  const serviceMatch = /^services\.([^.]+)\.([A-Z]{3})(?:\[(\d+)\])?$/.exec(path);
+  const locationMatch = /^locations\.([^.]+)\.([A-Z]{3})(?:\[(\d+)\])?$/.exec(path);
+  const match = serviceMatch ?? locationMatch;
+
+  if (match) {
+    const [, id, weekday, rawIndex] = match;
+    const list = serviceMatch ? services : locations;
+    const label = list.find((item) => item.id === id)?.label ?? (serviceMatch ? 'This service' : 'This location');
+    const day = WEEKDAY_LABELS[weekday as keyof typeof WEEKDAY_LABELS] ?? weekday;
+    const rowNumber = rawIndex === undefined ? null : Number(rawIndex) + 1;
+    const where = `${label}, ${day}${rowNumber ? `, time slot ${rowNumber}` : ''}`;
+
+    switch (code) {
+      case 'WINDOW_INCOMPLETE':
+        return `${where}: this time slot is empty. Add both a start and end time, or remove the slot.`;
+      case 'WINDOW_HALF_EMPTY':
+        return `${where}: one of the two times is missing. Complete the time slot or remove it.`;
+      case 'WINDOW_BAD_START':
+      case 'WINDOW_BAD_END':
+        return `${where}: one of the times is invalid. Choose a valid time from the time picker.`;
+      case 'WINDOW_ZERO_LENGTH':
+        return `${where}: the start and end time are the same. Choose an end time after the start time.`;
+      case 'WINDOW_END_BEFORE_START':
+        return `${where}: the end time is before the start time. Move the end time later.`;
+      case 'WINDOW_OVERLAP':
+        return `${label}, ${day}: two allowed time ranges overlap. Adjust or remove one of them.`;
+      case 'WEEKDAY_UNKNOWN':
+        return `${label}: one saved rule uses a weekday the editor no longer recognizes. Remove and recreate that rule.`;
+      case 'SCOPE_UNKNOWN':
+        return `${label}: this saved rule points to an item Wix no longer returns. Remove the old rule or restore the item in Wix.`;
+      default:
+        return `${where}: ${issue?.message ?? 'This rule needs attention.'}`;
+    }
+  }
+
+  if (code === 'EXCEPTION_DATE_MISSING') {
+    return 'Special date: choose the date this rule should apply to, or remove the unfinished rule.';
+  }
+  if (code === 'EXCEPTION_DATE_INVALID') {
+    return 'Special date: the selected date is invalid. Pick a real calendar date.';
+  }
+  if (code === 'EXCEPTION_OVERRIDE_EMPTY') {
+    return 'Special date: you chose custom opening hours but did not add any. Add at least one allowed time range, or choose “Closed all day”.';
+  }
+  if (code === 'EXCEPTION_DUPLICATE_DATE') {
+    return 'Special dates: the same date has more than one rule. Keep a single rule for that date.';
+  }
+  if (code === 'LIMIT_NOT_INTEGER') {
+    return 'Booking limit: enter a whole number such as 5, or leave the field empty for no limit.';
+  }
+  if (code === 'LIMIT_NEGATIVE') {
+    return 'Booking limit: the maximum cannot be negative. Enter 0 or a positive whole number.';
+  }
+
+  return issue?.message ?? 'This rule needs attention before it can be saved.';
+}
+
 function stateMessage(state: any): string | null {
   if (state.saveStatus === 'pending') return 'Saving draft…';
   if (state.saveStatus === 'unavailable') return state.lastSaveMessage ?? 'Draft could not be saved.';
@@ -979,11 +1043,11 @@ export default function AdvancedRulesApp() {
 
             {snapshot.issues?.length ? (
               <section style={{ ...panelStyle, borderColor: '#d64545', background: '#fff7f7' }} role="alert">
-                <h2 style={{ marginTop: 0 }}>Fix these before continuing</h2>
-                <ul style={{ marginBottom: 0 }}>
+                <h2 style={{ marginTop: 0 }}>Something needs your attention</h2>
+                <p style={{ marginTop: 0, color: '#576675' }}>We found a rule that cannot be saved yet. Here is what happened and how to fix it:</p>\n                <ul style={{ marginBottom: 0 }}>
                   {snapshot.issues.map((issue: any, index: number) => (
                     <li key={`${issue.path ?? issue.field ?? 'issue'}-${index}`}>
-                      {issue.path ?? issue.field ?? 'Rule'}: {issue.message}
+                      {friendlyIssueMessage(issue, serviceItems, locationItems)}
                     </li>
                   ))}
                 </ul>

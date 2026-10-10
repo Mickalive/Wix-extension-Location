@@ -41,9 +41,16 @@ async function hydrateSlot(rawSlot: any): Promise<any> {
     typeof rawSlot.timezone === 'string' &&
     rawSlot.timezone.length > 0;
 
-  if (alreadyComplete) return rawSlot;
-
   const eventId = rawSlot.eventId;
+  if (
+    alreadyComplete &&
+    (typeof rawSlot.serviceType === 'string' ||
+      typeof eventId !== 'string' ||
+      eventId.length === 0)
+  ) {
+    return rawSlot;
+  }
+
   if (typeof eventId !== 'string' || eventId.length === 0) return rawSlot;
 
   const response: any = await elevatedGetEventTimeSlot(eventId);
@@ -60,6 +67,7 @@ async function hydrateSlot(rawSlot: any): Promise<any> {
   return {
     ...rawSlot,
     serviceId: rawSlot.serviceId || timeSlot.serviceId,
+    serviceType: rawSlot.serviceType || 'CLASS',
     scheduleId: rawSlot.scheduleId || timeSlot.scheduleId || null,
     startDate: rawSlot.startDate || startDate,
     endDate: rawSlot.endDate || endDate,

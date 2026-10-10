@@ -35,7 +35,9 @@ function locationRow(row: any) {
   if (!id) return null;
   const label =
     stringId(row?.business?.name) ??
+    stringId(row?.name) ??
     stringId(row?.business?.address?.formattedAddress) ??
+    stringId(row?.address?.formattedAddress) ??
     stringId(row?.calculatedAddress?.formattedAddress) ??
     id;
   return { id, label, type: 'BUSINESS' };

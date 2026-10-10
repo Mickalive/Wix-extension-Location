@@ -1,4 +1,4 @@
-release_candidate=094cc18fbf4fe530a9fa8095ba4010aee9683174
+release_candidate=ebc522e4b0ecda7bef675885842ca9765f848dda
 requested=2026-10-10
-attempt=23
-reason=fix-dashboard-catalog-query-shape
+attempt=24
+reason=publish-intuitive-dashboard-and-demo-location-fix

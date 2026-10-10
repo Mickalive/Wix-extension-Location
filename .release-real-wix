@@ -1,4 +1,4 @@
-release_candidate=3e9c7dbd8ba9929ebbaaea110de17a6ae2c5e399
+release_candidate=cab9c7c418dd87989cefb4873e33ce507290cffb
 requested=2026-10-10
-attempt=27
-reason=human-readable-validation-errors
+attempt=28
+reason=service-type-aware-native-vs-filtered-ux

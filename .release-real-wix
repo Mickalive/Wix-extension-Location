@@ -1,4 +1,4 @@
-release_candidate=9b853687dd9ed6c9f927acff79c9a9bd42dff776
-requested=2026-10-09
-attempt=22
-reason=add-bookings-public-read-permission
+release_candidate=094cc18fbf4fe530a9fa8095ba4010aee9683174
+requested=2026-10-10
+attempt=23
+reason=fix-dashboard-catalog-query-shape

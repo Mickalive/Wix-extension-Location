@@ -138,6 +138,207 @@ function useStoreSnapshot(store: Store | null): any {
   return store?.getState() ?? null;
 }
 
+
+function ServiceHoursEditor({
+  items,
+  store,
+  draft,
+}: {
+  items: CatalogItem[];
+  store: Store;
+  draft: any;
+}) {
+  const configuredIds = items
+    .filter((item) => WEEKDAYS.some((weekday) => (draft?.serviceWindows?.[item.id]?.[weekday] ?? []).length > 0))
+    .map((item) => item.id);
+  const defaultId = configuredIds[0] ?? items[0]?.id ?? '';
+  const [selectedId, setSelectedId] = useState(defaultId);
+
+  useEffect(() => {
+    if (!items.some((item) => item.id === selectedId)) {
+      setSelectedId(defaultId);
+    }
+  }, [items, selectedId, defaultId]);
+
+  const item = items.find((candidate) => candidate.id === selectedId) ?? items[0];
+  if (!item) {
+    return (
+      <section style={{ ...panelStyle, padding: 22 }}>
+        <h2 style={{ marginTop: 0 }}>1. Choose a service</h2>
+        <p>No Wix Bookings services are available on this site.</p>
+      </section>
+    );
+  }
+
+  const isConfigured = WEEKDAYS.some(
+    (weekday) => (draft?.serviceWindows?.[item.id]?.[weekday] ?? []).length > 0,
+  );
+
+  const clearSchedule = () => {
+    for (const weekday of WEEKDAYS) {
+      const rows = draft?.serviceWindows?.[item.id]?.[weekday] ?? [];
+      for (let index = rows.length - 1; index >= 0; index -= 1) {
+        store.dispatch({ type: 'REMOVE_WEEK_WINDOW', scopeType: 'service', scopeId: item.id, weekday, index });
+      }
+    }
+  };
+
+  return (
+    <section style={{ ...panelStyle, padding: 22 }} aria-label="Service booking hours">
+      <div style={{ display: 'grid', gap: 6, marginBottom: 18 }}>
+        <div style={{ fontSize: 13, fontWeight: 700, color: '#116dff' }}>STEP 1</div>
+        <h2 style={{ margin: 0 }}>Choose the service you want to control</h2>
+        <p style={{ margin: 0, color: '#576675' }}>
+          Pick one Wix Bookings service. If you do nothing, Wix keeps handling that service normally.
+        </p>
+      </div>
+
+      <select
+        aria-label="Service to control"
+        style={{ ...inputStyle, minWidth: 320, fontSize: 15, marginBottom: 18 }}
+        value={item.id}
+        onChange={(event) => setSelectedId(event.currentTarget.value)}
+      >
+        {items.map((candidate) => (
+          <option key={candidate.id} value={candidate.id}>
+            {candidate.label}
+          </option>
+        ))}
+      </select>
+
+      <div
+        style={{
+          border: '1px solid #dfe5eb',
+          borderRadius: 10,
+          overflow: 'hidden',
+          background: '#fff',
+        }}
+      >
+        <div style={{ padding: '16px 18px', borderBottom: '1px solid #eef1f4' }}>
+          <div style={{ fontSize: 13, fontWeight: 700, color: '#116dff', marginBottom: 4 }}>STEP 2</div>
+          <div style={{ display: 'flex', justifyContent: 'space-between', gap: 14, alignItems: 'center', flexWrap: 'wrap' }}>
+            <div>
+              <strong style={{ fontSize: 17 }}>{item.label}</strong>
+              <div style={{ marginTop: 4, color: isConfigured ? '#116dff' : '#576675' }}>
+                {isConfigured ? 'Advanced booking hours are ON' : 'No advanced booking hours — Wix is in control'}
+              </div>
+            </div>
+            {isConfigured ? (
+              <button type="button" style={buttonStyle} onClick={clearSchedule}>
+                Turn off advanced hours
+              </button>
+            ) : null}
+          </div>
+        </div>
+
+        <div style={{ padding: '14px 18px', background: isConfigured ? '#f7fbff' : '#fbfcfd' }}>
+          {isConfigured ? (
+            <p style={{ margin: 0 }}>
+              <strong>Only the hours shown below can be booked.</strong> A day with no hours is blocked by this app.
+            </p>
+          ) : (
+            <p style={{ margin: 0 }}>
+              To add a restriction, click <strong>Add allowed hours</strong> on the day you want. As soon as you add the first rule, days left empty will be blocked.
+            </p>
+          )}
+        </div>
+
+        <div style={{ padding: '6px 18px 14px' }}>
+          {WEEKDAYS.map((weekday) => {
+            const rows = draft?.serviceWindows?.[item.id]?.[weekday] ?? [];
+            return (
+              <div
+                key={weekday}
+                style={{
+                  display: 'grid',
+                  gridTemplateColumns: '110px minmax(190px, 1fr) auto',
+                  gap: 12,
+                  alignItems: 'center',
+                  padding: '12px 0',
+                  borderBottom: weekday === 'SUN' ? 'none' : '1px solid #eef1f4',
+                }}
+              >
+                <strong>{WEEKDAY_LABELS[weekday]}</strong>
+                <div style={{ display: 'grid', gap: 8 }}>
+                  {rows.length === 0 ? (
+                    <span style={{ color: '#687785' }}>{isConfigured ? 'Blocked' : 'Managed by Wix'}</span>
+                  ) : null}
+                  {rows.map((row: any, index: number) => (
+                    <div key={`${weekday}-${index}`} style={{ ...rowStyle, marginBottom: 0 }}>
+                      <input
+                        aria-label={`${item.label} ${weekday} start ${index + 1}`}
+                        style={inputStyle}
+                        type="time"
+                        value={row.start ?? ''}
+                        onChange={(event) =>
+                          store.dispatch({
+                            type: 'PATCH_WEEK_WINDOW',
+                            scopeType: 'service',
+                            scopeId: item.id,
+                            weekday,
+                            index,
+                            patch: { start: event.currentTarget.value },
+                          })
+                        }
+                      />
+                      <span>to</span>
+                      <input
+                        aria-label={`${item.label} ${weekday} end ${index + 1}`}
+                        style={inputStyle}
+                        type="time"
+                        value={row.end ?? ''}
+                        onChange={(event) =>
+                          store.dispatch({
+                            type: 'PATCH_WEEK_WINDOW',
+                            scopeType: 'service',
+                            scopeId: item.id,
+                            weekday,
+                            index,
+                            patch: { end: event.currentTarget.value },
+                          })
+                        }
+                      />
+                      <button
+                        type="button"
+                        style={{ ...buttonStyle, borderColor: '#c7d1db', color: '#33424f' }}
+                        onClick={() =>
+                          store.dispatch({
+                            type: 'REMOVE_WEEK_WINDOW',
+                            scopeType: 'service',
+                            scopeId: item.id,
+                            weekday,
+                            index,
+                          })
+                        }
+                      >
+                        Remove
+                      </button>
+                    </div>
+                  ))}
+                </div>
+                <button
+                  type="button"
+                  style={buttonStyle}
+                  onClick={() =>
+                    store.dispatch({
+                      type: 'ADD_WEEK_WINDOW',
+                      scopeType: 'service',
+                      scopeId: item.id,
+                      weekday,
+                    })
+                  }
+                >
+                  Add allowed hours
+                </button>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    </section>
+  );
+}
+
 function WindowsEditor({
   title,
   scopeType,
@@ -154,8 +355,6 @@ function WindowsEditor({
   emptyText: string;
 }) {
   const key = scopeType === 'location' ? 'locationWindows' : 'serviceWindows';
-  const [expandedId, setExpandedId] = useState<string | null>(null);
-
   const isConfigured = (itemId: string) =>
     WEEKDAYS.some((weekday) => (draft?.[key]?.[itemId]?.[weekday] ?? []).length > 0);
 
@@ -184,9 +383,8 @@ function WindowsEditor({
       <div style={{ display: 'grid', gap: 12 }}>
         {items.map((item) => {
           const configured = isConfigured(item.id);
-          const expanded = expandedId === item.id;
           return (
-            <div
+            <details
               key={item.id}
               style={{
                 border: '1px solid #dfe5eb',
@@ -195,20 +393,14 @@ function WindowsEditor({
                 overflow: 'hidden',
               }}
             >
-              <button
-                type="button"
-                onClick={() => setExpandedId(expanded ? null : item.id)}
+              <summary
                 style={{
-                  width: '100%',
-                  border: 0,
-                  background: '#fff',
                   padding: '16px 18px',
                   display: 'flex',
                   justifyContent: 'space-between',
                   alignItems: 'center',
                   gap: 16,
                   cursor: 'pointer',
-                  textAlign: 'left',
                 }}
               >
                 <span style={{ display: 'grid', gap: 4 }}>
@@ -217,10 +409,9 @@ function WindowsEditor({
                     {configured ? 'Custom booking hours' : 'Uses Wix availability'}
                   </span>
                 </span>
-                <span style={{ color: '#116dff', fontWeight: 600 }}>{expanded ? 'Done' : 'Edit'}</span>
-              </button>
+                <span style={{ color: '#116dff', fontWeight: 600 }}>Open</span>
+              </summary>
 
-              {expanded ? (
                 <div style={{ borderTop: '1px solid #eef1f4', padding: '16px 18px 18px', background: '#fbfcfd' }}>
                   {item.available === false ? (
                     <p style={{ marginTop: 0 }}>
@@ -339,8 +530,7 @@ function WindowsEditor({
                     })}
                   </div>
                 </div>
-              ) : null}
-            </div>
+            </details>
           );
         })}
       </div>
@@ -750,7 +940,7 @@ export default function AdvancedRulesApp() {
       <Page>
         <Page.Header
           title="Advanced Booking Rules"
-          subtitle="Control when customers can book, without changing your existing Wix Bookings setup."
+          subtitle="Add simple booking restrictions on top of Wix Bookings."
         />
         <Page.Content>
           <div style={{ maxWidth: 1040, margin: '0 auto', padding: '8px 0 40px' }}>
@@ -765,10 +955,10 @@ export default function AdvancedRulesApp() {
               <div style={{ display: 'flex', justifyContent: 'space-between', gap: 20, alignItems: 'flex-start', flexWrap: 'wrap' }}>
                 <div style={{ maxWidth: 680 }}>
                   <div style={{ fontSize: 20, fontWeight: 700, marginBottom: 6 }}>
-                    {activeRuleSet ? 'Your advanced rules are active' : 'Wix Bookings is currently in control'}
+                    {activeRuleSet ? 'Advanced restrictions are active' : 'Wix Bookings is in control'}
                   </div>
                   <p style={{ margin: 0, color: '#4f6070', lineHeight: 1.5 }}>
-                    Start with a service below. Add a rule only where you need more control. If you leave a service untouched, Wix keeps handling its availability normally.
+                    This app only restricts bookings. Pick a service, define the times you want to allow, then save and activate. Services you do not touch keep their normal Wix availability.
                   </p>
                 </div>
                 <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
@@ -800,18 +990,11 @@ export default function AdvancedRulesApp() {
               </section>
             ) : null}
 
-            <WindowsEditor
-              title="Service booking hours"
-              scopeType="service"
-              items={serviceItems}
-              store={store}
-              draft={snapshot.draft}
-              emptyText="No Wix Bookings services are available on this site."
-            />
+            <ServiceHoursEditor items={serviceItems} store={store} draft={snapshot.draft} />
 
             <details style={panelStyle}>
-              <summary style={{ cursor: 'pointer', fontWeight: 700, fontSize: 17 }}>More controls</summary>
-              <p style={{ color: '#576675' }}>Use these only when you need rules that apply across services or on specific dates.</p>
+              <summary style={{ cursor: 'pointer', fontWeight: 700, fontSize: 17 }}>Other rules</summary>
+              <p style={{ color: '#576675' }}>Optional rules for whole locations, one-off dates, or daily booking limits.</p>
 
               <WindowsEditor
                 title="Location-wide booking hours"

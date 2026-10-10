@@ -32,7 +32,6 @@ export interface ParsedSlotItem {
   /** Position in request.items, used internally by the pure handler. */
   index: number;
   serviceId: string;
-  serviceType?: string | null;
   scheduleId: string | null;
   startDate: string;
   endDate: string;
@@ -172,7 +171,6 @@ function parseItem(
       slot.serviceId,
       `items[${index}].slot.serviceId`,
     ),
-    serviceType: typeof slot.serviceType === 'string' ? slot.serviceType : null,
     scheduleId: typeof scheduleId === 'string' ? scheduleId : null,
     startDate: requireNonEmptyString(
       slot.startDate,

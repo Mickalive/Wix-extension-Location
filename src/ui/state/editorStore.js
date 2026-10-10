@@ -176,7 +176,10 @@ export function createEditorStore(input = {}) {
         draft[key][action.scopeId] = draft[key][action.scopeId] ?? {};
         const bucket = draft[key][action.scopeId];
         bucket[action.weekday] = Array.isArray(bucket[action.weekday]) ? bucket[action.weekday] : [];
-        bucket[action.weekday].push({ start: '', end: '' });
+        bucket[action.weekday].push({
+          start: typeof action.start === 'string' && action.start ? action.start : '09:00',
+          end: typeof action.end === 'string' && action.end ? action.end : '17:00',
+        });
         return revalidate(invalidateConfirmation({ ...current, draft }));
       }
 

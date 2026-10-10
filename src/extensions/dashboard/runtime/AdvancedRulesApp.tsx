@@ -225,6 +225,9 @@ function ServiceHoursEditor({
   }, [items, selectedId, defaultId]);
 
   const item = items.find((candidate) => candidate.id === selectedId) ?? items[0];
+  const serviceType = String(item?.type ?? '').toUpperCase();
+  const isClass = serviceType === 'CLASS';
+  const isAppointment = serviceType === 'APPOINTMENT';
   if (!item) {
     return (
       <section style={{ ...panelStyle, padding: 22 }}>
@@ -265,7 +268,7 @@ function ServiceHoursEditor({
       >
         {items.map((candidate) => (
           <option key={candidate.id} value={candidate.id}>
-            {candidate.label}
+            {candidate.label}{candidate.type ? ` · ${titleCase(candidate.type)}` : ''}
           </option>
         ))}
       </select>
@@ -284,25 +287,47 @@ function ServiceHoursEditor({
             <div>
               <strong style={{ fontSize: 17 }}>{item.label}</strong>
               <div style={{ marginTop: 4, color: isConfigured ? '#116dff' : '#576675' }}>
-                {isConfigured ? 'Advanced booking hours are ON' : 'No advanced booking hours — Wix is in control'}
+                {isConfigured
+                  ? (isClass ? 'Class-session booking rule is ON' : 'Advanced booking hours are ON')
+                  : (isClass ? 'No extra class-session restriction' : 'No advanced booking hours — Wix is in control')}
               </div>
             </div>
             {isConfigured ? (
               <button type="button" style={buttonStyle} onClick={clearSchedule}>
-                Turn off advanced hours
+                {isClass ? 'Remove class-session rule' : 'Turn off advanced hours'}
               </button>
             ) : null}
           </div>
         </div>
 
         <div style={{ padding: '14px 18px', background: isConfigured ? '#f7fbff' : '#fbfcfd' }}>
-          {isConfigured ? (
+          {isClass ? (
+            <div style={{ display: 'grid', gap: 10 }}>
+              <p style={{ margin: 0 }}>
+                <strong>This is a class.</strong> Wix has already created its sessions in the calendar. These rules control which of those sessions may accept new bookings; they do not cancel or move the class itself.
+              </p>
+              {isConfigured ? (
+                <p style={{ margin: 0 }}>
+                  Only sessions fully inside the allowed times below may be booked. Empty days are blocked by Advanced Booking Rules.
+                </p>
+              ) : (
+                <p style={{ margin: 0 }}>
+                  Add allowed times only if you want to restrict which class sessions customers may book.
+                </p>
+              )}
+              <div style={{ padding: '10px 12px', borderRadius: 8, background: '#fff4ce', color: '#5c4400' }}>
+                <strong>Customer display:</strong> Wix's standard class calendar can still show a blocked session. Booking protection still stops it when the customer tries to book. A filtered Advanced Rules calendar is required to hide blocked sessions before that point.
+              </div>
+            </div>
+          ) : isConfigured ? (
             <p style={{ margin: 0 }}>
               <strong>Only the hours shown below can be booked.</strong> A day with no hours is blocked by this app.
             </p>
           ) : (
             <p style={{ margin: 0 }}>
-              To add a restriction, click <strong>Add allowed hours</strong> on the day you want. As soon as you add the first rule, days left empty will be blocked.
+              {isAppointment
+                ? 'Add allowed times when you want tighter appointment availability than Wix currently provides.'
+                : 'Add allowed times when you want to restrict this service.'}
             </p>
           )}
         </div>
@@ -325,7 +350,9 @@ function ServiceHoursEditor({
                 <strong>{WEEKDAY_LABELS[weekday]}</strong>
                 <div style={{ display: 'grid', gap: 8 }}>
                   {rows.length === 0 ? (
-                    <span style={{ color: '#687785' }}>{isConfigured ? 'Blocked' : 'Managed by Wix'}</span>
+                    <span style={{ color: '#687785' }}>
+                      {isConfigured ? (isClass ? 'Bookings blocked' : 'Blocked') : (isClass ? 'No extra restriction' : 'Managed by Wix')}
+                    </span>
                   ) : null}
                   {rows.map((row: any, index: number) => (
                     <div key={`${weekday}-${index}`} style={{ ...rowStyle, marginBottom: 0 }}>
@@ -392,7 +419,7 @@ function ServiceHoursEditor({
                     })
                   }
                 >
-                  Add allowed hours
+                  {isClass ? 'Allow bookings during…' : 'Add allowed hours'}
                 </button>
               </div>
             );
@@ -998,6 +1025,11 @@ export default function AdvancedRulesApp() {
 
   const message = localMessage ?? stateMessage(snapshot);
   const savedButInactive = !hasUnsavedDraft && activationDiff.ops.length > 0;
+  const activeClassRuleCount = serviceItems.filter((item) =>
+    String(item.type ?? '').toUpperCase() === 'CLASS' &&
+    Array.isArray(activeRuleSet?.serviceWindows?.[item.id]) &&
+    activeRuleSet.serviceWindows[item.id].length > 0
+  ).length;
 
   return (
     <WixDesignSystemProvider>
@@ -1022,8 +1054,18 @@ export default function AdvancedRulesApp() {
                     {activeRuleSet ? 'Advanced restrictions are active' : 'Wix Bookings is in control'}
                   </div>
                   <p style={{ margin: 0, color: '#4f6070', lineHeight: 1.5 }}>
-                    This app only restricts bookings. Pick a service, define the times you want to allow, then save and activate. Services you do not touch keep their normal Wix availability.
+                    Pick a service and define the bookings you want to allow. Advanced Booking Rules always validates the final booking; where Wix has no matching native availability control, the standard Wix calendar may still display an option that our rules will reject.
                   </p>
+                  <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 14 }}>
+                    <span style={{ background: '#e7f7ee', border: '1px solid #b8e3c9', borderRadius: 999, padding: '7px 11px', fontSize: 13 }}>
+                      Booking protection: {activeRuleSet ? 'ON' : 'OFF'}
+                    </span>
+                    {activeClassRuleCount > 0 ? (
+                      <span style={{ background: '#fff4ce', border: '1px solid #ead58a', borderRadius: 999, padding: '7px 11px', fontSize: 13 }}>
+                        Native Wix class display: not fully filtered
+                      </span>
+                    ) : null}
+                  </div>
                 </div>
                 <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
                   <span style={{ background: '#fff', border: '1px solid #d9e2ea', borderRadius: 999, padding: '7px 11px', fontSize: 13 }}>
@@ -1044,7 +1086,8 @@ export default function AdvancedRulesApp() {
             {snapshot.issues?.length ? (
               <section style={{ ...panelStyle, borderColor: '#d64545', background: '#fff7f7' }} role="alert">
                 <h2 style={{ marginTop: 0 }}>Something needs your attention</h2>
-                <p style={{ marginTop: 0, color: '#576675' }}>We found a rule that cannot be saved yet. Here is what happened and how to fix it:</p>\n                <ul style={{ marginBottom: 0 }}>
+                <p style={{ marginTop: 0, color: '#576675' }}>We found a rule that cannot be saved yet. Here is what happened and how to fix it:</p>
+                <ul style={{ marginBottom: 0 }}>
                   {snapshot.issues.map((issue: any, index: number) => (
                     <li key={`${issue.path ?? issue.field ?? 'issue'}-${index}`}>
                       {friendlyIssueMessage(issue, serviceItems, locationItems)}

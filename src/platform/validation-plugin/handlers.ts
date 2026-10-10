@@ -333,6 +333,7 @@ function bookingFactsFor(item: ParsedSlotItem, policy: IdentityPayloadPolicy): B
   return {
     at: item.startDate,
     serviceId: item.serviceId,
+    serviceType: item.serviceType ?? null,
     locationId: ownerBusinessLocationId(item),
     slotStart: item.startDate,
     slotEnd: item.endDate,

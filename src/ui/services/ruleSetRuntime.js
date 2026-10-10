@@ -20,8 +20,14 @@ function windowRecordFromDto(record = {}) {
     for (const row of Array.isArray(rows) ? rows : []) {
       const weekday = WEEKDAYS.includes(row?.weekday) ? row.weekday : null;
       if (!weekday) continue;
+      const start = typeof row?.start === 'string' ? row.start.trim() : '';
+      const end = typeof row?.end === 'string' ? row.end.trim() : '';
+      // Invalid historical drafts can contain a half-created empty window.
+      // It has no booking meaning, so discard it on load instead of trapping
+      // the user behind a validation error they didn't intentionally create.
+      if (!start || !end) continue;
       bucket[weekday] = bucket[weekday] ?? [];
-      bucket[weekday].push({ start: row.start ?? '', end: row.end ?? '' });
+      bucket[weekday].push({ start, end });
     }
     result[scopeId] = bucket;
   }

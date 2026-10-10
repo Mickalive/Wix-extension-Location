@@ -64,6 +64,8 @@ export interface RuleSetDTO {
 export interface BookingFacts {
   at: Instant;
   serviceId: string;
+  /** Wix Bookings service type when the platform can prove it. */
+  serviceType?: string | null;
   locationId?: string | null;
   slotStart?: Instant;
   slotEnd?: Instant;

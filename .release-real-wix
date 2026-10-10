@@ -1,4 +1,4 @@
-release_candidate=cab9c7c418dd87989cefb4873e33ce507290cffb
+release_candidate=7e18410618662f8f8ec3515f879f3e6951d9ef1a
 requested=2026-10-10
-attempt=28
-reason=service-type-aware-native-vs-filtered-ux
+attempt=29
+reason=filtered-customer-calendar-v1

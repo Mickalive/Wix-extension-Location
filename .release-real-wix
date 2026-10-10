@@ -1,4 +1,4 @@
-release_candidate=ebc522e4b0ecda7bef675885842ca9765f848dda
+release_candidate=b542681d18dd86df28a310259e6d72f978aa0cdc
 requested=2026-10-10
-attempt=24
-reason=publish-intuitive-dashboard-and-demo-location-fix
+attempt=25
+reason=publish-clear-three-step-dashboard

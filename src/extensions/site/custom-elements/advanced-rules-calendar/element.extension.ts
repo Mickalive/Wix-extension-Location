@@ -16,4 +16,11 @@ export default extensions.customElement({
   installation: {
     autoAdd: true,
   },
+  presets: [
+    {
+      id: 'd0a6f7bb-9d83-4c99-a588-25efb1d63b6a',
+      name: 'Booking calendar',
+      thumbnailUrl: '{{BASE_URL}}/public/advanced-rules-calendar-thumbnail.png',
+    },
+  ],
 });

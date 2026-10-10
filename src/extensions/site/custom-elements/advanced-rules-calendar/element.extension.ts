@@ -14,6 +14,6 @@ export default extensions.customElement({
     defaultHeight: 720,
   },
   installation: {
-    staticContainer: 'HOMEPAGE',
+    autoAdd: true,
   },
 });

@@ -1,4 +1,4 @@
-release_candidate=7e18410618662f8f8ec3515f879f3e6951d9ef1a
+release_candidate=7af83a3ce9d67258a5cc5867fc4974a06b86c332
 requested=2026-10-10
-attempt=29
-reason=filtered-customer-calendar-v1
+attempt=30
+reason=publish-discoverable-filtered-calendar

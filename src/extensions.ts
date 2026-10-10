@@ -5,10 +5,12 @@ import advancedBookingRulesUsage from './extensions/dashboard/pages/advanced-boo
 import diffConfirm from './extensions/dashboard/modals/diff-confirm/diff-confirm.extension.ts';
 import dataCollections from './extensions/backend/data-collections/data-collections.extension.ts';
 import bookingValidation from './extensions/backend/service-plugins/booking-validation/booking-validation.extension.ts';
+import advancedRulesCalendar from './extensions/site/custom-elements/advanced-rules-calendar/element.extension.ts';
 
 export default app()
   .use(advancedBookingRules)
   .use(advancedBookingRulesUsage)
   .use(diffConfirm)
   .use(dataCollections)
-  .use(bookingValidation);
+  .use(bookingValidation)
+  .use(advancedRulesCalendar);

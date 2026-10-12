@@ -1,4 +1,4 @@
-release_candidate=7af83a3ce9d67258a5cc5867fc4974a06b86c332
-requested=2026-10-10
-attempt=30
-reason=publish-discoverable-filtered-calendar
+release_candidate=ac971af2e44705483f6d792419f92d48e4eb2af4
+requested=2026-10-12
+attempt=31
+reason=fix-live-timeslot-event-id-and-regression-test

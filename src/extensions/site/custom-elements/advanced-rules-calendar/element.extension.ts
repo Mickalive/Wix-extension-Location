@@ -14,7 +14,10 @@ export default extensions.customElement({
     defaultHeight: 720,
   },
   installation: {
-    staticContainer: 'HOMEPAGE',
+    // @wix/astro 2.x still exposes autoAdd. Wix's current docs deprecate it in
+    // favor of staticContainer, which requires the separate 3.x framework
+    // migration. Keep the supported 2.x shape until that migration is done.
+    autoAdd: true,
   },
   presets: [
     {

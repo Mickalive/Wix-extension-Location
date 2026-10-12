@@ -11,6 +11,7 @@ import type { BookingFacts, CountQuery, RuleSet } from '../../domain';
 import { instantForLocalWall } from '../../domain/time/intlZone';
 import { countBookings } from '../../extensions/backend/runtime/bookings-reader';
 import { loadLatestStateByKind } from '../../extensions/backend/runtime/state-store';
+import { eventIdFromTimeSlot } from '../../platform/bookings/eventTimeSlot';
 import { countQueryKey } from '../../platform/validation-plugin/counters';
 
 const elevatedListEventTimeSlots = auth.elevate(eventTimeSlots.listEventTimeSlots);
@@ -50,13 +51,6 @@ function locationIdOf(slot: any): string | null {
     slot?.location?._id,
   ];
   return candidates.find((value) => typeof value === 'string' && value.length > 0) ?? null;
-}
-
-function eventIdOf(slot: any): string | null {
-  for (const candidate of [slot?.eventId, slot?.event?.id, slot?.event?._id]) {
-    if (typeof candidate === 'string' && candidate.length > 0) return candidate;
-  }
-  return null;
 }
 
 function slotRows(response: any): any[] {
@@ -125,7 +119,7 @@ export const GET: APIRoute = async ({ request }) => {
             : typeof slot?.service?._id === 'string'
               ? slot.service._id
               : null;
-        const eventId = eventIdOf(slot);
+        const eventId = eventIdFromTimeSlot(slot);
         const start = localDateTimeToInstant(slot?.localStartDate, timeZone);
         const end = localDateTimeToInstant(slot?.localEndDate, timeZone);
         if (!serviceId || !eventId || !start || !end) return null;

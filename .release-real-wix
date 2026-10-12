@@ -1,4 +1,4 @@
-release_candidate=ac971af2e44705483f6d792419f92d48e4eb2af4
+release_candidate=67dbe46b1dbcb71897c3d35ad6be516efd44c48c
 requested=2026-10-12
-attempt=31
-reason=fix-live-timeslot-event-id-and-regression-test
+attempt=32
+reason=final-review-build-hide-inactive-billing-page
